@@ -1,6 +1,7 @@
 import { state } from '../../app/store.js';
 import { el } from '../../shared/dom.js';
 import { topbar } from '../../shared/components.js';
+import { iconSvg } from '../../shared/icons.js';
 import { todayLabel } from '../../shared/time.js';
 
 function parseCache(key) {
@@ -10,19 +11,22 @@ function parseCache(key) {
 
 function changedCount(mode, lastVisit) {
   const cache = parseCache(`pdv2:readerCache:${mode}`);
-  return (cache?.items || []).filter(i => new Date(i.pubDate).getTime() > lastVisit).length;
+  return (cache?.items || []).filter(item => new Date(item.pubDate).getTime() > lastVisit).length;
 }
 
 function paperChangedCounts(lastVisit) {
   const result = { core: 0, creative: 0, applied: 0, general: 0, total: 0 };
   const seen = new Set();
+
   for (const track of ['core', 'creative']) {
     let cache = parseCache(`pdv2:readerCache:papers:${track}`);
     if (!cache && track === 'core') cache = parseCache('pdv2:readerCache:papers');
+
     for (const item of cache?.items || []) {
       const id = item.id || item.link || item.title;
       if (!id || seen.has(id)) continue;
       if (new Date(item.pubDate).getTime() <= lastVisit) continue;
+
       seen.add(id);
       result[track] += 1;
       result.total += 1;
@@ -36,6 +40,7 @@ function paperChangedCounts(lastVisit) {
       }
     }
   }
+
   return result;
 }
 
@@ -43,10 +48,25 @@ function tile(icon, label, value, detail, screen, navigate, color, options = {})
   const button = el('button', {
     class: 'change-tile',
     type: 'button',
+    'aria-label': `${label}を開く`,
     onclick: () => navigate(screen, options)
   });
   button.style.setProperty('--tile-color', color);
-  button.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:24px">${icon}</span><span class="tile-dot" style="background:${color};box-shadow:0 0 12px ${color}"></span></div><div><strong>${value}</strong><div>${label}</div><small>${detail}</small></div>`;
+
+  const head = el('div', { class: 'change-tile-head' });
+  head.innerHTML = `
+    <span class="change-tile-icon">${iconSvg(icon, { size: 22 })}</span>
+    <span class="tile-dot" style="background:${color}"></span>
+  `;
+
+  const copy = el('div', { class: 'change-tile-copy' });
+  copy.append(
+    el('div', { class: 'change-tile-label', text: label }),
+    el('strong', { text: value }),
+    el('small', { text: detail })
+  );
+
+  button.append(head, copy);
   return button;
 }
 
@@ -55,42 +75,46 @@ export async function renderHome(root, { navigate }) {
   const now = Date.now();
   const hour = new Date().getHours();
   const greeting = hour < 11 ? 'おはよう' : hour < 18 ? 'こんにちは' : 'こんばんは';
+
   const yt = parseCache('pdv2:youtubeCache');
   const tw = parseCache('pdv2:twitchCache');
-  const live = (tw?.rows || []).filter(x => x.live?.isLive).length;
-  const youtubeNew = (yt?.rows || []).flatMap(x => x.items || []).filter(x => new Date(x.publishedAt).getTime() > lastVisit).length;
+  const live = (tw?.rows || []).filter(row => row.live?.isLive).length;
+  const youtubeNew = (yt?.rows || [])
+    .flatMap(row => row.items || [])
+    .filter(item => new Date(item.publishedAt).getTime() > lastVisit).length;
+
+  const newsNew = changedCount('news', lastVisit);
+  const knowledgeNew = changedCount('knowledge', lastVisit);
   const papers = paperChangedCounts(lastVisit);
 
-  const creativeParts = [];
-  if (papers.general) creativeParts.push(`一般 +${papers.general}`);
-  if (papers.applied) creativeParts.push(`応用 +${papers.applied}`);
-  if (papers.core) creativeParts.push(`製品 +${papers.core}`);
-  const paperDetail = creativeParts.length
-    ? creativeParts.join(' / ')
-    : '製品・熱 ＋ 応用発想 ＋ 一般独創';
+  const paperParts = [];
+  if (papers.core) paperParts.push(`製品・熱 ${papers.core}件`);
+  if (papers.applied) paperParts.push(`応用 ${papers.applied}件`);
+  if (papers.general) paperParts.push(`一般 ${papers.general}件`);
+  const paperDetail = paperParts.length ? paperParts.join(' / ') : '製品・熱・応用発想・一般独創';
 
   const screen = el('section', { class: 'screen' });
   screen.append(topbar('ホーム', {
     subtitle: todayLabel(),
-    actions: [{ label: '⚙︎', title: '設定', onClick: () => navigate('settings') }]
+    actions: [{ html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }]
   }));
 
   const hero = el('div', { class: 'home-hero' });
   hero.append(
     el('div', { class: 'home-greeting', text: greeting }),
-    el('div', { class: 'home-copy', text: '前回から変わったところだけ、すぐ確認できます。' })
+    el('div', { class: 'home-copy', text: '気になる情報を、すぐに確認できます。' })
   );
 
-  const grid = el('div', { class: 'change-grid' });
   const colors = state.settings.colors;
+  const grid = el('div', { class: 'change-grid' });
   grid.append(
-    tile('☁️', '天気', '確認', '1時間予報・今日のポイント', 'weather', navigate, colors.weather),
-    tile('📰', 'ニュース', changedCount('news', lastVisit) ? `+${changedCount('news', lastVisit)}` : '開く', 'いま押さえる5件', 'reader', navigate, colors.news || colors.reader, { readerMode: 'news' }),
-    tile('📚', '知識', changedCount('knowledge', lastVisit) ? `+${changedCount('knowledge', lastVisit)}` : '開く', 'いま読む5件', 'reader', navigate, colors.knowledge || colors.reader, { readerMode: 'knowledge' }),
-    tile('📄', '論文', papers.total ? `+${papers.total}` : '開く', paperDetail, 'reader', navigate, colors.papers || colors.reader, { readerMode: 'papers', paperTrack: state.paperTrack || 'core' }),
-    tile('▶️', 'YouTube', youtubeNew ? `+${youtubeNew}` : '開く', '動画・Shorts・LIVE', 'media', navigate, colors.youtube, { mediaMode: 'youtube' }),
-    tile('🔴', 'Twitch', live ? `${live} LIVE` : '確認', '配信中・アーカイブ', 'media', navigate, colors.twitch, { mediaMode: 'twitch' }),
-    tile('💬', 'SNS', '開く', 'Twitter / X リスト', 'twitter', navigate, colors.twitter)
+    tile('weather', '天気', '今日の予報', '現在・時間別・週間', 'weather', navigate, colors.weather),
+    tile('news', 'ニュース', newsNew ? `新着 ${newsNew}件` : '注目ニュース', 'おすすめ5件・全記事', 'reader', navigate, colors.news || colors.reader, { readerMode: 'news' }),
+    tile('knowledge', '知識', knowledgeNew ? `新着 ${knowledgeNew}件` : 'おすすめ記事', 'おすすめ5件・全記事', 'reader', navigate, colors.knowledge || colors.reader, { readerMode: 'knowledge' }),
+    tile('papers', '論文', papers.total ? `新着 ${papers.total}件` : '注目論文', paperDetail, 'reader', navigate, colors.papers || colors.reader, { readerMode: 'papers', paperTrack: state.paperTrack || 'core' }),
+    tile('youtube', 'YouTube', youtubeNew ? `新着 ${youtubeNew}件` : '新着動画', '動画・Shorts・LIVE', 'media', navigate, colors.youtube, { mediaMode: 'youtube' }),
+    tile('twitch', 'Twitch', live ? `${live}件 配信中` : 'アーカイブ', 'LIVE・アーカイブ', 'media', navigate, colors.twitch, { mediaMode: 'twitch' }),
+    tile('twitter', 'SNS', '最新ポスト', 'Twitter / X リスト', 'twitter', navigate, colors.twitter)
   );
 
   hero.append(grid);
