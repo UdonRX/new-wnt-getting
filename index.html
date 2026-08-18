@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#f5f5f7" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dashboard V2" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <title>Personal Dashboard V2</title>
+  <link rel="stylesheet" href="/src/styles/tokens.css" />
+  <link rel="stylesheet" href="/src/styles/base.css" />
+  <link rel="stylesheet" href="/src/styles/liquid-glass.css" />
+  <link rel="stylesheet" href="/src/styles/screens.css" />
+</head>
+<body>
+  <div id="edge-frame" aria-hidden="true"></div>
+  <div id="app-shell">
+    <main id="app-main" tabindex="-1"></main>
+    <nav id="bottom-nav" class="liquid-nav" aria-label="メインナビゲーション"></nav>
+  </div>
+  <div id="overlay-root"></div>
+  <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

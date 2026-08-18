@@ -1,0 +1,45 @@
+Personal Dashboard V2.2.2 - TEST REPORT
+Generated: 2026-08-18T13:28:22
+
+Vercel Hobby Function limit
+---------------------------
+API Functions: 11/12
+Result: PASS
+
+Functions:
+- api/chat.mjs
+- api/creative-papers-feed.mjs
+- api/news-feed.mjs
+- api/paper-titles.mjs
+- api/papers-feed.mjs
+- api/rank-items.mjs
+- api/rss.mjs
+- api/summary.mjs
+- api/twitch-eventsub.mjs
+- api/twitch-feed.mjs
+- api/youtube-feed.mjs
+
+Validation performed
+--------------------
+- npm run check: PASS (node --check for all project JS/MJS files in the check script)
+- npm run check:functions: PASS (11/12)
+- package.json JSON: PASS
+- vercel.json JSON: PASS
+- manifest.webmanifest JSON: PASS
+- relative import target existence: PASS
+- active frontend references to deleted /api/gemini-check: none
+- active frontend references to deleted /api/public-config: none
+
+V2.2.2 consolidation
+--------------------
+- Gemini connection check is now handled by:
+  /api/rank-items?mode=gemini-check&live=1
+- Public browser config is now handled by:
+  /api/twitch-feed?mode=config
+- Deleted Serverless Function files:
+  api/gemini-check.mjs
+  api/public-config.mjs
+
+Notes
+-----
+This static validation does not perform live Vercel deployment or external API end-to-end calls.

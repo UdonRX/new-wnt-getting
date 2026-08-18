@@ -1,0 +1,17 @@
+import { state, update } from '../../app/store.js';
+import { el, openSheet } from '../../shared/dom.js';
+import { topbar, collectionManager } from '../../shared/components.js';
+import { parseFeed } from '../../shared/rss.js';
+import { shortDate } from '../../shared/time.js';
+
+let selected=Number(localStorage.getItem('pdv2:twitterIndex')||0);
+function feedUrl(feed){if(feed.url)return feed.url;return `${state.settings.twitterRssBase}${feed.id}`;}
+async function load(feed){const url=feedUrl(feed);const target=url.startsWith('/')?url:`/api/rss?url=${encodeURIComponent(url)}`;const r=await fetch(target,{cache:'no-store'});if(!r.ok)throw new Error(`Twitter RSS取得エラー (${r.status})`);return parseFeed(await r.text(),feed.name);}
+function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.twitterFeeds,fields:[{key:'name',label:'タブ名',placeholder:'リスト名'},{key:'id',label:'Twitter/X リストID',placeholder:'2087...'},{key:'url',label:'RSS URL（任意）',placeholder:'空ならRSSHubを使用'}],onSave:d=>{update('twitterFeeds',d);sheet.close();selected=0;onDone();}}),{title:'Twitterリスト編集'});}
+function cleanDescription(html){const doc=new DOMParser().parseFromString(`<div>${html||''}</div>`,'text/html');doc.querySelectorAll('script,style,iframe,video').forEach(n=>n.remove());const images=[...doc.querySelectorAll('img')].map(i=>i.src).filter(src=>/twimg\.com|pbs\.twimg/.test(src)).slice(0,4);doc.querySelectorAll('img').forEach(n=>n.remove());return {text:(doc.body.textContent||'').replace(/\s+/g,' ').trim(),images};}
+export async function renderTwitter(root,{navigate,refresh=false}){
+  if(selected>=state.twitterFeeds.length)selected=0;const feed=state.twitterFeeds[selected];const screen=el('section',{class:'screen'});screen.append(topbar('SNS',{subtitle:'Twitter / X リスト',actions:[{label:'＋',title:'追加/編集',onClick:()=>manage(()=>renderTwitter(root,{navigate,refresh:true}))},{label:'↻',title:'更新',onClick:()=>renderTwitter(root,{navigate,refresh:true})},{label:'⚙︎',title:'設定',onClick:()=>navigate('settings')}]}));
+  const chips=el('div',{class:'chips'});state.twitterFeeds.forEach((f,i)=>chips.append(el('button',{class:`chip ${i===selected?'active':''}`,type:'button',text:f.name,onclick:()=>{localStorage.setItem(`pdv2:twitterScroll:${selected}`,String(window.scrollY));selected=i;localStorage.setItem('pdv2:twitterIndex',String(i));renderTwitter(root,{navigate});}})));screen.append(chips);const host=el('div',{class:'card',html:'<div class="loading">ツイートを読み込み中...</div>'});screen.append(host);root.replaceChildren(screen);
+  if(!feed){host.replaceChildren(el('div',{class:'empty',text:'リストを追加してください'}));return;}
+  try{const items=await load(feed);host.replaceChildren();items.slice(0,100).forEach(item=>{const c=cleanDescription(item.description);const tw=el('article',{class:'tweet'});const head=el('div',{class:'tweet-head'},[el('strong',{text:item.author||feed.name}),el('span',{text:shortDate(item.pubDate)})]);const link=el('a',{href:item.link,target:'_blank',rel:'noopener noreferrer',class:'tweet-link'});link.append(el('div',{class:'tweet-body',text:c.text||item.title}));if(c.images.length){const g=el('div',{class:'tweet-images'});c.images.forEach(src=>g.append(el('img',{src,alt:''})));link.append(g);}tw.append(head,link);host.append(tw);});const saved=Number(localStorage.getItem(`pdv2:twitterScroll:${selected}`)||0);if(saved)setTimeout(()=>window.scrollTo(0,saved),0);}catch(err){host.innerHTML=`<div class="error-box">${err.message}</div>`;}
+}
