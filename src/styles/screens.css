@@ -373,3 +373,152 @@
 @media (max-width: 399px) {
   .twitch-inline-stage { height:300px; }
 }
+
+/* =========================================================
+   HOME CARD
+   ========================================================= */
+.change-tile {
+  text-align: left;
+  color: inherit;
+}
+
+.change-tile:active {
+  transform: scale(.985);
+}
+
+.change-tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.change-tile-icon {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--tile-color);
+  background: color-mix(in srgb, var(--tile-color) 12%, var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--tile-color) 22%, var(--line));
+}
+
+.change-tile-icon .app-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.change-tile-copy {
+  min-width: 0;
+}
+
+.change-tile-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: .02em;
+}
+
+.change-tile-copy strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-strong);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.change-tile-copy small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+/* =========================================================
+   WEATHER SWIPE / LABEL / ICON SIZE
+   ========================================================= */
+.weather-current-swipe {
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.weather-period-tabs {
+  margin: 12px 0;
+  touch-action: pan-y;
+}
+
+.weather-period-tabs .segmented {
+  touch-action: pan-y;
+}
+
+.weather-main-icon {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  margin: 7px 0 3px;
+}
+
+.weather-main-icon .weather-glyph {
+  width: 52px !important;
+  height: 52px !important;
+  min-width: 52px;
+  flex: 0 0 52px;
+}
+
+.weather-desc {
+  min-height: 22px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.daily-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 58px;
+  gap: 8px;
+  align-items: center;
+}
+
+.daily-weather {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.daily-weather-icon {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
+}
+
+.daily-weather-icon .weather-glyph {
+  width: 24px !important;
+  height: 24px !important;
+  min-width: 24px;
+  flex: 0 0 24px;
+}
+
+.daily-weather > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.weather-location-chips,
+.reader-feed-chips {
+  scroll-padding-inline: 40%;
+  scroll-behavior: smooth;
+}
