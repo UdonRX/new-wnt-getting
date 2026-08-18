@@ -1,6 +1,6 @@
-# Personal Dashboard V2.2.2
+# Personal Dashboard V2.3.0
 
-> V2.2.2: Vercel Hobby の「1 Deployment 最大12 Functions」へ対応。`gemini-check` を `rank-items`、`public-config` を `twitch-feed` に統合し、Serverless Functions を13個→11個へ削減。UI・既存機能は変更なし。V2.2.1の jsdom 27.4.0 修正も維持。
+> V2.3.0: ダークUI再設計、モノクロ天気SVG、Reader/Vercel実行安定化、YouTube取得フォールバック、Twitchインライン再生、Twitter画像ビューア＋RSSHub 5秒再試行を追加。Vercel Functionsは11/12のまま。
 
 iPhone / PWA を主対象に、旧Dashboardの機能をモジュール単位へ分割して作り直した新規リポジトリです。
 旧リポジトリは変更せず、このフォルダを新しいGitHubリポジトリのルートとして使用します。
@@ -21,17 +21,11 @@ iPhone / PWA を主対象に、旧Dashboardの機能をモジュール単位へ�
 
 ## 2. UI方針
 
-### Liquid Glass風 下部ナビ
+### ダークUI + 溶け込む下部ナビ
 
-PWA/通常WebページからSwiftUI/UIKitのネイティブLiquid Glass APIを直接呼び出すことはできないため、
-`backdrop-filter` / `-webkit-backdrop-filter`、半透明背景、反射ハイライト、safe-areaを使ったWeb向け近似表現です。
-Liquid Glass風表現はナビゲーション層だけに限定し、記事カード本文には使っていません。
-
-設定 > 下部ナビ から以下を変更できます。
-
-- ON/OFF
-- 透明度
-- ぼかし量
+V2.3ではLiquid Glass風の `backdrop-filter`、透明なカプセル、反射ハイライトをすべて廃止しました。
+背景・カード・操作面を青みのある暗いグレーの明度差で分け、下部ナビは画面下端へ固定されたソリッドなバーとして本文へ溶け込ませています。
+選択中タブは機能色のアイコン・文字・細いインジケータだけで示します。
 
 ### 画面縁の色
 
@@ -56,6 +50,7 @@ WebアプリからiPhoneの物理パネル形状を直接取得することは�
 ## 3. 天気
 
 - Open-Meteo JMA endpoint: 1時間ごとの詳細表示
+- 天気記号は絵文字を廃止し、ダークUI向けのローカル・モノクロSVGへ変更
 - 気象庁公式 forecast JSON: 今日/週間の日本語予報
 - 1時間予報は現在時刻以降を横スクロール
 - 「今日のポイント」はAI待ちをせず、雨・温度変化・風から即時生成
@@ -301,6 +296,16 @@ personal-dashboard-v2/
 
 巨大な1個の `app.js` は使用しません。
 
+
+
+## V2.3.0 主な修正
+
+- `jsdom` を 26.1.0 に固定。Serverless/Lambda系で報告されている jsdom 27 の実行時回帰を避ける。
+- Gemini構造化出力を `responseMimeType` + `responseSchema` に変更。
+- YouTube: Channel IDの取得失敗を画面へ表示し、正規Channel IDでは公開Atom feedへフォールバック。
+- Twitch: 自動90度回転モーダルを廃止。選択したLIVE/VODをTwitch画面上部へインライン表示し、前/次/横画面を追加。
+- Twitter: ツイート本体をリンクにせず、外部URLだけを外部リンク化。画像は独自ビューアでピンチズーム・パン・左右切替。RSSHub無応答時は5秒ごとに再試行。
+- Liquid Glass風CSSを削除し、`src/styles/navigation.css` へ置き換え。
 
 ## V2.2.2: Vercel Hobby 12 Functions 対応
 

@@ -1,19 +1,19 @@
 {
   "name": "personal-dashboard-v2",
   "private": true,
-  "version": "2.2.2",
+  "version": "2.3.0",
   "type": "module",
   "engines": {
     "node": "22.x"
   },
   "scripts": {
-    "check": "node --check api/chat.mjs && node --check api/creative-papers-feed.mjs && node --check api/news-feed.mjs && node --check api/paper-titles.mjs && node --check api/papers-feed.mjs && node --check api/rank-items.mjs && node --check api/rss.mjs && node --check api/summary.mjs && node --check api/twitch-eventsub.mjs && node --check api/twitch-feed.mjs && node --check api/youtube-feed.mjs && node --check lib/article-reader.mjs && node --check lib/gemini.mjs && node --check lib/rss-merge.mjs && node --check lib/twitch.mjs && node --check src/app/router.js && node --check src/app/store.js && node --check src/features/home/home.js && node --check src/features/media/media.js && node --check src/features/reader/reader-data.js && node --check src/features/reader/reader-focus.js && node --check src/features/reader/reader-rank.js && node --check src/features/reader/reader.js && node --check src/features/settings/settings.js && node --check src/features/twitch/twitch-chat.js && node --check src/features/twitch/twitch-player.js && node --check src/features/twitch/twitch.js && node --check src/features/twitter/twitter.js && node --check src/features/weather/weather-api.js && node --check src/features/weather/weather.js && node --check src/features/youtube/youtube-player.js && node --check src/features/youtube/youtube.js && node --check src/main.js && node --check src/shared/components.js && node --check src/shared/dom.js && node --check src/shared/gestures.js && node --check src/shared/rss.js && node --check src/shared/storage.js && node --check src/shared/time.js && node --check shared/paper-creative-keywords.js",
+    "check": "node --check api/chat.mjs && node --check api/creative-papers-feed.mjs && node --check api/news-feed.mjs && node --check api/paper-titles.mjs && node --check api/papers-feed.mjs && node --check api/rank-items.mjs && node --check api/rss.mjs && node --check api/summary.mjs && node --check api/twitch-eventsub.mjs && node --check api/twitch-feed.mjs && node --check api/youtube-feed.mjs && node --check lib/article-reader.mjs && node --check lib/gemini.mjs && node --check lib/rss-merge.mjs && node --check lib/twitch.mjs && node --check src/app/router.js && node --check src/app/store.js && node --check src/features/home/home.js && node --check src/features/media/media.js && node --check src/features/reader/reader-data.js && node --check src/features/reader/reader-focus.js && node --check src/features/reader/reader-rank.js && node --check src/features/reader/reader.js && node --check src/features/settings/settings.js && node --check src/features/twitch/twitch-chat.js && node --check src/features/twitch/twitch-player.js && node --check src/features/twitch/twitch.js && node --check src/features/twitter/image-viewer.js && node --check src/features/twitter/twitter.js && node --check src/features/weather/weather-api.js && node --check src/features/weather/weather-icons.js && node --check src/features/weather/weather.js && node --check src/features/youtube/youtube-player.js && node --check src/features/youtube/youtube.js && node --check src/main.js && node --check src/shared/components.js && node --check src/shared/dom.js && node --check src/shared/gestures.js && node --check src/shared/rss.js && node --check src/shared/storage.js && node --check src/shared/time.js && node --check shared/paper-creative-keywords.js",
     "check:functions": "node scripts/check-vercel-functions.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "0.6.0",
     "@napi-rs/canvas": "0.1.96",
-    "jsdom": "27.4.0",
+    "jsdom": "26.1.0",
     "pdfjs-dist": "6.1.200"
   }
 }

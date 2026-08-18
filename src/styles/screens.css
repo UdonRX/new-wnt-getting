@@ -156,3 +156,220 @@
 .paper-family-row .segmented { width:100%; }
 .paper-keyword-family-title { margin:18px 2px 4px; font-size:18px; font-weight:850; letter-spacing:-.02em; }
 .paper-keyword-family-title:first-of-type { margin-top:6px; }
+
+/* ========================================================================
+   V2.3 dark UI refinement
+   ======================================================================== */
+.home-hero {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.change-tile,
+.media-row,
+.hour-card,
+.daily-row {
+  background: var(--surface);
+  box-shadow: none;
+}
+.change-tile:active,
+.media-row:active { background: var(--surface-2); }
+
+/* WEATHER: monochrome local SVG glyphs */
+.weather-location { font-weight: 760; color: var(--text-strong); }
+.weather-main-icon {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  margin: 8px 0 4px;
+  color: #b7c3ce;
+}
+.weather-glyph { display:block; color: currentColor; }
+.weather-now { background: var(--surface); }
+.weather-desc { color: var(--text-strong); }
+.weather-point {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.weather-point-icon { color: var(--weather-color); flex:0 0 auto; }
+.hour-card .wx { display:grid; place-items:center; color:#aab6c1; min-height:31px; }
+.hour-card .rain { color:#70aee0; }
+.daily-weather { display:flex; align-items:center; gap:10px; min-width:0; color:#b7c3ce; }
+.daily-weather span { color:var(--text); line-height:1.35; }
+.daily-temp { text-align:right; display:grid; gap:2px; }
+.temp-high { color:#d98782; }
+.temp-low { color:#6fa7d5; }
+
+/* READER */
+.reader-toolbar { background: linear-gradient(var(--bg) 78%, transparent); }
+.focus-card { background: var(--surface); }
+.summary-preview { background: var(--surface-2); }
+.summary-why { background: var(--surface-2); }
+
+/* MEDIA */
+.media-warning {
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb,var(--warning) 35%,var(--line));
+  background: color-mix(in srgb,var(--warning) 8%,var(--surface));
+  color: #cfb177;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Twitch: iPhone縦画面で勝手に回転させず、画面上部へinline表示 */
+.twitch-inline-player-host:empty { display:none; }
+.twitch-inline-player-host {
+  scroll-margin-top: calc(env(safe-area-inset-top) + 76px);
+  margin: 8px 0 14px;
+}
+.twitch-inline-player {
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid var(--line-strong);
+  background: #080a0d;
+  color: #edf0f3;
+}
+.twitch-inline-head {
+  min-height: 48px;
+  padding: 7px 9px 7px 12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  background:#11151a;
+  border-bottom:1px solid #242c34;
+}
+.twitch-inline-head strong { font-size:13px; }
+.twitch-inline-kicker { color:var(--twitch-color); font-size:9px; font-weight:850; letter-spacing:.08em; margin-bottom:2px; }
+.twitch-close { min-width:38px; min-height:38px; background:#1b222a; box-shadow:none; }
+.twitch-inline-stage {
+  position:relative;
+  width:100%;
+  height:clamp(300px,56.25vw,438px);
+  min-height:300px;
+  overflow:hidden;
+  background:#000;
+}
+.twitch-embed-min {
+  position:absolute;
+  left:50%;
+  top:0;
+  transform:translateX(-50%);
+  width:max(400px,100%);
+  height:100%;
+}
+.twitch-embed-min iframe { width:100%; height:100%; border:0; display:block; }
+.twitch-inline-info { padding:11px 12px 13px; background:#0e1216; }
+.twitch-inline-controls { display:flex; gap:7px; overflow-x:auto; padding:10px 0 2px; scrollbar-width:none; }
+.twitch-inline-controls::-webkit-scrollbar { display:none; }
+.twitch-inline-controls .player-soft { flex:0 0 auto; }
+.twitch-inline-controls button:disabled { opacity:.35; }
+.twitch-live-zone { position:relative; top:auto; z-index:auto; background:none; }
+.twitch-live-zone .twitch-live-card { box-shadow:none; }
+.twitch-live-card { background:color-mix(in srgb,var(--twitch-color) 8%,var(--surface)); }
+.twitch-comment-lane { height:54px; }
+.player-pseudo-fullscreen {
+  position:fixed !important;
+  z-index:150 !important;
+  inset:0 !important;
+  margin:0 !important;
+  border:0 !important;
+  border-radius:0 !important;
+  display:flex;
+  flex-direction:column;
+  background:#000;
+  padding-top:env(safe-area-inset-top);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.player-pseudo-fullscreen .twitch-inline-stage { flex:1; height:auto; min-height:300px; }
+.player-pseudo-fullscreen .twitch-inline-info { flex:0 0 auto; }
+@media (orientation: landscape) {
+  .twitch-inline-player:fullscreen,
+  .player-pseudo-fullscreen { display:flex; flex-direction:column; }
+  .twitch-inline-player:fullscreen .twitch-inline-stage,
+  .player-pseudo-fullscreen .twitch-inline-stage { flex:1; height:auto; }
+}
+
+/* TWITTER: tweet本体はリンクにせず、外部URLと画像だけ明確な操作対象にする */
+.twitter-card { padding: 0 14px; }
+.tweet { padding: 15px 0 16px; }
+.tweet-body { color:var(--text); font-size:14px; line-height:1.62; }
+.tweet-images { border-radius:14px; gap:4px; }
+.tweet-image-button { display:block; padding:0; margin:0; border:0; background:#0b0d10; min-width:0; cursor:zoom-in; overflow:hidden; }
+.tweet-image-button img { width:100%; height:100%; min-height:128px; max-height:300px; object-fit:cover; display:block; }
+.tweet-images.count-1 { grid-template-columns:1fr; }
+.tweet-images.count-1 .tweet-image-button img { max-height:420px; }
+.tweet-images.count-3 .tweet-image-button:first-child { grid-row:span 2; }
+.tweet-external-links { display:grid; gap:6px; margin-top:10px; }
+.tweet-external-link {
+  min-height:42px;
+  display:flex;
+  align-items:center;
+  padding:9px 11px;
+  border-radius:11px;
+  border:1px solid var(--line);
+  background:var(--surface-2);
+  color:#86b8df;
+  text-decoration:none;
+  font-size:12px;
+  overflow-wrap:anywhere;
+}
+.tweet-footer { display:flex; justify-content:flex-end; margin-top:9px; }
+.tweet-open-x { color:var(--muted); font-size:11px; text-decoration:none; padding:5px 0; }
+.twitter-wake-status { min-height:150px; display:grid; place-items:center; align-content:center; gap:7px; text-align:center; color:var(--muted); padding:24px 10px; }
+.twitter-wake-status strong { color:var(--text); }
+.twitter-wake-status span { font-size:11px; line-height:1.5; }
+
+/* Image viewer: pinch zoom / pan / 1x時の左右スワイプ */
+.image-viewer {
+  position:fixed;
+  z-index:220;
+  inset:0;
+  background:#050608;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  user-select:none;
+  -webkit-user-select:none;
+}
+.image-viewer-stage { position:absolute; inset:0; overflow:hidden; touch-action:none; display:grid; place-items:center; }
+.image-viewer-img {
+  max-width:100%;
+  max-height:100%;
+  width:auto;
+  height:auto;
+  object-fit:contain;
+  transform-origin:center center;
+  will-change:transform;
+  pointer-events:none;
+}
+.image-viewer-close {
+  position:absolute;
+  z-index:3;
+  top:calc(env(safe-area-inset-top) + 10px);
+  right:max(12px,env(safe-area-inset-right));
+  width:44px;
+  height:44px;
+  border-radius:50%;
+  background:#1a1e23;
+  color:#e9edf1;
+  font-size:18px;
+}
+.image-viewer-count {
+  position:absolute;
+  z-index:3;
+  left:50%;
+  top:calc(env(safe-area-inset-top) + 20px);
+  transform:translateX(-50%);
+  color:#aab2ba;
+  font-size:12px;
+}
+
+@media (max-width: 399px) {
+  .twitch-inline-stage { height:300px; }
+}

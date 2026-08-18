@@ -1,51 +1,51 @@
 :root {
-  color-scheme: light dark;
-  --bg: #f5f5f7;
-  --surface: rgba(255,255,255,.86);
-  --surface-solid: #ffffff;
-  --surface-2: rgba(245,245,247,.9);
-  --text: #111114;
-  --muted: #6d6d72;
-  --line: rgba(60,60,67,.16);
-  --shadow: 0 14px 40px rgba(0,0,0,.12);
-  --shadow-soft: 0 6px 18px rgba(0,0,0,.08);
-  --accent: #4d8dff;
-  --feature-color: #4d8dff;
-  --danger: #ff453a;
-  --live: #ff375f;
-  --success: #30d158;
-  --radius-sm: 12px;
-  --radius-md: 18px;
-  --radius-lg: 26px;
-  --nav-height: 74px;
-  --edge-width: 2px;
-  --edge-opacity: .72;
-  --edge-opacity-pct: 72%;
-  --edge-glow: 10px;
-  --glass-opacity: .72;
-  --glass-opacity-pct: 72%;
-  --glass-blur: 28px;
+  color-scheme: dark;
+
+  /*
+   * V2.3 Dark palette
+   * - pure black / pure white を避ける
+   * - 階層は影よりも背景の明度差で表現
+   * - 青みをほんの少し含むニュートラルグレー
+   */
+  --bg: #090b0e;
+  --surface: #11151a;
+  --surface-solid: #151a20;
+  --surface-2: #1a2027;
+  --surface-3: #202832;
+  --text: #e7ebef;
+  --text-strong: #f2f4f6;
+  --muted: #8b949e;
+  --muted-2: #69737e;
+  --line: #252d36;
+  --line-strong: #333e49;
+  --shadow: 0 18px 44px rgba(0,0,0,.24);
+  --shadow-soft: 0 6px 18px rgba(0,0,0,.14);
+
+  --accent: #5b9cff;
+  --feature-color: #5b9cff;
+  --danger: #ff6961;
+  --live: #ff496f;
+  --success: #43c777;
+  --warning: #e9a33b;
+
+  --radius-sm: 10px;
+  --radius-md: 15px;
+  --radius-lg: 20px;
+  --nav-height: 66px;
   --tap-size: 48px;
   --content-max: 780px;
-  --weather-color: #4da5ff;
-  --reader-color: #8e73ff;
-  --youtube-color: #ff3b30;
-  --twitch-color: #9146ff;
-  --twitter-color: #31a7ff;
-  --home-color: #64d2ff;
-  --settings-color: #8e8e93;
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #09090b;
-    --surface: rgba(28,28,30,.8);
-    --surface-solid: #1c1c1e;
-    --surface-2: rgba(44,44,46,.88);
-    --text: #f7f7f8;
-    --muted: #a1a1a7;
-    --line: rgba(235,235,245,.16);
-    --shadow: 0 16px 44px rgba(0,0,0,.38);
-    --shadow-soft: 0 8px 20px rgba(0,0,0,.26);
-  }
+  /* 画面縁は文脈の再認に使うだけ。標準はかなり弱くする。 */
+  --edge-width: 1.5px;
+  --edge-opacity: .38;
+  --edge-opacity-pct: 38%;
+  --edge-glow: 4px;
+
+  --weather-color: #68a9dc;
+  --reader-color: #9b8bd3;
+  --youtube-color: #e75b55;
+  --twitch-color: #9a72e8;
+  --twitter-color: #66a6d9;
+  --home-color: #70a8c4;
+  --settings-color: #8a949e;
 }

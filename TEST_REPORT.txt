@@ -1,45 +1,29 @@
-Personal Dashboard V2.2.2 - TEST REPORT
-Generated: 2026-08-18T13:28:22
+Personal Dashboard V2.3.0 validation
 
-Vercel Hobby Function limit
----------------------------
-API Functions: 11/12
-Result: PASS
+[PASS] npm run check
+  - all .js/.mjs syntax checks passed, including new weather-icons.js and image-viewer.js
 
-Functions:
-- api/chat.mjs
-- api/creative-papers-feed.mjs
-- api/news-feed.mjs
-- api/paper-titles.mjs
-- api/papers-feed.mjs
-- api/rank-items.mjs
-- api/rss.mjs
-- api/summary.mjs
-- api/twitch-eventsub.mjs
-- api/twitch-feed.mjs
-- api/youtube-feed.mjs
+[PASS] npm run check:functions
+  - Vercel API Functions: 11/12 (Hobby limit preserved)
 
-Validation performed
---------------------
-- npm run check: PASS (node --check for all project JS/MJS files in the check script)
-- npm run check:functions: PASS (11/12)
-- package.json JSON: PASS
-- vercel.json JSON: PASS
-- manifest.webmanifest JSON: PASS
-- relative import target existence: PASS
-- active frontend references to deleted /api/gemini-check: none
-- active frontend references to deleted /api/public-config: none
+[PASS] relative import / static asset check
+  - missing relative imports: 0
+  - missing index.html local assets: 0
+  - missing Service Worker app-shell assets: 0
+  - package.json / manifest.webmanifest / vercel.json JSON parse: OK
+  - CSS brace counts: OK
 
-V2.2.2 consolidation
---------------------
-- Gemini connection check is now handled by:
-  /api/rank-items?mode=gemini-check&live=1
-- Public browser config is now handled by:
-  /api/twitch-feed?mode=config
-- Deleted Serverless Function files:
-  api/gemini-check.mjs
-  api/public-config.mjs
+[PASS] YouTube exact Channel ID fallback unit test
+  - input: UCDn8Lqf-x0zD8hmFUg08f6w
+  - simulated API-key failure -> public Atom feed fallback: 200 / source=rss-fallback
+  - channel/item parse: OK
 
-Notes
------
-This static validation does not perform live Vercel deployment or external API end-to-end calls.
+[PASS] Gemini structured JSON request unit test
+  - generationConfig.responseMimeType = application/json
+  - generationConfig.responseSchema present
+  - systemInstruction present
+
+[NOTE] External E2E
+  - This container could not complete npm install / live Vercel API execution within the available network timeout.
+  - Deploy-time behavior must be confirmed on Vercel with the user's Environment Variables.
+  - Twitch/YouTube iframe behavior and iPhone gesture behavior require final validation on the actual iPhone/PWA.

@@ -2,41 +2,29 @@ import { state, update } from '../../app/store.js';
 import { el, openSheet, showToast } from '../../shared/dom.js';
 import { topbar, segmented } from '../../shared/components.js';
 import { fetchHourlyJmaModel, fetchOfficialJma, parseOfficialForecast, geocodeJapan } from './weather-api.js';
+import { iconSvg, weatherVisual } from './weather-icons.js';
 
 let mode = 'today';
 let selectedIndex = Number(localStorage.getItem('pdv2:weatherIndex') || 0);
-
-const WMO = code => {
-  const c = Number(code);
-  if (c === 0) return ['☀️','快晴'];
-  if (c <= 2) return ['🌤️','晴れ'];
-  if (c === 3) return ['☁️','くもり'];
-  if ([45,48].includes(c)) return ['🌫️','霧'];
-  if (c >= 51 && c <= 67) return ['🌧️','雨'];
-  if (c >= 71 && c <= 77) return ['🌨️','雪'];
-  if (c >= 80 && c <= 82) return ['🌦️','にわか雨'];
-  if (c >= 85 && c <= 86) return ['🌨️','雪'];
-  if (c >= 95) return ['⛈️','雷雨'];
-  return ['☁️','くもり'];
-};
 
 function pointFrom(data) {
   const h = data.hourly || {};
   const times = h.time || [];
   const now = Date.now();
-  const start = Math.max(0, times.findIndex(t => new Date(t).getTime() >= now - 30*60*1000));
+  const found = times.findIndex(t => new Date(t).getTime() >= now - 30*60*1000);
+  const start = Math.max(0, found < 0 ? 0 : found);
   const next = Array.from({length:12},(_,n)=>start+n).filter(i=>i<times.length);
   const rainy = next.find(i => Number(h.precipitation?.[i] || 0) >= .2);
-  if (rainy != null) return `☂️ ${new Date(times[rainy]).getHours()}時ごろから雨の可能性。傘があると安心です。`;
+  if (rainy != null) return { icon:'umbrella', text:`${new Date(times[rainy]).getHours()}時ごろから雨の可能性。傘があると安心です。` };
   const temps = next.map(i=>Number(h.temperature_2m?.[i])).filter(Number.isFinite);
   if (temps.length > 1) {
     const delta = temps.at(-1) - temps[0];
-    if (delta <= -4) return `↘︎ このあと約${Math.abs(Math.round(delta))}℃下がる予想。服装に注意。`;
-    if (delta >= 4) return `↗︎ このあと約${Math.round(delta)}℃上がる予想。暑さに注意。`;
+    if (delta <= -4) return { icon:'down', text:`このあと約${Math.abs(Math.round(delta))}℃下がる予想。服装に注意。` };
+    if (delta >= 4) return { icon:'up', text:`このあと約${Math.round(delta)}℃上がる予想。暑さに注意。` };
   }
   const windy = next.find(i => Number(h.wind_speed_10m?.[i] || 0) >= 25);
-  if (windy != null) return `💨 ${new Date(times[windy]).getHours()}時ごろ風が強まる予想です。`;
-  return '✓ しばらく大きな天気変化はなさそうです。';
+  if (windy != null) return { icon:'wind', text:`${new Date(times[windy]).getHours()}時ごろ風が強まる予想です。` };
+  return { icon:'check', text:'しばらく大きな天気変化はなさそうです。' };
 }
 
 function hourlyCards(data, wantedMode) {
@@ -52,9 +40,9 @@ function hourlyCards(data, wantedMode) {
   }
   const strip = el('div',{class:'hourly-strip'});
   indexes.forEach(i => {
-    const [icon] = WMO(h.weather_code?.[i]);
+    const visual = weatherVisual(h.weather_code?.[i]);
     const card = el('div',{class:'hour-card'});
-    card.innerHTML = `<div class="time">${new Date(times[i]).getHours()}時</div><div class="wx">${icon}</div><strong>${Math.round(Number(h.temperature_2m?.[i] || 0))}°</strong><div class="rain">${Number(h.precipitation?.[i]||0)>0 ? `${Number(h.precipitation[i]).toFixed(1)}mm` : ''}</div>`;
+    card.innerHTML = `<div class="time">${new Date(times[i]).getHours()}時</div><div class="wx">${iconSvg(visual.icon,{size:27})}</div><strong>${Math.round(Number(h.temperature_2m?.[i] || 0))}°</strong><div class="rain">${Number(h.precipitation?.[i]||0)>0 ? `${Number(h.precipitation[i]).toFixed(1)}mm` : ''}</div>`;
     strip.append(card);
   });
   return strip;
@@ -65,10 +53,10 @@ function weekRows(data, official) {
   const grid = el('div',{class:'daily-grid'});
   (d.time || []).slice(0,7).forEach((date,i)=>{
     const o = official.find(x=>x.date===date);
-    const [icon,label] = WMO(d.weather_code?.[i]);
+    const visual = weatherVisual(d.weather_code?.[i]);
     const dt = new Date(`${date}T00:00:00`);
     const row = el('div',{class:'daily-row'});
-    row.innerHTML = `<strong>${dt.toLocaleDateString('ja-JP',{weekday:'short'})}</strong><div><span style="font-size:22px;margin-right:8px">${icon}</span>${o?.weather || label}</div><div style="text-align:right"><span style="color:#ff5b59">${Math.round(d.temperature_2m_max?.[i] ?? 0)}°</span><br><span style="color:#4d8dff">${Math.round(d.temperature_2m_min?.[i] ?? 0)}°</span></div>`;
+    row.innerHTML = `<strong>${dt.toLocaleDateString('ja-JP',{weekday:'short'})}</strong><div class="daily-weather">${iconSvg(visual.icon,{size:22})}<span>${o?.weather || visual.label}</span></div><div class="daily-temp"><span class="temp-high">${Math.round(d.temperature_2m_max?.[i] ?? 0)}°</span><span class="temp-low">${Math.round(d.temperature_2m_min?.[i] ?? 0)}°</span></div>`;
     grid.append(row);
   });
   return grid;
@@ -151,10 +139,11 @@ export async function renderWeather(root, { navigate, refresh=false }) {
     }
     const official = parseOfficialForecast(officialData);
     const current = model.current || {};
-    const [icon,desc] = WMO(current.weather_code);
+    const visual = weatherVisual(current.weather_code);
+    const point = pointFrom(model);
     const card = el('div',{class:'card weather-now'});
-    card.innerHTML = `<div style="font-weight:760">${location.name}</div><div style="font-size:42px;margin:8px">${icon}</div><div class="weather-temp">${Math.round(Number(current.temperature_2m||0))}°</div><div class="weather-desc">${desc}</div><div class="weather-feels">体感 ${Math.round(Number(current.apparent_temperature||0))}° ・ 湿度 ${Math.round(Number(current.relative_humidity_2m||0))}% ・ 風 ${Math.round(Number(current.wind_speed_10m||0))}km/h</div>`;
-    card.append(el('div',{class:'weather-point',text:pointFrom(model)}));
+    card.innerHTML = `<div class="weather-location">${location.name}</div><div class="weather-main-icon">${iconSvg(visual.icon,{size:48})}</div><div class="weather-temp">${Math.round(Number(current.temperature_2m||0))}°</div><div class="weather-desc">${visual.label}</div><div class="weather-feels">体感 ${Math.round(Number(current.apparent_temperature||0))}° ・ 湿度 ${Math.round(Number(current.relative_humidity_2m||0))}% ・ 風 ${Math.round(Number(current.wind_speed_10m||0))}km/h</div>`;
+    card.append(el('div',{class:'weather-point',html:`<span class="weather-point-icon">${iconSvg(point.icon,{size:20})}</span><span>${point.text}</span>`}));
 
     const tabsHost = el('div',{style:'margin:12px 0'});
     const detail = el('div');

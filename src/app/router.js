@@ -21,16 +21,13 @@ export function applyTheme() {
   const color = settings.colors[key] || settings.colors.home;
   const root = document.documentElement;
   root.style.setProperty('--feature-color', color);
-  root.style.setProperty('--edge-width', `${Number(settings.edgeWidth || 2)}px`);
-  root.style.setProperty('--edge-opacity', Number(settings.edgeOpacity ?? .66));
-  root.style.setProperty('--edge-opacity-pct', `${Math.round(Number(settings.edgeOpacity ?? .66) * 100)}%`);
-  root.style.setProperty('--edge-glow', `${Number(settings.edgeGlow ?? 10)}px`);
-  root.style.setProperty('--glass-opacity', Number(settings.glassOpacity ?? .70));
-  root.style.setProperty('--glass-opacity-pct', `${Math.round(Number(settings.glassOpacity ?? .70) * 100)}%`);
-  root.style.setProperty('--glass-blur', `${Number(settings.glassBlur || 28)}px`);
+  root.style.setProperty('--edge-width', `${Number(settings.edgeWidth || 1.5)}px`);
+  root.style.setProperty('--edge-opacity', Number(settings.edgeOpacity ?? .38));
+  root.style.setProperty('--edge-opacity-pct', `${Math.round(Number(settings.edgeOpacity ?? .38) * 100)}%`);
+  root.style.setProperty('--edge-glow', `${Number(settings.edgeGlow ?? 4)}px`);
   document.body.classList.toggle('edge-off', !settings.edgeEnabled);
-  document.body.classList.toggle('glass-off', !settings.glassEnabled);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color);
+  // ステータスバーは機能色ではなくアプリ背景へ溶け込ませる。
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#090b0e');
 }
 
 export function renderNav(onNavigate) {

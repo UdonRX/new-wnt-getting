@@ -24,12 +24,9 @@ export const DEFAULTS = {
   twitterFeeds: [{ name:'デフォルトリスト', id:'2087706843519111304' }],
   settings: {
     edgeEnabled: true,
-    edgeWidth: 2,
-    edgeOpacity: .66,
-    edgeGlow: 10,
-    glassEnabled: true,
-    glassOpacity: .70,
-    glassBlur: 28,
+    edgeWidth: 1.5,
+    edgeOpacity: .38,
+    edgeGlow: 4,
     rankWithAi: true,
     twitchCommentDensity: 'normal',
     colors: {

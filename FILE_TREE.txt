@@ -1,77 +1,59 @@
-personal-dashboard-v2/
-├─ api/
-│  ├─ chat.mjs
-│  ├─ creative-papers-feed.mjs
-│  ├─ news-feed.mjs
-│  ├─ paper-titles.mjs
-│  ├─ papers-feed.mjs
-│  ├─ rank-items.mjs
-│  ├─ rss.mjs
-│  ├─ summary.mjs
-│  ├─ twitch-eventsub.mjs
-│  ├─ twitch-feed.mjs
-│  └─ youtube-feed.mjs
-├─ icons/
-│  ├─ icon-192.png
-│  └─ icon-512.png
-├─ lib/
-│  ├─ article-reader.mjs
-│  ├─ gemini.mjs
-│  ├─ rss-merge.mjs
-│  └─ twitch.mjs
-├─ scripts/
-│  └─ check-vercel-functions.mjs
-├─ shared/
-│  └─ paper-creative-keywords.js
-├─ src/
-│  ├─ app/
-│  │  ├─ router.js
-│  │  └─ store.js
-│  ├─ features/
-│  │  ├─ home/
-│  │  │  └─ home.js
-│  │  ├─ media/
-│  │  │  └─ media.js
-│  │  ├─ reader/
-│  │  │  ├─ reader-data.js
-│  │  │  ├─ reader-focus.js
-│  │  │  ├─ reader-rank.js
-│  │  │  └─ reader.js
-│  │  ├─ settings/
-│  │  │  └─ settings.js
-│  │  ├─ twitch/
-│  │  │  ├─ twitch-chat.js
-│  │  │  ├─ twitch-player.js
-│  │  │  └─ twitch.js
-│  │  ├─ twitter/
-│  │  │  └─ twitter.js
-│  │  ├─ weather/
-│  │  │  ├─ weather-api.js
-│  │  │  └─ weather.js
-│  │  └─ youtube/
-│  │     ├─ youtube-player.js
-│  │     └─ youtube.js
-│  ├─ shared/
-│  │  ├─ components.js
-│  │  ├─ dom.js
-│  │  ├─ gestures.js
-│  │  ├─ rss.js
-│  │  ├─ storage.js
-│  │  └─ time.js
-│  ├─ styles/
-│  │  ├─ base.css
-│  │  ├─ liquid-glass.css
-│  │  ├─ screens.css
-│  │  └─ tokens.css
-│  └─ main.js
-├─ .env.example
-├─ .gitignore
-├─ DEPLOY_FIX_V221.md
-├─ DEPLOY_FIX_V222.md
-├─ index.html
-├─ manifest.webmanifest
-├─ package.json
-├─ PAPER_CREATIVE_KEYWORDS.md
-├─ README.md
-├─ sw.js
-└─ vercel.json
+.env.example
+.gitignore
+PAPER_CREATIVE_KEYWORDS.md
+README.md
+README_V230_FIX.md
+api/chat.mjs
+api/creative-papers-feed.mjs
+api/news-feed.mjs
+api/paper-titles.mjs
+api/papers-feed.mjs
+api/rank-items.mjs
+api/rss.mjs
+api/summary.mjs
+api/twitch-eventsub.mjs
+api/twitch-feed.mjs
+api/youtube-feed.mjs
+icons/icon-192.png
+icons/icon-512.png
+index.html
+lib/article-reader.mjs
+lib/gemini.mjs
+lib/rss-merge.mjs
+lib/twitch.mjs
+manifest.webmanifest
+package.json
+scripts/check-vercel-functions.mjs
+shared/paper-creative-keywords.js
+src/app/router.js
+src/app/store.js
+src/features/home/home.js
+src/features/media/media.js
+src/features/reader/reader-data.js
+src/features/reader/reader-focus.js
+src/features/reader/reader-rank.js
+src/features/reader/reader.js
+src/features/settings/settings.js
+src/features/twitch/twitch-chat.js
+src/features/twitch/twitch-player.js
+src/features/twitch/twitch.js
+src/features/twitter/image-viewer.js
+src/features/twitter/twitter.js
+src/features/weather/weather-api.js
+src/features/weather/weather-icons.js
+src/features/weather/weather.js
+src/features/youtube/youtube-player.js
+src/features/youtube/youtube.js
+src/main.js
+src/shared/components.js
+src/shared/dom.js
+src/shared/gestures.js
+src/shared/rss.js
+src/shared/storage.js
+src/shared/time.js
+src/styles/base.css
+src/styles/navigation.css
+src/styles/screens.css
+src/styles/tokens.css
+sw.js
+vercel.json

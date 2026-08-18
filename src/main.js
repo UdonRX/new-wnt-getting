@@ -21,6 +21,7 @@ const renderers = {
 let renderSerial = 0;
 
 export async function navigate(screen, options = {}) {
+  window.dispatchEvent(new CustomEvent('pdv2:before-navigate', { detail: { screen } }));
   if (!renderers[screen]) screen = 'home';
   if (options.readerMode) update('lastReaderMode', options.readerMode);
   if (options.mediaMode) update('lastMediaMode', options.mediaMode);

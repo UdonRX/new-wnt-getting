@@ -1,6 +1,6 @@
-========================================================================================
+============================================================================================
 FILE: .env.example
-========================================================================================
+============================================================================================
 # Gemini
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.1-flash-lite
@@ -20,9 +20,9 @@ IEEE_API_KEY=
 CROSSREF_MAILTO=
 NCBI_EMAIL=
 
-========================================================================================
+============================================================================================
 FILE: .gitignore
-========================================================================================
+============================================================================================
 node_modules/
 .vercel/
 .env
@@ -30,134 +30,9 @@ node_modules/
 .DS_Store
 npm-debug.log*
 
-========================================================================================
-FILE: DEPLOY_FIX_V221.md
-========================================================================================
-# V2.2.1 Vercel install warning fix
-
-V2.2 の `jsdom: 26.1.0` は `whatwg-encoding ^3.1.1` に依存するため、npm install 時に deprecated warning が表示されます。
-
-V2.2.1 では `jsdom: 27.4.0` へ更新しました。27.4.0 は `@exodus/bytes` を使用し、Node.js `^20.19.0 || ^22.12.0 || >=24.0.0` をサポートします。V2 は Node 22.x を指定しているため対象範囲です。
-
-注意: `npm warn deprecated` は通常は Warning であり、それ単独で Vercel deployment を失敗させません。V2.2.1 でもデプロイが失敗する場合は、Vercel Build Logs の warning より後にある最初の `Error` / `npm error` / `ELIFECYCLE` 行を確認してください。
-
-========================================================================================
-FILE: DEPLOY_FIX_V222.md
-========================================================================================
-# V2.2.2 - Vercel Hobby Function上限修正
-
-## 原因
-
-V2.2.1 の `api/` 直下には 13 個の Serverless Function がありました。
-Vercel Hobby は 1 Deployment あたり 12 Functions までのため、デプロイが停止していました。
-
-## 修正
-
-機能は削除していません。
-
-1. Gemini接続確認を `api/rank-items.mjs` に統合
-   - 新URL: `/api/rank-items?mode=gemini-check&live=1`
-2. ブラウザ公開設定を `api/twitch-feed.mjs` に統合
-   - 新URL: `/api/twitch-feed?mode=config`
-3. `api/gemini-check.mjs` と `api/public-config.mjs` を削除
-
-結果: **13 → 11 Functions**
-
-## なぜ12ではなく11まで減らしたか
-
-今後APIを1つ追加してもすぐ上限に当たらないよう、1枠の余裕を確保するためです。
-
-## 確認
-
-```bash
-npm run check:functions
-npm run check
-```
-
-========================================================================================
-FILE: FILE_TREE.txt
-========================================================================================
-personal-dashboard-v2/
-├─ api/
-│  ├─ chat.mjs
-│  ├─ creative-papers-feed.mjs
-│  ├─ news-feed.mjs
-│  ├─ paper-titles.mjs
-│  ├─ papers-feed.mjs
-│  ├─ rank-items.mjs
-│  ├─ rss.mjs
-│  ├─ summary.mjs
-│  ├─ twitch-eventsub.mjs
-│  ├─ twitch-feed.mjs
-│  └─ youtube-feed.mjs
-├─ icons/
-│  ├─ icon-192.png
-│  └─ icon-512.png
-├─ lib/
-│  ├─ article-reader.mjs
-│  ├─ gemini.mjs
-│  ├─ rss-merge.mjs
-│  └─ twitch.mjs
-├─ scripts/
-│  └─ check-vercel-functions.mjs
-├─ shared/
-│  └─ paper-creative-keywords.js
-├─ src/
-│  ├─ app/
-│  │  ├─ router.js
-│  │  └─ store.js
-│  ├─ features/
-│  │  ├─ home/
-│  │  │  └─ home.js
-│  │  ├─ media/
-│  │  │  └─ media.js
-│  │  ├─ reader/
-│  │  │  ├─ reader-data.js
-│  │  │  ├─ reader-focus.js
-│  │  │  ├─ reader-rank.js
-│  │  │  └─ reader.js
-│  │  ├─ settings/
-│  │  │  └─ settings.js
-│  │  ├─ twitch/
-│  │  │  ├─ twitch-chat.js
-│  │  │  ├─ twitch-player.js
-│  │  │  └─ twitch.js
-│  │  ├─ twitter/
-│  │  │  └─ twitter.js
-│  │  ├─ weather/
-│  │  │  ├─ weather-api.js
-│  │  │  └─ weather.js
-│  │  └─ youtube/
-│  │     ├─ youtube-player.js
-│  │     └─ youtube.js
-│  ├─ shared/
-│  │  ├─ components.js
-│  │  ├─ dom.js
-│  │  ├─ gestures.js
-│  │  ├─ rss.js
-│  │  ├─ storage.js
-│  │  └─ time.js
-│  ├─ styles/
-│  │  ├─ base.css
-│  │  ├─ liquid-glass.css
-│  │  ├─ screens.css
-│  │  └─ tokens.css
-│  └─ main.js
-├─ .env.example
-├─ .gitignore
-├─ DEPLOY_FIX_V221.md
-├─ DEPLOY_FIX_V222.md
-├─ index.html
-├─ manifest.webmanifest
-├─ package.json
-├─ PAPER_CREATIVE_KEYWORDS.md
-├─ README.md
-├─ sw.js
-└─ vercel.json
-
-========================================================================================
+============================================================================================
 FILE: PAPER_CREATIVE_KEYWORDS.md
-========================================================================================
+============================================================================================
 # 独創研究：検索キーワードと狙い
 
 このタブは、**珍しい題材そのものではなく、異分野の接続・鋭い問い・検証可能な方法**が揃う研究を優先します。
@@ -739,12 +614,12 @@ TITLE-ABS-KEY(("complex network" OR "interdependent system" OR "supply network")
 - 「珍しい」「意外」という表現そのものには加点しないこと
 - 独創研究の「すべて」ピックアップでは、候補がある限り**応用発想と一般独創を最低1件ずつ**混ぜること
 
-========================================================================================
+============================================================================================
 FILE: README.md
-========================================================================================
-# Personal Dashboard V2.2.2
+============================================================================================
+# Personal Dashboard V2.3.0
 
-> V2.2.2: Vercel Hobby の「1 Deployment 最大12 Functions」へ対応。`gemini-check` を `rank-items`、`public-config` を `twitch-feed` に統合し、Serverless Functions を13個→11個へ削減。UI・既存機能は変更なし。V2.2.1の jsdom 27.4.0 修正も維持。
+> V2.3.0: ダークUI再設計、モノクロ天気SVG、Reader/Vercel実行安定化、YouTube取得フォールバック、Twitchインライン再生、Twitter画像ビューア＋RSSHub 5秒再試行を追加。Vercel Functionsは11/12のまま。
 
 iPhone / PWA を主対象に、旧Dashboardの機能をモジュール単位へ分割して作り直した新規リポジトリです。
 旧リポジトリは変更せず、このフォルダを新しいGitHubリポジトリのルートとして使用します。
@@ -765,17 +640,11 @@ iPhone / PWA を主対象に、旧Dashboardの機能をモジュール単位へ�
 
 ## 2. UI方針
 
-### Liquid Glass風 下部ナビ
+### ダークUI + 溶け込む下部ナビ
 
-PWA/通常WebページからSwiftUI/UIKitのネイティブLiquid Glass APIを直接呼び出すことはできないため、
-`backdrop-filter` / `-webkit-backdrop-filter`、半透明背景、反射ハイライト、safe-areaを使ったWeb向け近似表現です。
-Liquid Glass風表現はナビゲーション層だけに限定し、記事カード本文には使っていません。
-
-設定 > 下部ナビ から以下を変更できます。
-
-- ON/OFF
-- 透明度
-- ぼかし量
+V2.3ではLiquid Glass風の `backdrop-filter`、透明なカプセル、反射ハイライトをすべて廃止しました。
+背景・カード・操作面を青みのある暗いグレーの明度差で分け、下部ナビは画面下端へ固定されたソリッドなバーとして本文へ溶け込ませています。
+選択中タブは機能色のアイコン・文字・細いインジケータだけで示します。
 
 ### 画面縁の色
 
@@ -800,6 +669,7 @@ WebアプリからiPhoneの物理パネル形状を直接取得することは�
 ## 3. 天気
 
 - Open-Meteo JMA endpoint: 1時間ごとの詳細表示
+- 天気記号は絵文字を廃止し、ダークUI向けのローカル・モノクロSVGへ変更
 - 気象庁公式 forecast JSON: 今日/週間の日本語予報
 - 1時間予報は現在時刻以降を横スクロール
 - 「今日のポイント」はAI待ちをせず、雨・温度変化・風から即時生成
@@ -1046,6 +916,16 @@ personal-dashboard-v2/
 巨大な1個の `app.js` は使用しません。
 
 
+
+## V2.3.0 主な修正
+
+- `jsdom` を 26.1.0 に固定。Serverless/Lambda系で報告されている jsdom 27 の実行時回帰を避ける。
+- Gemini構造化出力を `responseMimeType` + `responseSchema` に変更。
+- YouTube: Channel IDの取得失敗を画面へ表示し、正規Channel IDでは公開Atom feedへフォールバック。
+- Twitch: 自動90度回転モーダルを廃止。選択したLIVE/VODをTwitch画面上部へインライン表示し、前/次/横画面を追加。
+- Twitter: ツイート本体をリンクにせず、外部URLだけを外部リンク化。画像は独自ビューアでピンチズーム・パン・左右切替。RSSHub無応答時は5秒ごとに再試行。
+- Liquid Glass風CSSを削除し、`src/styles/navigation.css` へ置き換え。
+
 ## V2.2.2: Vercel Hobby 12 Functions 対応
 
 V2.2.1 では `api/` 直下に 13 個の `.mjs` があり、Vercel Hobby の 1 Deployment あたり最大 12 Functions を 1 個超えていました。
@@ -1065,58 +945,73 @@ npm run check:functions
 
 `Vercel API Functions: 11/12` と表示されればOKです。
 
-========================================================================================
-FILE: TEST_REPORT.txt
-========================================================================================
-Personal Dashboard V2.2.2 - TEST REPORT
-Generated: 2026-08-18T13:28:22
+============================================================================================
+FILE: README_V230_FIX.md
+============================================================================================
+# Personal Dashboard V2.3.0 改善内容
 
-Vercel Hobby Function limit
----------------------------
-API Functions: 11/12
-Result: PASS
+## 置き換え方
 
-Functions:
-- api/chat.mjs
-- api/creative-papers-feed.mjs
-- api/news-feed.mjs
-- api/paper-titles.mjs
-- api/papers-feed.mjs
-- api/rank-items.mjs
-- api/rss.mjs
-- api/summary.mjs
-- api/twitch-eventsub.mjs
-- api/twitch-feed.mjs
-- api/youtube-feed.mjs
+GitHubのリポジトリを丸ごと更新できる場合は、V2.3.0完全版の中身で置き換えるのが確実です。
+変更ファイルだけ反映する場合は、changed-only ZIPを上書きしたうえで次を削除してください。
 
-Validation performed
---------------------
-- npm run check: PASS (node --check for all project JS/MJS files in the check script)
-- npm run check:functions: PASS (11/12)
-- package.json JSON: PASS
-- vercel.json JSON: PASS
-- manifest.webmanifest JSON: PASS
-- relative import target existence: PASS
-- active frontend references to deleted /api/gemini-check: none
-- active frontend references to deleted /api/public-config: none
+- `src/styles/liquid-glass.css`
 
-V2.2.2 consolidation
---------------------
-- Gemini connection check is now handled by:
-  /api/rank-items?mode=gemini-check&live=1
-- Public browser config is now handled by:
-  /api/twitch-feed?mode=config
-- Deleted Serverless Function files:
-  api/gemini-check.mjs
-  api/public-config.mjs
+新規追加ファイル:
 
-Notes
------
-This static validation does not perform live Vercel deployment or external API end-to-end calls.
+- `src/styles/navigation.css`
+- `src/features/weather/weather-icons.js`
+- `src/features/twitter/image-viewer.js`
 
-========================================================================================
+## 重要な修正
+
+### Reader 500 / FUNCTION_INVOCATION_FAILED
+
+`jsdom 27.4.0` から `26.1.0` へ戻しました。jsdom 27にはNode 22のLambda環境で実行時ファイルを見つけられず落ちる回帰報告があり、V2.2系のnews/papers/summaryはいずれもjsdomを読み込む経路を持っていました。
+
+Geminiの構造化出力指定も `responseMimeType: application/json` + `responseSchema` へ変更しています。
+
+### YouTube
+
+- Channel ID取得エラーをクライアントで握りつぶさず表示。
+- 正規Channel ID (`UC` + 22文字) はYouTube Data APIが使えない場合でも公開Atom feedへフォールバック。
+- APIが使える場合はuploads playlist -> playlistItems -> videosの公式API経路を優先。
+- APIで動画時間が取得できる場合、180秒以下をShortsとして分類。
+
+### Twitch
+
+- iPhone幅400px未満で自動的に90度回転させる処理を削除。
+- LIVE/VODをタップするとTwitch画面上部へインラインプレイヤーを表示。
+- 前へ / 次へ / 横画面 / Twitchで開くを配置。
+- 画面移動時にプレイヤーとチャット接続をクリーンアップ。
+- コメントはTwitch Embedを覆わず、動画直下の専用レーンに表示。
+
+### Twitter / X
+
+- ツイート本文はリンクにしない。
+- 外部URLだけを明示的な外部リンクとして表示。
+- 画像タップでアプリ内ビューアを開く。
+- ピンチズーム(1〜5倍)、拡大時パン、1倍時の左右スワイプで複数画像切替。
+- RSSHubが空/エラーの間は5秒ごとに自動再試行。
+- Twitter向け `/api/rss` は4.5秒で1回の取得を打ち切り、次の5秒周期へ進める。
+
+### Design
+
+- Liquid Glassを完全廃止。
+- pure black / pure whiteを避け、暗い青みグレーを段階的に使用。
+- レイヤーの高さを影ではなく背景明度で表現。
+- 下部ナビはフローティングカプセルではなく、画面下部へ一体化したソリッドバー。
+- 天気絵文字を単色線SVGへ変更。
+
+## Vercel
+
+API Function数は11/12のままです。新しいServerless Functionは追加していません。
+
+`jsdom 26.1.0` に戻すため `whatwg-encoding@3.1.1 deprecated` のnpm警告が再表示される可能性がありますが、これはwarningです。V2.2.2で解消した12 Functions上限とは別です。
+
+============================================================================================
 FILE: api/chat.mjs
-========================================================================================
+============================================================================================
 import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 import { generateGemini } from '../lib/gemini.mjs';
 
@@ -1237,9 +1132,9 @@ export default async function handler(req, res) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: api/creative-papers-feed.mjs
-========================================================================================
+============================================================================================
 import jsdomPackage from 'jsdom';
 import { rssXml } from '../lib/rss-merge.mjs';
 import { CREATIVE_PAPER_GROUPS, CREATIVE_PAPER_METHOD_TERMS } from '../shared/paper-creative-keywords.js';
@@ -1634,9 +1529,9 @@ export default async function handler(req,res){
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: api/news-feed.mjs
-========================================================================================
+============================================================================================
 import { mergeRssSources, rssXml } from '../lib/rss-merge.mjs';
 
 const google = (query) => `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`;
@@ -1765,9 +1660,9 @@ export default async function handler(req, res) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: api/paper-titles.mjs
-========================================================================================
+============================================================================================
 import { generateGemini } from '../lib/gemini.mjs';
 
 const MAX_TITLES = 50;
@@ -1886,9 +1781,9 @@ export default async function handler(req, res) {
   return res.status(200).json({ translations: results });
 }
 
-========================================================================================
+============================================================================================
 FILE: api/papers-feed.mjs
-========================================================================================
+============================================================================================
 import jsdomPackage from 'jsdom';
 import { rssXml } from '../lib/rss-merge.mjs';
 
@@ -3661,9 +3556,9 @@ export default async function handler(req, res) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: api/rank-items.mjs
-========================================================================================
+============================================================================================
 import { generateGemini, getGeminiModel } from '../lib/gemini.mjs';
 
 function body(req) {
@@ -3815,19 +3710,19 @@ export default async function handler(req, res) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: api/rss.mjs
-========================================================================================
+============================================================================================
 import dns from 'node:dns/promises'; import net from 'node:net';
 const MAX=2*1024*1024, REDIRS=5;
 function privateIp(a){const f=net.isIP(a);if(!f)return true;if(f===4){const p=a.split('.').map(Number),[x,y,z]=p;return x===10||x===127||x===0||(x===169&&y===254)||(x===172&&y>=16&&y<=31)||(x===192&&y===168)||(x===100&&y>=64&&y<=127)||x>=224||(x===192&&y===0&&z===2)||(x===198&&y===51&&z===100)||(x===203&&y===0&&z===113);} const v=a.toLowerCase();return v==='::1'||v==='::'||v.startsWith('fc')||v.startsWith('fd')||/^fe[89ab]/.test(v)||v.startsWith('ff')||v.startsWith('2001:db8:');}
 async function safe(raw){const u=new URL(raw);if(!['http:','https:'].includes(u.protocol)||u.username||u.password)throw new Error('URLが許可されていません');if(u.port&&!['80','443'].includes(u.port))throw new Error('ポートが許可されていません');const host=u.hostname.replace(/\.$/,'');if(host==='localhost'||host.endsWith('.local')||host.endsWith('.internal'))throw new Error('ローカルURLは取得できません');if(net.isIP(host)){if(privateIp(host))throw new Error('非公開IPは取得できません');}else{const a=await dns.lookup(host,{all:true,verbatim:true});if(!a.length||a.some(x=>privateIp(x.address)))throw new Error('安全な公開アドレスではありません');}return u;}
 async function read(r){const len=Number(r.headers.get('content-length')||0);if(len>MAX)throw new Error('RSSが大きすぎます');const buf=Buffer.from(await r.arrayBuffer());if(buf.length>MAX)throw new Error('RSSが大きすぎます');return buf;}
-export default async function handler(req,res){try{let u=await safe(String(req.query?.url||''));for(let i=0;i<=REDIRS;i++){const r=await fetch(u,{redirect:'manual',headers:{Accept:'application/rss+xml,application/atom+xml,application/xml,text/xml,*/*;q=.2','User-Agent':'PersonalDashboardV2/1.0'},signal:AbortSignal.timeout(12000)});if([301,302,303,307,308].includes(r.status)){if(i>=REDIRS)throw new Error('リダイレクトが多すぎます');const l=r.headers.get('location');if(!l)throw new Error('リダイレクト先なし');u=await safe(new URL(l,u).href);continue;}if(!r.ok)throw new Error(`RSS取得エラー (${r.status})`);const b=await read(r);res.setHeader('Content-Type','application/xml; charset=utf-8');res.setHeader('Cache-Control','s-maxage=120, stale-while-revalidate=300');return res.status(200).send(b);}throw new Error('RSS取得失敗');}catch(err){res.status(502).send(err.message||'RSS取得エラー');}}
+export default async function handler(req,res){try{const requested=Number(req.query?.timeout||12000);const timeoutMs=Math.max(3000,Math.min(12000,Number.isFinite(requested)?requested:12000));let u=await safe(String(req.query?.url||''));for(let i=0;i<=REDIRS;i++){const r=await fetch(u,{redirect:'manual',headers:{Accept:'application/rss+xml,application/atom+xml,application/xml,text/xml,*/*;q=.2','User-Agent':'PersonalDashboardV2/2.3'},signal:AbortSignal.timeout(timeoutMs)});if([301,302,303,307,308].includes(r.status)){if(i>=REDIRS)throw new Error('リダイレクトが多すぎます');const l=r.headers.get('location');if(!l)throw new Error('リダイレクト先なし');u=await safe(new URL(l,u).href);continue;}if(!r.ok)throw new Error(`RSS取得エラー (${r.status})`);const b=await read(r);res.setHeader('Content-Type','application/xml; charset=utf-8');res.setHeader('Cache-Control','s-maxage=120, stale-while-revalidate=300');return res.status(200).send(b);}throw new Error('RSS取得失敗');}catch(err){res.status(502).send(err.message||'RSS取得エラー');}}
 
-========================================================================================
+============================================================================================
 FILE: api/summary.mjs
-========================================================================================
+============================================================================================
 import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 import { generateGemini } from '../lib/gemini.mjs';
 
@@ -4126,9 +4021,9 @@ export default async function handler(req, res) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: api/twitch-eventsub.mjs
-========================================================================================
+============================================================================================
 export default async function handler(req,res){
   if(req.method!=='POST')return res.status(405).json({error:'Method Not Allowed'});
   const clientId=String(process.env.TWITCH_CLIENT_ID||'').trim(); if(!clientId)return res.status(500).json({error:'TWITCH_CLIENT_ID が未設定です'});
@@ -4145,9 +4040,9 @@ export default async function handler(req,res){
   }catch(err){console.error('[twitch-eventsub]',err);res.status(500).json({error:err.message||'EventSub接続エラー'});}
 }
 
-========================================================================================
+============================================================================================
 FILE: api/twitch-feed.mjs
-========================================================================================
+============================================================================================
 import { getTwitchChannelSnapshot } from '../lib/twitch.mjs';
 
 function esc(value) {
@@ -4247,43 +4142,177 @@ export default async function handler(req, res) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: api/youtube-feed.mjs
-========================================================================================
+============================================================================================
 const API='https://www.googleapis.com/youtube/v3';
+const EXACT_CHANNEL_ID=/^UC[A-Za-z0-9_-]{22}$/;
 
-function key(){ const k=String(process.env.YOUTUBE_API_KEY||'').trim(); if(!k){const e=new Error('YOUTUBE_API_KEY がVercelに設定されていません');e.statusCode=500;throw e;} return k; }
-async function yt(path,params){ const u=new URL(`${API}/${path}`); Object.entries({...params,key:key()}).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=='')u.searchParams.set(k,String(v));}); const r=await fetch(u,{signal:AbortSignal.timeout(12000)}); const d=await r.json().catch(()=>({})); if(!r.ok){const e=new Error(d?.error?.message||`YouTube API ${r.status}`);e.statusCode=r.status;throw e;} return d; }
-function norm(input){ let s=String(input||'').trim(); try{if(/^https?:\/\//i.test(s)){const u=new URL(s);const parts=u.pathname.split('/').filter(Boolean); if(parts[0]?.startsWith('@'))return parts[0]; if(parts[0]==='channel'&&parts[1])return parts[1]; return parts[0]||'';}}catch{} return s; }
-async function resolveChannel(input){ const q=norm(input); if(/^UC[\w-]{20,}$/.test(q)){const d=await yt('channels',{part:'snippet,contentDetails',id:q});return d.items?.[0];}
-  const handle=q.replace(/^@/,''); let d=await yt('channels',{part:'snippet,contentDetails',forHandle:handle}); if(d.items?.[0])return d.items[0];
-  d=await yt('search',{part:'snippet',type:'channel',q, maxResults:1}); const id=d.items?.[0]?.snippet?.channelId||d.items?.[0]?.id?.channelId; if(!id)return null; return (await yt('channels',{part:'snippet,contentDetails',id})).items?.[0]||null; }
-function durationSeconds(iso=''){const m=String(iso).match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);return m?(Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0)):0;}
-function classify(v){ const text=`${v.snippet?.title||''} ${v.snippet?.description||''} ${(v.snippet?.tags||[]).join(' ')}`.toLowerCase(); const premiere=/premiere|premiered|プレミア公開|プレミア配信/.test(text); const live=Boolean(v.liveStreamingDetails)&&!premiere; let liveType=''; if(live){if(v.liveStreamingDetails?.actualEndTime)liveType='archive'; else if(v.liveStreamingDetails?.actualStartTime)liveType='live'; else liveType='upcoming';}
-  const sec=durationSeconds(v.contentDetails?.duration||''); const shortMarker=/#shorts?\b|\bshorts?\b|ショート動画|ショート/.test(text); const isShort=!live&&!premiere&&sec>0&&sec<=180&&shortMarker;
-  return {kind:live?'live':isShort?'short':'long',liveType,premiere,durationSeconds:sec}; }
-export default async function handler(req,res){
-  try{
-    const channel=String(req.query?.channel||'').trim(); if(!channel)return res.status(400).json({ok:false,error:'channel を指定してください'});
-    const ch=await resolveChannel(channel); if(!ch)return res.status(404).json({ok:false,error:'YouTubeチャンネルが見つかりません'});
-    const uploads=ch.contentDetails?.relatedPlaylists?.uploads; if(!uploads)throw new Error('アップロード一覧を取得できません');
-    const p=await yt('playlistItems',{part:'contentDetails,snippet',playlistId:uploads,maxResults:50}); const ids=(p.items||[]).map(x=>x.contentDetails?.videoId||x.snippet?.resourceId?.videoId).filter(Boolean);
-    const videos=[]; for(let i=0;i<ids.length;i+=50){const d=await yt('videos',{part:'snippet,contentDetails,liveStreamingDetails,status',id:ids.slice(i,i+50).join(',')});videos.push(...(d.items||[]));}
-    const items=videos.map(v=>{const c=classify(v);return {videoId:v.id,title:v.snippet?.title||'',description:v.snippet?.description||'',publishedAt:v.snippet?.publishedAt||'',channelId:v.snippet?.channelId||ch.id,channelName:v.snippet?.channelTitle||ch.snippet?.title||'',thumbnail:v.snippet?.thumbnails?.high?.url||v.snippet?.thumbnails?.medium?.url||'',tags:v.snippet?.tags||[],duration:v.contentDetails?.duration||'',...c};}).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
-    res.setHeader('Cache-Control','s-maxage=120, stale-while-revalidate=300');
-    res.status(200).json({ok:true,channel:{id:ch.id,name:ch.snippet?.title||channel,thumbnail:ch.snippet?.thumbnails?.default?.url||''},items});
-  }catch(err){console.error('[youtube-feed]',err);res.status(err.statusCode||500).json({ok:false,error:err.message||'YouTube取得エラー'});}
+function apiKey(){ return String(process.env.YOUTUBE_API_KEY||'').trim(); }
+
+async function yt(path,params){
+  const k=apiKey();
+  if(!k){const e=new Error('YOUTUBE_API_KEY がVercelに設定されていません');e.statusCode=500;e.code='NO_API_KEY';throw e;}
+  const u=new URL(`${API}/${path}`);
+  Object.entries({...params,key:k}).forEach(([name,value])=>{if(value!==undefined&&value!==null&&value!=='')u.searchParams.set(name,String(value));});
+  const r=await fetch(u,{signal:AbortSignal.timeout(12000)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){const e=new Error(d?.error?.message||`YouTube API ${r.status}`);e.statusCode=r.status;e.code='YOUTUBE_API';throw e;}
+  return d;
 }
 
-========================================================================================
+function norm(input){
+  let s=String(input||'').trim();
+  try{
+    if(/^https?:\/\//i.test(s)){
+      const u=new URL(s);
+      const parts=u.pathname.split('/').filter(Boolean);
+      if(parts[0]?.startsWith('@'))return parts[0];
+      if(parts[0]==='channel'&&parts[1])return parts[1];
+      return parts[0]||'';
+    }
+  }catch{}
+  return s;
+}
+
+async function resolveChannel(input){
+  const q=norm(input);
+  if(EXACT_CHANNEL_ID.test(q)){
+    const d=await yt('channels',{part:'snippet,contentDetails',id:q});
+    return d.items?.[0];
+  }
+  const handle=q.replace(/^@/,'');
+  let d=await yt('channels',{part:'snippet,contentDetails',forHandle:handle});
+  if(d.items?.[0])return d.items[0];
+  d=await yt('search',{part:'snippet',type:'channel',q,maxResults:1});
+  const id=d.items?.[0]?.snippet?.channelId||d.items?.[0]?.id?.channelId;
+  if(!id)return null;
+  return (await yt('channels',{part:'snippet,contentDetails',id})).items?.[0]||null;
+}
+
+function durationSeconds(iso=''){
+  const m=String(iso).match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  return m?(Number(m[1]||0)*3600+Number(m[2]||0)*60+Number(m[3]||0)):0;
+}
+
+function classify(v){
+  const text=`${v.snippet?.title||''} ${v.snippet?.description||''} ${(v.snippet?.tags||[]).join(' ')}`.toLowerCase();
+  const premiere=/premiere|premiered|プレミア公開|プレミア配信/.test(text);
+  const live=Boolean(v.liveStreamingDetails)&&!premiere;
+  let liveType='';
+  if(live){
+    if(v.liveStreamingDetails?.actualEndTime)liveType='archive';
+    else if(v.liveStreamingDetails?.actualStartTime)liveType='live';
+    else liveType='upcoming';
+  }
+  const sec=durationSeconds(v.contentDetails?.duration||'');
+  // Shortsは現在最大3分。APIで時間が取れる場合は #shorts の有無に依存しない。
+  const isShort=!live&&!premiere&&sec>0&&sec<=180;
+  return {kind:live?'live':isShort?'short':'long',liveType,premiere,durationSeconds:sec};
+}
+
+function decodeXml(value=''){
+  return String(value)
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1')
+    .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+    .replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'");
+}
+function tag(block,name){
+  const escaped=name.replace(':','\\:');
+  const m=block.match(new RegExp(`<${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escaped}>`,'i'));
+  return decodeXml(m?.[1]||'').trim();
+}
+function attr(block,tagName,attrName){
+  const re=new RegExp(`<${tagName.replace(':','\\:')}\\b[^>]*\\b${attrName}=["']([^"']+)["'][^>]*>`,'i');
+  return decodeXml(block.match(re)?.[1]||'').trim();
+}
+
+async function fetchPublicAtom(channelId){
+  const u=`https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(channelId)}`;
+  const r=await fetch(u,{headers:{Accept:'application/atom+xml,application/xml,text/xml,*/*;q=.2','User-Agent':'Mozilla/5.0 PersonalDashboardV2/2.3'},signal:AbortSignal.timeout(12000)});
+  if(!r.ok)throw new Error(`YouTube公開フィード ${r.status}`);
+  const xml=await r.text();
+  const channelName=tag(xml,'title')||channelId;
+  const entries=[...xml.matchAll(/<entry\b[\s\S]*?<\/entry>/gi)].map(x=>x[0]);
+  const items=entries.map(entry=>{
+    const videoId=tag(entry,'yt:videoId');
+    const title=tag(entry,'title')||tag(entry,'media:title');
+    const publishedAt=tag(entry,'published')||tag(entry,'updated');
+    const thumbnail=attr(entry,'media:thumbnail','url')||`https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    const markedShort=/#shorts?\b|ショート/i.test(title);
+    return {
+      videoId,title,description:'',publishedAt,channelId,channelName,thumbnail,tags:[],duration:'',
+      kind:markedShort?'short':'long',liveType:'',premiere:false,durationSeconds:0
+    };
+  }).filter(x=>x.videoId&&x.title);
+  if(!items.length)throw new Error('YouTube公開フィードから動画を取得できませんでした');
+  return {ok:true,source:'rss-fallback',warning:'YouTube Data APIを利用できなかったため公開フィードから表示しています。LIVE判定・一部Shorts判定は制限されます。',channel:{id:channelId,name:channelName,thumbnail:''},items};
+}
+
+async function fetchByApi(channel){
+  const ch=await resolveChannel(channel);
+  if(!ch)return null;
+  const uploads=ch.contentDetails?.relatedPlaylists?.uploads;
+  if(!uploads)throw new Error('アップロード一覧を取得できません');
+  const p=await yt('playlistItems',{part:'contentDetails,snippet',playlistId:uploads,maxResults:50});
+  const ids=(p.items||[]).map(x=>x.contentDetails?.videoId||x.snippet?.resourceId?.videoId).filter(Boolean);
+  const videos=[];
+  for(let i=0;i<ids.length;i+=50){
+    const d=await yt('videos',{part:'snippet,contentDetails,liveStreamingDetails,status',id:ids.slice(i,i+50).join(',')});
+    videos.push(...(d.items||[]));
+  }
+  const items=videos.map(v=>{
+    const c=classify(v);
+    return {
+      videoId:v.id,title:v.snippet?.title||'',description:v.snippet?.description||'',publishedAt:v.snippet?.publishedAt||'',
+      channelId:v.snippet?.channelId||ch.id,channelName:v.snippet?.channelTitle||ch.snippet?.title||'',
+      thumbnail:v.snippet?.thumbnails?.high?.url||v.snippet?.thumbnails?.medium?.url||'',tags:v.snippet?.tags||[],duration:v.contentDetails?.duration||'',...c
+    };
+  }).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
+  return {ok:true,source:'api',channel:{id:ch.id,name:ch.snippet?.title||channel,thumbnail:ch.snippet?.thumbnails?.default?.url||''},items};
+}
+
+export default async function handler(req,res){
+  try{
+    const channel=String(req.query?.channel||'').trim();
+    if(!channel)return res.status(400).json({ok:false,error:'channel を指定してください'});
+    const normalized=norm(channel);
+    try{
+      const result=await fetchByApi(channel);
+      if(!result)return res.status(404).json({ok:false,error:'YouTubeチャンネルが見つかりません'});
+      res.setHeader('Cache-Control','s-maxage=120, stale-while-revalidate=300');
+      return res.status(200).json(result);
+    }catch(apiErr){
+      // Channel IDが分かっている場合はAPIキー・割当・制限エラーでも公開Atomへフォールバック。
+      if(EXACT_CHANNEL_ID.test(normalized)){
+        try{
+          const fallback=await fetchPublicAtom(normalized);
+          fallback.apiError=apiErr.message||'YouTube Data API error';
+          res.setHeader('Cache-Control','s-maxage=120, stale-while-revalidate=300');
+          return res.status(200).json(fallback);
+        }catch(feedErr){
+          const e=new Error(`${apiErr.message||'YouTube API取得失敗'} / 公開フィード: ${feedErr.message}`);
+          e.statusCode=apiErr.statusCode||502;
+          throw e;
+        }
+      }
+      throw apiErr;
+    }
+  }catch(err){
+    console.error('[youtube-feed]',err);
+    res.status(err.statusCode||500).json({ok:false,error:err.message||'YouTube取得エラー'});
+  }
+}
+
+============================================================================================
 FILE: index.html
-========================================================================================
+============================================================================================
 <!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-  <meta name="theme-color" content="#f5f5f7" />
+  <meta name="theme-color" content="#090b0e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Dashboard V2" />
@@ -4292,14 +4321,14 @@ FILE: index.html
   <title>Personal Dashboard V2</title>
   <link rel="stylesheet" href="/src/styles/tokens.css" />
   <link rel="stylesheet" href="/src/styles/base.css" />
-  <link rel="stylesheet" href="/src/styles/liquid-glass.css" />
+  <link rel="stylesheet" href="/src/styles/navigation.css" />
   <link rel="stylesheet" href="/src/styles/screens.css" />
 </head>
 <body>
   <div id="edge-frame" aria-hidden="true"></div>
   <div id="app-shell">
     <main id="app-main" tabindex="-1"></main>
-    <nav id="bottom-nav" class="liquid-nav" aria-label="メインナビゲーション"></nav>
+    <nav id="bottom-nav" class="bottom-nav" aria-label="メインナビゲーション"></nav>
   </div>
   <div id="overlay-root"></div>
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
@@ -4307,9 +4336,9 @@ FILE: index.html
 </body>
 </html>
 
-========================================================================================
+============================================================================================
 FILE: lib/article-reader.mjs
-========================================================================================
+============================================================================================
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import readabilityPackage from '@mozilla/readability';
@@ -5336,9 +5365,9 @@ export async function extractArticleFromUrl(rawUrl, options = {}) {
   return sliceArticleResult(article, maxTextLength);
 }
 
-========================================================================================
+============================================================================================
 FILE: lib/gemini.mjs
-========================================================================================
+============================================================================================
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
 export function getGeminiModel() {
@@ -5420,12 +5449,9 @@ export async function generateGemini({
   };
 
   if (responseSchema) {
-    generationConfig.responseFormat = {
-      text: {
-        mimeType: 'application/json',
-        schema: responseSchema
-      }
-    };
+    // generateContent の安定した構造化JSON指定。Vercel上でも通常のREST形式を使う。
+    generationConfig.responseMimeType = 'application/json';
+    generationConfig.responseSchema = responseSchema;
   }
 
   const payload = {
@@ -5439,7 +5465,7 @@ export async function generateGemini({
   };
 
   if (systemInstruction) {
-    payload.system_instruction = {
+    payload.systemInstruction = {
       parts: [{ text: String(systemInstruction) }]
     };
   }
@@ -5503,9 +5529,9 @@ export async function generateGemini({
   return { text, data, model };
 }
 
-========================================================================================
+============================================================================================
 FILE: lib/rss-merge.mjs
-========================================================================================
+============================================================================================
 import jsdomPackage from 'jsdom';
 const { JSDOM } = jsdomPackage;
 
@@ -5632,9 +5658,9 @@ ${items.map(item => `<item>
 </rss>`;
 }
 
-========================================================================================
+============================================================================================
 FILE: lib/twitch.mjs
-========================================================================================
+============================================================================================
 let tokenCache = {
   token: '',
   expiresAt: 0
@@ -5826,17 +5852,17 @@ export async function getTwitchChannelSnapshot(input, { archiveLimit = 20 } = {}
   };
 }
 
-========================================================================================
+============================================================================================
 FILE: manifest.webmanifest
-========================================================================================
+============================================================================================
 {
   "name": "Personal Dashboard V2",
   "short_name": "Dashboard V2",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f5f5f7",
-  "theme_color": "#f5f5f7",
+  "background_color": "#090b0e",
+  "theme_color": "#090b0e",
   "orientation": "any",
   "icons": [
     { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
@@ -5844,32 +5870,32 @@ FILE: manifest.webmanifest
   ]
 }
 
-========================================================================================
+============================================================================================
 FILE: package.json
-========================================================================================
+============================================================================================
 {
   "name": "personal-dashboard-v2",
   "private": true,
-  "version": "2.2.2",
+  "version": "2.3.0",
   "type": "module",
   "engines": {
     "node": "22.x"
   },
   "scripts": {
-    "check": "node --check api/chat.mjs && node --check api/creative-papers-feed.mjs && node --check api/news-feed.mjs && node --check api/paper-titles.mjs && node --check api/papers-feed.mjs && node --check api/rank-items.mjs && node --check api/rss.mjs && node --check api/summary.mjs && node --check api/twitch-eventsub.mjs && node --check api/twitch-feed.mjs && node --check api/youtube-feed.mjs && node --check lib/article-reader.mjs && node --check lib/gemini.mjs && node --check lib/rss-merge.mjs && node --check lib/twitch.mjs && node --check src/app/router.js && node --check src/app/store.js && node --check src/features/home/home.js && node --check src/features/media/media.js && node --check src/features/reader/reader-data.js && node --check src/features/reader/reader-focus.js && node --check src/features/reader/reader-rank.js && node --check src/features/reader/reader.js && node --check src/features/settings/settings.js && node --check src/features/twitch/twitch-chat.js && node --check src/features/twitch/twitch-player.js && node --check src/features/twitch/twitch.js && node --check src/features/twitter/twitter.js && node --check src/features/weather/weather-api.js && node --check src/features/weather/weather.js && node --check src/features/youtube/youtube-player.js && node --check src/features/youtube/youtube.js && node --check src/main.js && node --check src/shared/components.js && node --check src/shared/dom.js && node --check src/shared/gestures.js && node --check src/shared/rss.js && node --check src/shared/storage.js && node --check src/shared/time.js && node --check shared/paper-creative-keywords.js",
+    "check": "node --check api/chat.mjs && node --check api/creative-papers-feed.mjs && node --check api/news-feed.mjs && node --check api/paper-titles.mjs && node --check api/papers-feed.mjs && node --check api/rank-items.mjs && node --check api/rss.mjs && node --check api/summary.mjs && node --check api/twitch-eventsub.mjs && node --check api/twitch-feed.mjs && node --check api/youtube-feed.mjs && node --check lib/article-reader.mjs && node --check lib/gemini.mjs && node --check lib/rss-merge.mjs && node --check lib/twitch.mjs && node --check src/app/router.js && node --check src/app/store.js && node --check src/features/home/home.js && node --check src/features/media/media.js && node --check src/features/reader/reader-data.js && node --check src/features/reader/reader-focus.js && node --check src/features/reader/reader-rank.js && node --check src/features/reader/reader.js && node --check src/features/settings/settings.js && node --check src/features/twitch/twitch-chat.js && node --check src/features/twitch/twitch-player.js && node --check src/features/twitch/twitch.js && node --check src/features/twitter/image-viewer.js && node --check src/features/twitter/twitter.js && node --check src/features/weather/weather-api.js && node --check src/features/weather/weather-icons.js && node --check src/features/weather/weather.js && node --check src/features/youtube/youtube-player.js && node --check src/features/youtube/youtube.js && node --check src/main.js && node --check src/shared/components.js && node --check src/shared/dom.js && node --check src/shared/gestures.js && node --check src/shared/rss.js && node --check src/shared/storage.js && node --check src/shared/time.js && node --check shared/paper-creative-keywords.js",
     "check:functions": "node scripts/check-vercel-functions.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "0.6.0",
     "@napi-rs/canvas": "0.1.96",
-    "jsdom": "27.4.0",
+    "jsdom": "26.1.0",
     "pdfjs-dist": "6.1.200"
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: scripts/check-vercel-functions.mjs
-========================================================================================
+============================================================================================
 import { readdir } from 'node:fs/promises';
 
 const files = (await readdir(new URL('../api/', import.meta.url)))
@@ -5885,9 +5911,9 @@ if (files.length > HOBBY_LIMIT) {
   process.exit(1);
 }
 
-========================================================================================
+============================================================================================
 FILE: shared/paper-creative-keywords.js
-========================================================================================
+============================================================================================
 export const CREATIVE_PAPER_FAMILIES = {
   applied: { id: 'applied', label: '応用発想', shortLabel: '応用', description: '炊飯・熱・家電など既存の関心領域へ異分野の考え方を持ち込む独創研究。' },
   general: { id: 'general', label: '一般独創', shortLabel: '一般', description: '既存の製品キーワードに依存せず、異分野接続・身近な疑問・検証性から探す独創研究。' }
@@ -6180,9 +6206,9 @@ export const CREATIVE_PAPER_METHOD_TERMS = [
   '介入', 'ランダム化', '自然実験', '因果推論', '差の差', '実証', 'フィールド実験', '心理物理', '視線計測', '縦断研究'
 ];
 
-========================================================================================
+============================================================================================
 FILE: src/app/router.js
-========================================================================================
+============================================================================================
 import { state, update } from './store.js';
 import { el, clear } from '../shared/dom.js';
 
@@ -6206,16 +6232,13 @@ export function applyTheme() {
   const color = settings.colors[key] || settings.colors.home;
   const root = document.documentElement;
   root.style.setProperty('--feature-color', color);
-  root.style.setProperty('--edge-width', `${Number(settings.edgeWidth || 2)}px`);
-  root.style.setProperty('--edge-opacity', Number(settings.edgeOpacity ?? .66));
-  root.style.setProperty('--edge-opacity-pct', `${Math.round(Number(settings.edgeOpacity ?? .66) * 100)}%`);
-  root.style.setProperty('--edge-glow', `${Number(settings.edgeGlow ?? 10)}px`);
-  root.style.setProperty('--glass-opacity', Number(settings.glassOpacity ?? .70));
-  root.style.setProperty('--glass-opacity-pct', `${Math.round(Number(settings.glassOpacity ?? .70) * 100)}%`);
-  root.style.setProperty('--glass-blur', `${Number(settings.glassBlur || 28)}px`);
+  root.style.setProperty('--edge-width', `${Number(settings.edgeWidth || 1.5)}px`);
+  root.style.setProperty('--edge-opacity', Number(settings.edgeOpacity ?? .38));
+  root.style.setProperty('--edge-opacity-pct', `${Math.round(Number(settings.edgeOpacity ?? .38) * 100)}%`);
+  root.style.setProperty('--edge-glow', `${Number(settings.edgeGlow ?? 4)}px`);
   document.body.classList.toggle('edge-off', !settings.edgeEnabled);
-  document.body.classList.toggle('glass-off', !settings.glassEnabled);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color);
+  // ステータスバーは機能色ではなくアプリ背景へ溶け込ませる。
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#090b0e');
 }
 
 export function renderNav(onNavigate) {
@@ -6235,9 +6258,9 @@ export function setScreen(screen) {
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
-========================================================================================
+============================================================================================
 FILE: src/app/store.js
-========================================================================================
+============================================================================================
 import { load, save } from '../shared/storage.js';
 
 export const DEFAULTS = {
@@ -6264,12 +6287,9 @@ export const DEFAULTS = {
   twitterFeeds: [{ name:'デフォルトリスト', id:'2087706843519111304' }],
   settings: {
     edgeEnabled: true,
-    edgeWidth: 2,
-    edgeOpacity: .66,
-    edgeGlow: 10,
-    glassEnabled: true,
-    glassOpacity: .70,
-    glassBlur: 28,
+    edgeWidth: 1.5,
+    edgeOpacity: .38,
+    edgeGlow: 4,
     rankWithAi: true,
     twitchCommentDensity: 'normal',
     colors: {
@@ -6320,9 +6340,9 @@ export function patchSettings(partial) {
   window.dispatchEvent(new CustomEvent('pdv2:settings-changed'));
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/home/home.js
-========================================================================================
+============================================================================================
 import { state } from '../../app/store.js';
 import { el } from '../../shared/dom.js';
 import { topbar } from '../../shared/components.js';
@@ -6424,9 +6444,9 @@ export async function renderHome(root, { navigate }) {
   localStorage.setItem('pdv2:lastVisitMs', String(now));
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/media/media.js
-========================================================================================
+============================================================================================
 import { state, update } from '../../app/store.js';
 import { el } from '../../shared/dom.js';
 import { topbar, segmented } from '../../shared/components.js';
@@ -6439,9 +6459,9 @@ export async function renderMedia(root,{navigate,refresh=false}){
   const renderSeg=()=>segHost.replaceChildren(segmented([{value:'youtube',label:'YouTube'},{value:'twitch',label:'Twitch'}],state.mediaMode,v=>{update('lastMediaMode',v);applyTheme();renderMedia(root,{navigate});}));renderSeg();if(mode==='twitch')await renderTwitch(host,{refresh});else await renderYouTube(host,{refresh});
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/reader/reader-data.js
-========================================================================================
+============================================================================================
 import { state } from '../../app/store.js';
 import { fetchFeed, dedupeSort } from '../../shared/rss.js';
 
@@ -6597,9 +6617,9 @@ export function filterByFeed(items, feed, mode) {
   return items.filter(i => i.feedName === feed.name || i.source === feed.name);
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/reader/reader-focus.js
-========================================================================================
+============================================================================================
 import { el, openSheet, showToast, escapeHtml } from '../../shared/dom.js';
 import { attachSwipe } from '../../shared/gestures.js';
 import { shortDate } from '../../shared/time.js';
@@ -6690,9 +6710,9 @@ export function mountFocus(host, { items, initialIndex=0, label='いま押さえ
   return { destroy(){controller?.abort();detach();}, go(i){index=Math.max(0,Math.min(i,items.length-1));render();} };
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/reader/reader-rank.js
-========================================================================================
+============================================================================================
 const SOURCE_BONUS = [
   /日経|Reuters|BBC|J-STAGE|PubMed|PMC|PLOS|Semantic Scholar/i,
   /ITmedia|MONOist|EE Times|Impress/i
@@ -6814,9 +6834,9 @@ export async function requestAiRank(items, mode) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/reader/reader.js
-========================================================================================
+============================================================================================
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
 import { topbar, segmented, collectionManager } from '../../shared/components.js';
@@ -7266,9 +7286,9 @@ export async function renderReader(root, { navigate, refresh = false }) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/settings/settings.js
-========================================================================================
+============================================================================================
 import { state, patchSettings } from '../../app/store.js';
 import { el, showToast } from '../../shared/dom.js';
 import { topbar } from '../../shared/components.js';
@@ -7284,11 +7304,9 @@ function importSettings(){const input=document.createElement('input');input.type
 
 export async function renderSettings(root,{navigate}){
   const s=state.settings;const screen=el('section',{class:'screen'});screen.append(topbar('設定',{subtitle:'見た目・データ・連携',actions:[{label:'←',title:'ホーム',onClick:()=>navigate('home')}]}));
-  const appearance=el('div',{class:'card settings-section'});appearance.append(el('h2',{text:'画面の輪郭'}));appearance.append(row('機能ごとの輪郭色',toggle(s.edgeEnabled,v=>patchSettings({edgeEnabled:v})),'PWAの表示領域に細い色を付けます。'));
+  const appearance=el('div',{class:'card settings-section'});appearance.append(el('h2',{text:'画面の輪郭'}));appearance.append(row('機能ごとの輪郭色',toggle(s.edgeEnabled,v=>patchSettings({edgeEnabled:v})),'PWAの表示領域に控えめな色を付けます。画面の種類を色で思い出しやすくする補助表示です。'));
   appearance.append(row('太さ',range(s.edgeWidth,1,5,.5,v=>patchSettings({edgeWidth:v}))));appearance.append(row('透明度',range(s.edgeOpacity,.15,1,.05,v=>patchSettings({edgeOpacity:v}))));appearance.append(row('発光',range(s.edgeGlow,0,30,1,v=>patchSettings({edgeGlow:v}))));
   const colors=[['home','ホーム'],['weather','天気'],['news','ニュース'],['knowledge','知識'],['papers','論文'],['youtube','YouTube'],['twitch','Twitch'],['twitter','SNS'],['settings','設定']];colors.forEach(([k,l])=>appearance.append(row(`${l}の色`,color(s.colors[k],v=>patchSettings({colors:{[k]:v}})))));
-
-  const glass=el('div',{class:'card settings-section'});glass.append(el('h2',{text:'下部ナビ'}));glass.append(row('Liquid Glass風',toggle(s.glassEnabled,v=>patchSettings({glassEnabled:v})),'WebではiOSのネイティブ素材を直接呼べないため、Safariのbackdrop-filterで近い質感を再現します。'));glass.append(row('透明度',range(s.glassOpacity,.35,.95,.05,v=>patchSettings({glassOpacity:v}))));glass.append(row('ぼかし',range(s.glassBlur,8,42,1,v=>patchSettings({glassBlur:v}))));
 
   const behavior=el('div',{class:'card settings-section'});behavior.append(el('h2',{text:'動作'}));behavior.append(row('「いま押さえる」のAI補正',toggle(s.rankWithAi,v=>patchSettings({rankWithAi:v})),'表示はすぐ行い、AI評価は次回候補選定に使います。'));
   const density=el('select');[['low','少'],['normal','標準'],['high','多']].forEach(([v,l])=>density.append(el('option',{value:v,text:l})));density.value=s.twitchCommentDensity;density.onchange=()=>patchSettings({twitchCommentDensity:density.value});behavior.append(row('Twitch流れるコメント',density));
@@ -7296,12 +7314,12 @@ export async function renderSettings(root,{navigate}){
   const data=el('div',{class:'card settings-section'});data.append(el('h2',{text:'データ'}));data.append(row('設定を書き出す',el('button',{class:'soft-button',type:'button',text:'エクスポート',onclick:downloadSettings}),'新しいVercel URLへ移すときにも使えます。'));data.append(row('設定を読み込む',el('button',{class:'soft-button',type:'button',text:'インポート',onclick:importSettings})));
   data.append(row('Gemini接続',el('button',{class:'soft-button',type:'button',text:'確認',onclick:async()=>{try{const d=await fetch('/api/rank-items?mode=gemini-check&live=1').then(r=>r.json());showToast(d.message||d.error||'確認完了',3500);}catch{showToast('接続確認に失敗')}}})));
   data.append(row('Twitchコメント連携',el('button',{class:'soft-button',type:'button',text:hasTwitchChatToken()?'接続解除':'未接続',onclick:()=>{if(hasTwitchChatToken()){disconnectTwitchChat();showToast('Twitch連携を解除しました');location.reload();}else showToast('Twitch再生画面の「Twitch連携」から接続できます');}})));
-  screen.append(appearance,glass,behavior,data);root.replaceChildren(screen);
+  screen.append(appearance,behavior,data);root.replaceChildren(screen);
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/twitch/twitch-chat.js
-========================================================================================
+============================================================================================
 import { showToast } from '../../shared/dom.js';
 
 const TOKEN_KEY='pdv2:twitchOAuthToken';
@@ -7343,172 +7361,500 @@ export function connectTwitchChat({broadcasterId,onMessage,onStatus}){
   };connect();return()=>{try{socket?.close()}catch{};socket=null;};
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/twitch/twitch-player.js
-========================================================================================
+============================================================================================
 import { el, showToast } from '../../shared/dom.js';
 import { connectTwitchChat, hasTwitchChatToken, startTwitchLogin } from './twitch-chat.js';
 
 let cleanupChat = null;
+let activeHost = null;
+let fullscreenPanel = null;
+
+function stopChat(){ cleanupChat?.(); cleanupChat=null; }
+
+export function cleanupTwitchPlayer(){
+  stopChat();
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+  fullscreenPanel?.classList.remove('player-pseudo-fullscreen');
+  fullscreenPanel=null;
+  if(activeHost?.isConnected) activeHost.replaceChildren();
+  activeHost=null;
+}
+
+window.addEventListener('pdv2:before-navigate', cleanupTwitchPlayer);
 
 // Twitch公式Embedを覆わないため、コメントはプレイヤー直下の専用レーンを流す。
-function addFlying(lane, msg, density='normal') {
-  const limit = density === 'low' ? 3 : density === 'high' ? 8 : 5;
-  const existing = [...lane.querySelectorAll('.flying-comment')];
-  while (existing.length >= limit) existing.shift()?.remove();
-  const c = el('div', { class:'flying-comment', text:msg.text });
-  c.style.top = `${6 + Math.random() * 54}%`;
-  c.style.animationDuration = `${6 + Math.random() * 2}s`;
+function addFlying(lane,msg,density='normal'){
+  const limit=density==='low'?3:density==='high'?8:5;
+  const existing=[...lane.querySelectorAll('.flying-comment')];
+  while(existing.length>=limit)existing.shift()?.remove();
+  const c=el('div',{class:'flying-comment',text:msg.text});
+  c.style.top=`${5+Math.random()*48}%`;
+  c.style.animationDuration=`${6+Math.random()*2}s`;
   lane.append(c);
-  setTimeout(() => c.remove(), 9000);
+  setTimeout(()=>c.remove(),9000);
 }
 
-function toggleLandscape(modal) {
-  if (window.innerWidth < 400 && !modal.classList.contains('css-landscape')) {
-    // Twitch公式Embedの最小幅400pxを下回るiPhone縦画面では横向き表示を維持する。
-    modal.classList.add('css-landscape');
-    showToast('Twitchは横画面表示で視聴します');
-    return;
-  }
-  modal.classList.toggle('css-landscape');
+async function enterLandscape(panel){
+  try{
+    if(panel.requestFullscreen){
+      await panel.requestFullscreen();
+      fullscreenPanel=panel;
+      try{await screen.orientation?.lock?.('landscape');}catch{}
+      return;
+    }
+  }catch{}
+  panel.classList.toggle('player-pseudo-fullscreen');
+  fullscreenPanel=panel.classList.contains('player-pseudo-fullscreen')?panel:null;
+  showToast(panel.classList.contains('player-pseudo-fullscreen')?'端末を横向きにすると見やすくなります':'通常表示に戻しました');
 }
 
-export function openTwitchPlayer({ snapshot, videoId='', settings }) {
-  const live = !videoId;
-  const modal = el('section', { class:'player-modal twitch-player-modal' });
-  const top = el('div', { class:'player-topbar' });
-  const close = () => { cleanupChat?.(); cleanupChat=null; modal.remove(); };
-
-  top.append(
-    el('button', { class:'player-icon', type:'button', text:'✕', onclick:close }),
-    el('strong', { text:snapshot.broadcaster.displayName }),
-    el('button', { class:'player-icon', type:'button', text:'↔ 横画面', onclick:()=>toggleLandscape(modal) })
-  );
-
-  const stage = el('div', { class:'player-stage twitch-stage' });
-  const parent = location.hostname;
-  const q = new URLSearchParams({ parent, autoplay:'false', muted:'false' });
-  if (live) q.set('channel', snapshot.broadcaster.login);
-  else q.set('video', `v${String(videoId).replace(/^v/, '')}`);
-
-  const iframe = el('iframe', {
+function buildIframe(entry){
+  const live=!entry.videoId;
+  const parent=location.hostname;
+  const q=new URLSearchParams({parent,autoplay:'false',muted:'false'});
+  if(live)q.set('channel',entry.snapshot.broadcaster.login);
+  else q.set('video',`v${String(entry.videoId).replace(/^v/,'')}`);
+  return el('iframe',{
     src:`https://player.twitch.tv/?${q}`,
     allowfullscreen:'true',
     allow:'autoplay; fullscreen',
-    title:'Twitch player'
+    title:live?`${entry.snapshot.broadcaster.displayName} LIVE`:'Twitch archive'
   });
-  stage.append(iframe);
-
-  const commentLane = el('div', { class:'twitch-comment-lane' });
-  commentLane.append(el('div', { class:'comment-lane-placeholder', text:'コメント連携すると、ここをコメントが流れます' }));
-
-  const body = el('div', { class:'player-body' });
-  const archive = snapshot.archives.find(v => v.id === videoId);
-  body.append(el('div', { class:'player-title', text:live ? snapshot.live.title : (archive?.title || 'アーカイブ') }));
-
-  const status = el('div', { class:'source-note', text:'' });
-  const actions = el('div', { class:'player-actions' });
-  actions.append(el('a', {
-    class:'player-soft', target:'_blank', rel:'noopener noreferrer',
-    href:live ? snapshot.live.url : `https://www.twitch.tv/videos/${videoId}`,
-    text:'Twitchで開く ↗'
-  }));
-
-  if (live) {
-    const chatBtn = el('button', { class:'player-soft', type:'button', text:hasTwitchChatToken() ? '💬 コメント開始' : '💬 Twitch連携' });
-    chatBtn.onclick = async () => {
-      if (!hasTwitchChatToken()) {
-        try { await startTwitchLogin(); } catch (err) { showToast(err.message); }
-        return;
-      }
-      if (cleanupChat) {
-        cleanupChat(); cleanupChat=null;
-        chatBtn.textContent='💬 コメント開始';
-        status.textContent='コメントを停止しました';
-        return;
-      }
-      commentLane.querySelector('.comment-lane-placeholder')?.remove();
-      cleanupChat = connectTwitchChat({
-        broadcasterId:snapshot.broadcaster.id,
-        onMessage:m=>addFlying(commentLane, m, settings?.twitchCommentDensity || 'normal'),
-        onStatus:s=>status.textContent=s
-      });
-      chatBtn.textContent='💬 コメント停止';
-    };
-    actions.append(chatBtn);
-  } else {
-    commentLane.remove();
-  }
-
-  body.append(actions, status);
-  modal.append(top, stage);
-  if (live) modal.append(commentLane);
-  modal.append(body);
-  document.getElementById('overlay-root').append(modal);
-
-  // 400px未満のiPhone縦幅では、公式Embed要件を満たすため最初から横向き表示。
-  if (window.innerWidth < 400 && matchMedia('(orientation: portrait)').matches) {
-    modal.classList.add('css-landscape');
-  }
 }
 
-========================================================================================
+export function mountTwitchPlayer({host,queue,index=0,settings}){
+  if(!host||!Array.isArray(queue)||!queue.length)return;
+  stopChat();
+  activeHost=host;
+  let current=Math.max(0,Math.min(index,queue.length-1));
+
+  const render=()=>{
+    stopChat();
+    const entry=queue[current];
+    const {snapshot,videoId=''}=entry;
+    const live=!videoId;
+    const archive=live?null:snapshot.archives.find(v=>v.id===videoId);
+    const panel=el('section',{class:'twitch-inline-player'});
+
+    const top=el('div',{class:'twitch-inline-head'});
+    top.append(
+      el('div',{},[
+        el('div',{class:'twitch-inline-kicker',text:live?'LIVE':'アーカイブ'}),
+        el('strong',{text:snapshot.broadcaster.displayName})
+      ]),
+      el('button',{class:'icon-button twitch-close',type:'button','aria-label':'プレイヤーを閉じる',text:'✕',onclick:()=>cleanupTwitchPlayer()})
+    );
+
+    const stage=el('div',{class:'twitch-inline-stage'});
+    const min=el('div',{class:'twitch-embed-min'});
+    min.append(buildIframe(entry));
+    stage.append(min);
+
+    const commentLane=el('div',{class:'twitch-comment-lane'});
+    commentLane.append(el('div',{class:'comment-lane-placeholder',text:'Twitch連携すると、ここをコメントが流れます'}));
+
+    const info=el('div',{class:'twitch-inline-info'});
+    info.append(el('div',{class:'player-title',text:live?snapshot.live.title:(archive?.title||'アーカイブ')}));
+    const status=el('div',{class:'source-note'});
+
+    const controls=el('div',{class:'twitch-inline-controls'});
+    const prev=el('button',{class:'player-soft',type:'button',text:'‹ 前へ',disabled:current<=0,onclick:()=>{if(current>0){current--;render();}}});
+    const next=el('button',{class:'player-soft',type:'button',text:'次へ ›',disabled:current>=queue.length-1,onclick:()=>{if(current<queue.length-1){current++;render();}}});
+    const landscape=el('button',{class:'player-soft',type:'button',text:'↔ 横画面',onclick:()=>enterLandscape(panel)});
+    const external=el('a',{
+      class:'player-soft',target:'_blank',rel:'noopener noreferrer',
+      href:live?snapshot.live.url:`https://www.twitch.tv/videos/${videoId}`,
+      text:'Twitchで開く ↗'
+    });
+    controls.append(prev,next,landscape,external);
+
+    if(live){
+      const chatBtn=el('button',{class:'player-soft',type:'button',text:hasTwitchChatToken()?'コメント開始':'Twitch連携'});
+      chatBtn.onclick=async()=>{
+        if(!hasTwitchChatToken()){
+          try{await startTwitchLogin();}catch(err){showToast(err.message);}
+          return;
+        }
+        if(cleanupChat){
+          stopChat(); chatBtn.textContent='コメント開始'; status.textContent='コメントを停止しました'; return;
+        }
+        commentLane.querySelector('.comment-lane-placeholder')?.remove();
+        cleanupChat=connectTwitchChat({
+          broadcasterId:snapshot.broadcaster.id,
+          onMessage:m=>addFlying(commentLane,m,settings?.twitchCommentDensity||'normal'),
+          onStatus:s=>status.textContent=s
+        });
+        chatBtn.textContent='コメント停止';
+      };
+      controls.append(chatBtn);
+    }
+
+    info.append(controls,status);
+    panel.append(top,stage);
+    if(live)panel.append(commentLane);
+    panel.append(info);
+    host.replaceChildren(panel);
+    requestAnimationFrame(()=>host.scrollIntoView({behavior:'smooth',block:'start'}));
+  };
+
+  render();
+}
+
+============================================================================================
 FILE: src/features/twitch/twitch.js
-========================================================================================
+============================================================================================
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
 import { collectionManager } from '../../shared/components.js';
-import { openTwitchPlayer } from './twitch-player.js';
+import { cleanupTwitchPlayer, mountTwitchPlayer } from './twitch-player.js';
 
-let selected=localStorage.getItem('pdv2:twitchSelected')||'all';let cache=[];
-async function loadOne(ch){const value=ch.value||ch.url||ch.name;const r=await fetch(`/api/twitch-feed?channel=${encodeURIComponent(value)}&format=json`,{headers:{Accept:'application/json'},cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.error||'Twitch取得エラー');return d;}
-async function loadAll(force=false){const key='pdv2:twitchCache';if(!force){try{const c=JSON.parse(localStorage.getItem(key)||'null');if(c&&Date.now()-c.at<60*1000){cache=c.rows;return cache;}}catch{}}const s=await Promise.allSettled(state.twitchChannels.map(loadOne));cache=s.filter(x=>x.status==='fulfilled').map(x=>x.value);localStorage.setItem(key,JSON.stringify({at:Date.now(),rows:cache}));return cache;}
-function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.twitchChannels,fields:[{key:'name',label:'表示名',placeholder:'任意'},{key:'value',label:'Twitch URL / 配信者名',placeholder:'https://www.twitch.tv/...'}],onSave:d=>{update('twitchChannels',d);sheet.close();onDone();}}),{title:'Twitch配信者編集'});}
+let selected=localStorage.getItem('pdv2:twitchSelected')||'all';
+let cache=[];
+let loadErrors=[];
+
+async function loadOne(ch){
+  const value=ch.value||ch.url||ch.name;
+  const r=await fetch(`/api/twitch-feed?channel=${encodeURIComponent(value)}&format=json`,{headers:{Accept:'application/json'},cache:'no-store'});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(`${ch.name||value}: ${d.error||'Twitch取得エラー'}`);
+  return d;
+}
+
+async function loadAll(force=false){
+  const key='pdv2:twitchCache';
+  if(!force){
+    try{const c=JSON.parse(localStorage.getItem(key)||'null');if(c&&Date.now()-c.at<60*1000){cache=c.rows||[];loadErrors=c.errors||[];return cache;}}catch{}
+  }
+  const s=await Promise.allSettled(state.twitchChannels.map(loadOne));
+  cache=s.filter(x=>x.status==='fulfilled').map(x=>x.value);
+  loadErrors=s.filter(x=>x.status==='rejected').map(x=>String(x.reason?.message||x.reason));
+  localStorage.setItem(key,JSON.stringify({at:Date.now(),rows:cache,errors:loadErrors}));
+  if(!cache.length&&loadErrors.length)throw new Error(loadErrors.join(' / '));
+  return cache;
+}
+
+function manage(onDone){
+  let sheet;
+  sheet=openSheet(collectionManager({
+    items:state.twitchChannels,
+    fields:[{key:'name',label:'表示名',placeholder:'任意'},{key:'value',label:'Twitch URL / 配信者名',placeholder:'https://www.twitch.tv/...'}],
+    onSave:d=>{update('twitchChannels',d);localStorage.removeItem('pdv2:twitchCache');sheet.close();onDone();}
+  }),{title:'Twitch配信者編集'});
+}
+
 function picker(onChange,onEdit){
   const w=el('div'); let sheet;
   w.append(el('button',{class:'list-item',type:'button',text:'すべての配信者',onclick:()=>{
-    selected='all'; localStorage.setItem('pdv2:twitchSelected',selected); sheet?.close(); onChange();
+    selected='all';localStorage.setItem('pdv2:twitchSelected',selected);sheet?.close();onChange();
   }}));
   cache.forEach(s=>w.append(el('button',{class:'list-item',type:'button',text:s.broadcaster.displayName,onclick:()=>{
-    selected=s.broadcaster.id; localStorage.setItem('pdv2:twitchSelected',selected); sheet?.close(); onChange();
+    selected=s.broadcaster.id;localStorage.setItem('pdv2:twitchSelected',selected);sheet?.close();onChange();
   }})));
   w.append(el('button',{class:'soft-button full-button',type:'button',text:'＋追加 / 編集',onclick:()=>{sheet?.close();onEdit();}}));
   sheet=openSheet(w,{title:'Twitch配信者'});
 }
 
-export async function renderTwitch(host,{refresh=false}={}){
-  host.innerHTML='<div class="loading">Twitchを読み込み中...</div>';
-  if(!state.twitchChannels.length){host.replaceChildren(el('div',{class:'empty',text:'配信者を追加してください'}),el('button',{class:'primary-button full-button',type:'button',text:'Twitch配信者を追加',onclick:()=>manage(()=>renderTwitch(host,{refresh:true}))}));return;}
-  try{await loadAll(refresh);draw();}catch(err){host.innerHTML=`<div class="error-box">${err.message}</div>`;}
-  function draw(){const rows=selected==='all'?cache:cache.filter(s=>s.broadcaster.id===selected);const pick=el('button',{class:'soft-button channel-picker',type:'button',html:`<span>👤 ${selected==='all'?'すべての配信者':rows[0]?.broadcaster.displayName||'配信者'}</span><span>⌄</span>`,onclick:()=>picker(draw,()=>manage(()=>renderTwitch(host,{refresh:true})))});const content=el('div');
-    const lives=rows.filter(s=>s.live.isLive);if(lives.length){const fixed=el('div',{class:'twitch-live-zone'});lives.forEach(s=>{const c=el('button',{class:'twitch-live-card',type:'button',onclick:()=>openTwitchPlayer({snapshot:s,settings:state.settings})});c.innerHTML=`<div class="live-badge">● LIVE</div><div class="media-title" style="margin-top:7px">${s.live.title}</div><div class="media-meta">${s.broadcaster.displayName} ・ ${s.live.viewerCount.toLocaleString()}人視聴</div>`;fixed.append(c);});content.append(fixed);}
-    const list=el('div',{class:'media-list'});rows.flatMap(s=>s.archives.map(v=>({s,v}))).sort((a,b)=>new Date(b.v.createdAt)-new Date(a.v.createdAt)).forEach(({s,v})=>{const r=el('button',{class:'media-row',type:'button',onclick:()=>openTwitchPlayer({snapshot:s,videoId:v.id,settings:state.settings})});r.innerHTML=`<img class="thumb" src="${v.thumbnailUrl||''}" alt=""><div><div class="media-title">${v.title}</div><div class="media-meta">${s.broadcaster.displayName} ・ ${v.duration||''}</div></div>`;list.append(r);});if(!list.children.length)list.append(el('div',{class:'empty',text:'アーカイブがありません'}));content.append(el('div',{class:'section-title'},[el('h2',{text:'アーカイブ'}),el('small',{text:'タイトルをタップで再生'})]),list);host.replaceChildren(pick,content);}
+function makeQueue(rows){
+  const queue=[];
+  rows.filter(s=>s.live.isLive).forEach(snapshot=>queue.push({snapshot,videoId:''}));
+  rows.flatMap(snapshot=>snapshot.archives.map(v=>({snapshot,videoId:v.id,createdAt:v.createdAt})))
+    .sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
+    .forEach(x=>queue.push(x));
+  return queue;
 }
 
-========================================================================================
+export async function renderTwitch(host,{refresh=false}={}){
+  cleanupTwitchPlayer();
+  host.innerHTML='<div class="loading">Twitchを読み込み中...</div>';
+  if(!state.twitchChannels.length){
+    host.replaceChildren(el('div',{class:'empty',text:'配信者を追加してください'}),el('button',{class:'primary-button full-button',type:'button',text:'Twitch配信者を追加',onclick:()=>manage(()=>renderTwitch(host,{refresh:true}))}));
+    return;
+  }
+  try{await loadAll(refresh);draw();}catch(err){host.replaceChildren(el('div',{class:'error-box',text:err.message}));}
+
+  function draw(){
+    if(selected!=='all'&&!cache.some(s=>s.broadcaster.id===selected))selected='all';
+    const rows=selected==='all'?cache:cache.filter(s=>s.broadcaster.id===selected);
+    const queue=makeQueue(rows);
+    const playerHost=el('div',{class:'twitch-inline-player-host'});
+    const play=(entry)=>{
+      const idx=queue.findIndex(x=>x.snapshot.broadcaster.id===entry.snapshot.broadcaster.id&&String(x.videoId||'')===String(entry.videoId||''));
+      mountTwitchPlayer({host:playerHost,queue,index:Math.max(0,idx),settings:state.settings});
+    };
+
+    const pick=el('button',{class:'soft-button channel-picker',type:'button',html:`<span>配信者　${selected==='all'?'すべて':rows[0]?.broadcaster.displayName||'配信者'}</span><span>⌄</span>`,onclick:()=>picker(draw,()=>manage(()=>renderTwitch(host,{refresh:true})))});
+    const content=el('div');
+
+    if(loadErrors.length)content.append(el('div',{class:'media-warning',text:loadErrors.join(' / ')}));
+
+    const lives=rows.filter(s=>s.live.isLive);
+    if(lives.length){
+      const fixed=el('div',{class:'twitch-live-zone'});
+      lives.forEach(s=>{
+        const c=el('button',{class:'twitch-live-card',type:'button',onclick:()=>play({snapshot:s,videoId:''})});
+        c.innerHTML=`<div class="live-badge">● LIVE</div><div class="media-title" style="margin-top:7px">${s.live.title}</div><div class="media-meta">${s.broadcaster.displayName} ・ ${Number(s.live.viewerCount||0).toLocaleString()}人視聴</div>`;
+        fixed.append(c);
+      });
+      content.append(fixed);
+    }
+
+    const archives=rows.flatMap(s=>s.archives.map(v=>({s,v}))).sort((a,b)=>new Date(b.v.createdAt)-new Date(a.v.createdAt));
+    const list=el('div',{class:'media-list'});
+    archives.forEach(({s,v})=>{
+      const r=el('button',{class:'media-row',type:'button',onclick:()=>play({snapshot:s,videoId:v.id})});
+      r.innerHTML=`<img class="thumb" src="${v.thumbnailUrl||''}" alt=""><div><div class="media-title">${v.title}</div><div class="media-meta">${s.broadcaster.displayName} ・ ${v.duration||''}</div></div>`;
+      list.append(r);
+    });
+    if(!list.children.length)list.append(el('div',{class:'empty',text:'アーカイブがありません'}));
+    content.append(el('div',{class:'section-title'},[el('h2',{text:'アーカイブ'}),el('small',{text:'タイトルをタップで上に再生'})]),list);
+
+    host.replaceChildren(pick,playerHost,content);
+  }
+}
+
+============================================================================================
+FILE: src/features/twitter/image-viewer.js
+============================================================================================
+import { el } from '../../shared/dom.js';
+
+const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
+
+export function openImageViewer(images,startIndex=0){
+  const list=[...new Set((images||[]).filter(Boolean))];
+  if(!list.length)return;
+
+  let index=clamp(Number(startIndex)||0,0,list.length-1);
+  let scale=1,tx=0,ty=0;
+  let gestureStart=null;
+  const pointers=new Map();
+
+  const overlay=el('div',{class:'image-viewer','aria-label':'画像ビューア'});
+  const stage=el('div',{class:'image-viewer-stage'});
+  const img=el('img',{class:'image-viewer-img',alt:'拡大画像',draggable:'false'});
+  const close=el('button',{class:'image-viewer-close',type:'button','aria-label':'閉じる',text:'✕'});
+  const count=el('div',{class:'image-viewer-count'});
+  const reset=()=>{scale=1;tx=0;ty=0;apply();};
+  const apply=()=>{img.style.transform=`translate3d(${tx}px,${ty}px,0) scale(${scale})`;};
+  const show=()=>{img.src=list[index];count.textContent=list.length>1?`${index+1} / ${list.length}`:'';reset();};
+  const change=dir=>{if(list.length<2)return;index=(index+dir+list.length)%list.length;show();};
+  const distance=()=>{const a=[...pointers.values()];if(a.length<2)return 0;return Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);};
+  const midpoint=()=>{const a=[...pointers.values()];if(a.length<2)return {x:0,y:0};return {x:(a[0].x+a[1].x)/2,y:(a[0].y+a[1].y)/2};};
+
+  close.onclick=()=>overlay.remove();
+  overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove();});
+  stage.addEventListener('dblclick',()=>{if(scale>1)reset();else{scale=2.5;apply();}});
+
+  stage.addEventListener('pointerdown',e=>{
+    stage.setPointerCapture?.(e.pointerId);
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pointers.size===1){gestureStart={x:e.clientX,y:e.clientY,tx,ty,scale,time:Date.now()};}
+    if(pointers.size===2){gestureStart={distance:distance(),scale,mid:midpoint(),tx,ty};}
+  });
+  stage.addEventListener('pointermove',e=>{
+    if(!pointers.has(e.pointerId))return;
+    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pointers.size>=2&&gestureStart?.distance){
+      const d=distance();
+      scale=clamp(gestureStart.scale*(d/Math.max(1,gestureStart.distance)),1,5);
+      apply();
+      return;
+    }
+    if(pointers.size===1&&gestureStart?.x!=null){
+      const dx=e.clientX-gestureStart.x,dy=e.clientY-gestureStart.y;
+      if(scale>1){tx=gestureStart.tx+dx;ty=gestureStart.ty+dy;apply();}
+      else{tx=dx*.28;apply();}
+    }
+  });
+  const finishPointer=e=>{
+    const prev=pointers.get(e.pointerId);
+    pointers.delete(e.pointerId);
+    if(pointers.size===0&&gestureStart?.x!=null){
+      const dx=(prev?.x??e.clientX)-gestureStart.x;
+      const dt=Date.now()-gestureStart.time;
+      if(scale<=1.01&&Math.abs(dx)>55&&dt<700){change(dx<0?1:-1);}
+      else if(scale<=1.01)reset();
+      gestureStart=null;
+    }else if(pointers.size===1){
+      const one=[...pointers.values()][0];
+      gestureStart={x:one.x,y:one.y,tx,ty,scale,time:Date.now()};
+    }
+  };
+  stage.addEventListener('pointerup',finishPointer);
+  stage.addEventListener('pointercancel',finishPointer);
+  stage.addEventListener('wheel',e=>{
+    e.preventDefault();
+    scale=clamp(scale+(e.deltaY<0?.25:-.25),1,5);
+    if(scale===1){tx=0;ty=0;}
+    apply();
+  },{passive:false});
+
+  stage.append(img);
+  overlay.append(stage,close,count);
+  document.getElementById('overlay-root').append(overlay);
+  show();
+}
+
+============================================================================================
 FILE: src/features/twitter/twitter.js
-========================================================================================
+============================================================================================
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
 import { topbar, collectionManager } from '../../shared/components.js';
 import { parseFeed } from '../../shared/rss.js';
 import { shortDate } from '../../shared/time.js';
+import { openImageViewer } from './image-viewer.js';
 
 let selected=Number(localStorage.getItem('pdv2:twitterIndex')||0);
+let retryTimer=null;
+let renderGeneration=0;
+
+function stopRetry(){if(retryTimer){clearTimeout(retryTimer);retryTimer=null;}}
+window.addEventListener('pdv2:before-navigate',stopRetry);
+
 function feedUrl(feed){if(feed.url)return feed.url;return `${state.settings.twitterRssBase}${feed.id}`;}
-async function load(feed){const url=feedUrl(feed);const target=url.startsWith('/')?url:`/api/rss?url=${encodeURIComponent(url)}`;const r=await fetch(target,{cache:'no-store'});if(!r.ok)throw new Error(`Twitter RSS取得エラー (${r.status})`);return parseFeed(await r.text(),feed.name);}
-function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.twitterFeeds,fields:[{key:'name',label:'タブ名',placeholder:'リスト名'},{key:'id',label:'Twitter/X リストID',placeholder:'2087...'},{key:'url',label:'RSS URL（任意）',placeholder:'空ならRSSHubを使用'}],onSave:d=>{update('twitterFeeds',d);sheet.close();selected=0;onDone();}}),{title:'Twitterリスト編集'});}
-function cleanDescription(html){const doc=new DOMParser().parseFromString(`<div>${html||''}</div>`,'text/html');doc.querySelectorAll('script,style,iframe,video').forEach(n=>n.remove());const images=[...doc.querySelectorAll('img')].map(i=>i.src).filter(src=>/twimg\.com|pbs\.twimg/.test(src)).slice(0,4);doc.querySelectorAll('img').forEach(n=>n.remove());return {text:(doc.body.textContent||'').replace(/\s+/g,' ').trim(),images};}
-export async function renderTwitter(root,{navigate,refresh=false}){
-  if(selected>=state.twitterFeeds.length)selected=0;const feed=state.twitterFeeds[selected];const screen=el('section',{class:'screen'});screen.append(topbar('SNS',{subtitle:'Twitter / X リスト',actions:[{label:'＋',title:'追加/編集',onClick:()=>manage(()=>renderTwitter(root,{navigate,refresh:true}))},{label:'↻',title:'更新',onClick:()=>renderTwitter(root,{navigate,refresh:true})},{label:'⚙︎',title:'設定',onClick:()=>navigate('settings')}]}));
-  const chips=el('div',{class:'chips'});state.twitterFeeds.forEach((f,i)=>chips.append(el('button',{class:`chip ${i===selected?'active':''}`,type:'button',text:f.name,onclick:()=>{localStorage.setItem(`pdv2:twitterScroll:${selected}`,String(window.scrollY));selected=i;localStorage.setItem('pdv2:twitterIndex',String(i));renderTwitter(root,{navigate});}})));screen.append(chips);const host=el('div',{class:'card',html:'<div class="loading">ツイートを読み込み中...</div>'});screen.append(host);root.replaceChildren(screen);
-  if(!feed){host.replaceChildren(el('div',{class:'empty',text:'リストを追加してください'}));return;}
-  try{const items=await load(feed);host.replaceChildren();items.slice(0,100).forEach(item=>{const c=cleanDescription(item.description);const tw=el('article',{class:'tweet'});const head=el('div',{class:'tweet-head'},[el('strong',{text:item.author||feed.name}),el('span',{text:shortDate(item.pubDate)})]);const link=el('a',{href:item.link,target:'_blank',rel:'noopener noreferrer',class:'tweet-link'});link.append(el('div',{class:'tweet-body',text:c.text||item.title}));if(c.images.length){const g=el('div',{class:'tweet-images'});c.images.forEach(src=>g.append(el('img',{src,alt:''})));link.append(g);}tw.append(head,link);host.append(tw);});const saved=Number(localStorage.getItem(`pdv2:twitterScroll:${selected}`)||0);if(saved)setTimeout(()=>window.scrollTo(0,saved),0);}catch(err){host.innerHTML=`<div class="error-box">${err.message}</div>`;}
+function proxied(url){
+  if(url.startsWith('/'))return url;
+  const q=new URLSearchParams({url,timeout:'4500'});
+  return `/api/rss?${q}`;
+}
+async function load(feed){
+  const url=feedUrl(feed);
+  const r=await fetch(proxied(url),{cache:'no-store'});
+  if(!r.ok){const detail=await r.text().catch(()=>'');throw new Error(`Twitter RSS取得エラー (${r.status})${detail?`: ${detail.slice(0,100)}`:''}`);}
+  return parseFeed(await r.text(),feed.name);
 }
 
-========================================================================================
+function manage(onDone){
+  let sheet;
+  sheet=openSheet(collectionManager({items:state.twitterFeeds,fields:[
+    {key:'name',label:'タブ名',placeholder:'リスト名'},
+    {key:'id',label:'Twitter/X リストID',placeholder:'2087...'},
+    {key:'url',label:'RSS URL（任意）',placeholder:'空ならRSSHubを使用'}
+  ],onSave:d=>{update('twitterFeeds',d);sheet.close();selected=0;stopRetry();onDone();}}),{title:'Twitterリスト編集'});
+}
+
+function isTwitterUrl(href=''){
+  try{const h=new URL(href).hostname.replace(/^www\./,'').toLowerCase();return h==='x.com'||h.endsWith('.x.com')||h==='twitter.com'||h.endsWith('.twitter.com');}catch{return false;}
+}
+function cleanDescription(html){
+  const doc=new DOMParser().parseFromString(`<div id="tweet-root">${html||''}</div>`,'text/html');
+  const root=doc.getElementById('tweet-root')||doc.body;
+  root.querySelectorAll('script,style,iframe,video').forEach(n=>n.remove());
+  const images=[...root.querySelectorAll('img')]
+    .map(i=>i.getAttribute('src')||i.src)
+    .filter(src=>/twimg\.com|pbs\.twimg/i.test(src||''))
+    .map(src=>src.replace(/&amp;/g,'&'))
+    .slice(0,4);
+  root.querySelectorAll('img').forEach(n=>n.remove());
+
+  const links=[];
+  root.querySelectorAll('a[href]').forEach(a=>{
+    const href=a.getAttribute('href')||'';
+    const label=(a.textContent||'').trim();
+    if(/^https?:\/\//i.test(href)&&!isTwitterUrl(href)){
+      if(!links.some(x=>x.href===href))links.push({href,label:label||href});
+    }
+    a.replaceWith(doc.createTextNode(label));
+  });
+  const text=(root.textContent||'').replace(/\s+/g,' ').trim();
+  return {text,images:[...new Set(images)],links};
+}
+
+function externalLabel(link){
+  try{
+    const host=new URL(link.href).hostname.replace(/^www\./,'');
+    const label=link.label&&!/^https?:\/\//i.test(link.label)?link.label:host;
+    return `${label}  ↗`;
+  }catch{return '外部リンク ↗';}
+}
+
+function renderItems(host,items,feed){
+  host.replaceChildren();
+  items.slice(0,100).forEach(item=>{
+    const c=cleanDescription(item.description);
+    const tw=el('article',{class:'tweet'});
+    const head=el('div',{class:'tweet-head'},[
+      el('strong',{text:item.author||feed.name}),
+      el('span',{text:shortDate(item.pubDate)})
+    ]);
+    tw.append(head,el('div',{class:'tweet-body',text:c.text||item.title}));
+
+    if(c.images.length){
+      const grid=el('div',{class:`tweet-images count-${c.images.length}`});
+      c.images.forEach((src,i)=>{
+        const button=el('button',{class:'tweet-image-button',type:'button','aria-label':`画像 ${i+1} を拡大`,onclick:()=>openImageViewer(c.images,i)});
+        button.append(el('img',{src,alt:'ツイート画像',loading:'lazy'}));
+        grid.append(button);
+      });
+      tw.append(grid);
+    }
+
+    if(c.links.length){
+      const links=el('div',{class:'tweet-external-links'});
+      c.links.slice(0,4).forEach(link=>links.append(el('a',{class:'tweet-external-link',href:link.href,target:'_blank',rel:'noopener noreferrer',text:externalLabel(link)})));
+      tw.append(links);
+    }
+
+    if(item.link){
+      tw.append(el('div',{class:'tweet-footer'},[
+        el('a',{href:item.link,target:'_blank',rel:'noopener noreferrer',class:'tweet-open-x',text:'Xで開く ↗'})
+      ]));
+    }
+    host.append(tw);
+  });
+}
+
+export async function renderTwitter(root,{navigate,refresh=false}){
+  stopRetry();
+  const generation=++renderGeneration;
+  if(selected>=state.twitterFeeds.length)selected=0;
+  const feed=state.twitterFeeds[selected];
+  const screen=el('section',{class:'screen'});
+  screen.append(topbar('SNS',{subtitle:'Twitter / X リスト',actions:[
+    {label:'＋',title:'追加/編集',onClick:()=>manage(()=>renderTwitter(root,{navigate,refresh:true}))},
+    {label:'↻',title:'更新',onClick:()=>renderTwitter(root,{navigate,refresh:true})},
+    {label:'⚙︎',title:'設定',onClick:()=>navigate('settings')}
+  ]}));
+  const chips=el('div',{class:'chips'});
+  state.twitterFeeds.forEach((f,i)=>chips.append(el('button',{class:`chip ${i===selected?'active':''}`,type:'button',text:f.name,onclick:()=>{
+    localStorage.setItem(`pdv2:twitterScroll:${selected}`,String(window.scrollY));
+    selected=i;localStorage.setItem('pdv2:twitterIndex',String(i));renderTwitter(root,{navigate});
+  }})));
+  const host=el('div',{class:'card twitter-card'});
+  screen.append(chips,host);
+  root.replaceChildren(screen);
+  if(!feed){host.replaceChildren(el('div',{class:'empty',text:'リストを追加してください'}));return;}
+
+  let attempts=0;
+  const run=async()=>{
+    if(generation!==renderGeneration||!screen.isConnected)return;
+    attempts++;
+    host.replaceChildren(el('div',{class:'twitter-wake-status',html:`<strong>${attempts===1?'ツイートを読み込み中':'RSSHubの起動を待っています'}</strong><span>${attempts>1?'5秒ごとに自動確認中':''}</span>`}));
+    try{
+      const items=await load(feed);
+      if(!items.length)throw new Error('RSSは取得できましたが、ツイートが0件でした');
+      renderItems(host,items,feed);
+      const saved=Number(localStorage.getItem(`pdv2:twitterScroll:${selected}`)||0);
+      if(saved)setTimeout(()=>window.scrollTo(0,saved),0);
+    }catch(err){
+      if(generation!==renderGeneration||!screen.isConnected)return;
+      host.replaceChildren(
+        el('div',{class:'twitter-wake-status'},[
+          el('strong',{text:'RSSHubの応答待ち'}),
+          el('span',{text:`${err.message} / 5秒後に再試行します`})
+        ])
+      );
+      retryTimer=setTimeout(run,5000);
+    }
+  };
+  run();
+}
+
+============================================================================================
 FILE: src/features/weather/weather-api.js
-========================================================================================
+============================================================================================
 const JMA_CODES = {
   '青森県':'020000','岩手県':'030000','宮城県':'040000','秋田県':'050000','山形県':'060000','福島県':'070000',
   '茨城県':'080000','栃木県':'090000','群馬県':'100000','埼玉県':'110000','千葉県':'120000','東京都':'130000','神奈川県':'140000',
@@ -7610,48 +7956,83 @@ export function parseOfficialForecast(data) {
   return out.slice(0,8);
 }
 
-========================================================================================
+============================================================================================
+FILE: src/features/weather/weather-icons.js
+============================================================================================
+/*
+ * V2.3 monochrome weather glyphs.
+ * Lucide (ISC License) の「単色・細線・currentColorで使える」設計思想に合わせ、
+ * このアプリ用に最小限のSVGをローカル実装している。
+ */
+const stroke = 'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"';
+
+const PATHS = {
+  sun: `<circle cx="12" cy="12" r="3.5"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`,
+  cloudSun: `<path d="M7 7.2a4 4 0 0 1 7.6-1.7M4.8 4.8l1.4 1.4M11 2v2M17.2 4.8l-1.4 1.4"/><path d="M7.5 19h10a4 4 0 0 0 .4-8 5.3 5.3 0 0 0-10-1.2A4.6 4.6 0 0 0 7.5 19Z"/>`,
+  cloud: `<path d="M5.5 18.5h12a4.5 4.5 0 0 0 .3-9 6.1 6.1 0 0 0-11.4 1.6A3.8 3.8 0 0 0 5.5 18.5Z"/>`,
+  fog: `<path d="M6 14h11a3.7 3.7 0 0 0 .3-7.4 5.2 5.2 0 0 0-9.7 1.3A3.2 3.2 0 0 0 6 14Z"/><path d="M4 18h16M7 21h10"/>`,
+  drizzle: `<path d="M5.5 15h12a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.3 1.4A3.5 3.5 0 0 0 5.5 15Z"/><path d="m8 18-1 2M12 18l-1 2M16 18l-1 2"/>`,
+  rain: `<path d="M5.5 14.5h12a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.3 1.4A3.5 3.5 0 0 0 5.5 14.5Z"/><path d="m8 17.5-1.4 3M12.5 17.5l-1.4 3M17 17.5l-1.4 3"/>`,
+  shower: `<path d="M6 14.5h11.5a4 4 0 0 0 .3-8 5.4 5.4 0 0 0-10.1 1.4A3.5 3.5 0 0 0 6 14.5Z"/><path d="m8 18-1 2M12 17.5l-1.5 3M16.5 18l-1 2"/>`,
+  snow: `<path d="M5.5 14h12a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.3 1.4A3.5 3.5 0 0 0 5.5 14Z"/><path d="M7 18h.01M12 20h.01M17 18h.01M9 22h.01M15 22h.01"/>`,
+  thunder: `<path d="M5.5 14h12a4 4 0 0 0 .3-8 5.5 5.5 0 0 0-10.3 1.4A3.5 3.5 0 0 0 5.5 14Z"/><path d="m13 15.5-3 4h3l-2 3.5 5-5h-3l2-2.5"/>`,
+  umbrella: `<path d="M4 12a8 8 0 0 1 16 0Z"/><path d="M12 12v6.5a2.5 2.5 0 0 0 5 0"/>`,
+  down: `<path d="M12 4v15M6.5 13.5 12 19l5.5-5.5"/>`,
+  up: `<path d="M12 20V5M6.5 10.5 12 5l5.5 5.5"/>`,
+  wind: `<path d="M3 8h10.5a2.5 2.5 0 1 0-2.3-3.5M3 12h15a2.5 2.5 0 1 1-2.3 3.5M3 16h7"/>`,
+  check: `<path d="m5 12 4 4L19 6"/>`
+};
+
+export function iconSvg(name, { size=24, className='' } = {}) {
+  const body = PATHS[name] || PATHS.cloud;
+  return `<svg class="weather-glyph ${className}" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true" ${stroke}>${body}</svg>`;
+}
+
+export function weatherVisual(code) {
+  const c = Number(code);
+  if (c === 0) return { icon:'sun', label:'快晴' };
+  if (c <= 2) return { icon:'cloudSun', label:'晴れ' };
+  if (c === 3) return { icon:'cloud', label:'くもり' };
+  if ([45,48].includes(c)) return { icon:'fog', label:'霧' };
+  if (c >= 51 && c <= 57) return { icon:'drizzle', label:'小雨' };
+  if (c >= 61 && c <= 67) return { icon:'rain', label:'雨' };
+  if (c >= 71 && c <= 77) return { icon:'snow', label:'雪' };
+  if (c >= 80 && c <= 82) return { icon:'shower', label:'にわか雨' };
+  if (c >= 85 && c <= 86) return { icon:'snow', label:'雪' };
+  if (c >= 95) return { icon:'thunder', label:'雷雨' };
+  return { icon:'cloud', label:'くもり' };
+}
+
+============================================================================================
 FILE: src/features/weather/weather.js
-========================================================================================
+============================================================================================
 import { state, update } from '../../app/store.js';
 import { el, openSheet, showToast } from '../../shared/dom.js';
 import { topbar, segmented } from '../../shared/components.js';
 import { fetchHourlyJmaModel, fetchOfficialJma, parseOfficialForecast, geocodeJapan } from './weather-api.js';
+import { iconSvg, weatherVisual } from './weather-icons.js';
 
 let mode = 'today';
 let selectedIndex = Number(localStorage.getItem('pdv2:weatherIndex') || 0);
-
-const WMO = code => {
-  const c = Number(code);
-  if (c === 0) return ['☀️','快晴'];
-  if (c <= 2) return ['🌤️','晴れ'];
-  if (c === 3) return ['☁️','くもり'];
-  if ([45,48].includes(c)) return ['🌫️','霧'];
-  if (c >= 51 && c <= 67) return ['🌧️','雨'];
-  if (c >= 71 && c <= 77) return ['🌨️','雪'];
-  if (c >= 80 && c <= 82) return ['🌦️','にわか雨'];
-  if (c >= 85 && c <= 86) return ['🌨️','雪'];
-  if (c >= 95) return ['⛈️','雷雨'];
-  return ['☁️','くもり'];
-};
 
 function pointFrom(data) {
   const h = data.hourly || {};
   const times = h.time || [];
   const now = Date.now();
-  const start = Math.max(0, times.findIndex(t => new Date(t).getTime() >= now - 30*60*1000));
+  const found = times.findIndex(t => new Date(t).getTime() >= now - 30*60*1000);
+  const start = Math.max(0, found < 0 ? 0 : found);
   const next = Array.from({length:12},(_,n)=>start+n).filter(i=>i<times.length);
   const rainy = next.find(i => Number(h.precipitation?.[i] || 0) >= .2);
-  if (rainy != null) return `☂️ ${new Date(times[rainy]).getHours()}時ごろから雨の可能性。傘があると安心です。`;
+  if (rainy != null) return { icon:'umbrella', text:`${new Date(times[rainy]).getHours()}時ごろから雨の可能性。傘があると安心です。` };
   const temps = next.map(i=>Number(h.temperature_2m?.[i])).filter(Number.isFinite);
   if (temps.length > 1) {
     const delta = temps.at(-1) - temps[0];
-    if (delta <= -4) return `↘︎ このあと約${Math.abs(Math.round(delta))}℃下がる予想。服装に注意。`;
-    if (delta >= 4) return `↗︎ このあと約${Math.round(delta)}℃上がる予想。暑さに注意。`;
+    if (delta <= -4) return { icon:'down', text:`このあと約${Math.abs(Math.round(delta))}℃下がる予想。服装に注意。` };
+    if (delta >= 4) return { icon:'up', text:`このあと約${Math.round(delta)}℃上がる予想。暑さに注意。` };
   }
   const windy = next.find(i => Number(h.wind_speed_10m?.[i] || 0) >= 25);
-  if (windy != null) return `💨 ${new Date(times[windy]).getHours()}時ごろ風が強まる予想です。`;
-  return '✓ しばらく大きな天気変化はなさそうです。';
+  if (windy != null) return { icon:'wind', text:`${new Date(times[windy]).getHours()}時ごろ風が強まる予想です。` };
+  return { icon:'check', text:'しばらく大きな天気変化はなさそうです。' };
 }
 
 function hourlyCards(data, wantedMode) {
@@ -7667,9 +8048,9 @@ function hourlyCards(data, wantedMode) {
   }
   const strip = el('div',{class:'hourly-strip'});
   indexes.forEach(i => {
-    const [icon] = WMO(h.weather_code?.[i]);
+    const visual = weatherVisual(h.weather_code?.[i]);
     const card = el('div',{class:'hour-card'});
-    card.innerHTML = `<div class="time">${new Date(times[i]).getHours()}時</div><div class="wx">${icon}</div><strong>${Math.round(Number(h.temperature_2m?.[i] || 0))}°</strong><div class="rain">${Number(h.precipitation?.[i]||0)>0 ? `${Number(h.precipitation[i]).toFixed(1)}mm` : ''}</div>`;
+    card.innerHTML = `<div class="time">${new Date(times[i]).getHours()}時</div><div class="wx">${iconSvg(visual.icon,{size:27})}</div><strong>${Math.round(Number(h.temperature_2m?.[i] || 0))}°</strong><div class="rain">${Number(h.precipitation?.[i]||0)>0 ? `${Number(h.precipitation[i]).toFixed(1)}mm` : ''}</div>`;
     strip.append(card);
   });
   return strip;
@@ -7680,10 +8061,10 @@ function weekRows(data, official) {
   const grid = el('div',{class:'daily-grid'});
   (d.time || []).slice(0,7).forEach((date,i)=>{
     const o = official.find(x=>x.date===date);
-    const [icon,label] = WMO(d.weather_code?.[i]);
+    const visual = weatherVisual(d.weather_code?.[i]);
     const dt = new Date(`${date}T00:00:00`);
     const row = el('div',{class:'daily-row'});
-    row.innerHTML = `<strong>${dt.toLocaleDateString('ja-JP',{weekday:'short'})}</strong><div><span style="font-size:22px;margin-right:8px">${icon}</span>${o?.weather || label}</div><div style="text-align:right"><span style="color:#ff5b59">${Math.round(d.temperature_2m_max?.[i] ?? 0)}°</span><br><span style="color:#4d8dff">${Math.round(d.temperature_2m_min?.[i] ?? 0)}°</span></div>`;
+    row.innerHTML = `<strong>${dt.toLocaleDateString('ja-JP',{weekday:'short'})}</strong><div class="daily-weather">${iconSvg(visual.icon,{size:22})}<span>${o?.weather || visual.label}</span></div><div class="daily-temp"><span class="temp-high">${Math.round(d.temperature_2m_max?.[i] ?? 0)}°</span><span class="temp-low">${Math.round(d.temperature_2m_min?.[i] ?? 0)}°</span></div>`;
     grid.append(row);
   });
   return grid;
@@ -7766,10 +8147,11 @@ export async function renderWeather(root, { navigate, refresh=false }) {
     }
     const official = parseOfficialForecast(officialData);
     const current = model.current || {};
-    const [icon,desc] = WMO(current.weather_code);
+    const visual = weatherVisual(current.weather_code);
+    const point = pointFrom(model);
     const card = el('div',{class:'card weather-now'});
-    card.innerHTML = `<div style="font-weight:760">${location.name}</div><div style="font-size:42px;margin:8px">${icon}</div><div class="weather-temp">${Math.round(Number(current.temperature_2m||0))}°</div><div class="weather-desc">${desc}</div><div class="weather-feels">体感 ${Math.round(Number(current.apparent_temperature||0))}° ・ 湿度 ${Math.round(Number(current.relative_humidity_2m||0))}% ・ 風 ${Math.round(Number(current.wind_speed_10m||0))}km/h</div>`;
-    card.append(el('div',{class:'weather-point',text:pointFrom(model)}));
+    card.innerHTML = `<div class="weather-location">${location.name}</div><div class="weather-main-icon">${iconSvg(visual.icon,{size:48})}</div><div class="weather-temp">${Math.round(Number(current.temperature_2m||0))}°</div><div class="weather-desc">${visual.label}</div><div class="weather-feels">体感 ${Math.round(Number(current.apparent_temperature||0))}° ・ 湿度 ${Math.round(Number(current.relative_humidity_2m||0))}% ・ 風 ${Math.round(Number(current.wind_speed_10m||0))}km/h</div>`;
+    card.append(el('div',{class:'weather-point',html:`<span class="weather-point-icon">${iconSvg(point.icon,{size:20})}</span><span>${point.text}</span>`}));
 
     const tabsHost = el('div',{style:'margin:12px 0'});
     const detail = el('div');
@@ -7790,9 +8172,9 @@ export async function renderWeather(root, { navigate, refresh=false }) {
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/youtube/youtube-player.js
-========================================================================================
+============================================================================================
 import { el, showToast } from '../../shared/dom.js';
 import { attachSwipe } from '../../shared/gestures.js';
 
@@ -7843,24 +8225,44 @@ export function openYouTubePlayer(items,startIndex=0,{shorts=false}={}){
   return {close};
 }
 
-========================================================================================
+============================================================================================
 FILE: src/features/youtube/youtube.js
-========================================================================================
+============================================================================================
 import { state, update } from '../../app/store.js';
-import { el, openSheet, showToast } from '../../shared/dom.js';
+import { el, openSheet } from '../../shared/dom.js';
 import { collectionManager } from '../../shared/components.js';
 import { openYouTubePlayer } from './youtube-player.js';
 
 let tab=localStorage.getItem('pdv2:youtubeTab')||'long';
 let selected=localStorage.getItem('pdv2:youtubeSelected')||'all';
 let cache=[];
+let loadWarnings=[];
 
-async function loadChannel(ch){const r=await fetch(`/api/youtube-feed?channel=${encodeURIComponent(ch.value||ch.url||ch.name)}`,{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.error||'YouTube取得エラー');return d;}
-async function loadAll(force=false){
-  const key='pdv2:youtubeCache'; if(!force){try{const c=JSON.parse(localStorage.getItem(key)||'null');if(c&&Date.now()-c.at<10*60*1000){cache=c.rows;return cache;}}catch{}}
-  const settled=await Promise.allSettled(state.youtubeChannels.map(loadChannel));
-  cache=settled.filter(x=>x.status==='fulfilled').map(x=>x.value); localStorage.setItem(key,JSON.stringify({at:Date.now(),rows:cache}));return cache;
+async function loadChannel(ch){
+  const input=ch.value||ch.url||ch.name;
+  const r=await fetch(`/api/youtube-feed?channel=${encodeURIComponent(input)}`,{cache:'no-store'});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(`${ch.name||input}: ${d.error||`YouTube取得エラー (${r.status})`}`);
+  return d;
 }
+
+async function loadAll(force=false){
+  const key='pdv2:youtubeCache';
+  if(!force){
+    try{
+      const c=JSON.parse(localStorage.getItem(key)||'null');
+      if(c&&Date.now()-c.at<10*60*1000){cache=c.rows||[];loadWarnings=c.warnings||[];return cache;}
+    }catch{}
+  }
+  const settled=await Promise.allSettled(state.youtubeChannels.map(loadChannel));
+  cache=settled.filter(x=>x.status==='fulfilled').map(x=>x.value);
+  const failures=settled.filter(x=>x.status==='rejected').map(x=>String(x.reason?.message||x.reason));
+  loadWarnings=[...failures,...cache.map(x=>x.warning).filter(Boolean)];
+  localStorage.setItem(key,JSON.stringify({at:Date.now(),rows:cache,warnings:loadWarnings}));
+  if(!cache.length&&failures.length)throw new Error(failures.join(' / '));
+  return cache;
+}
+
 function channelSheet(onChange,onEdit){
   const wrap=el('div'); let sheet;
   wrap.append(el('button',{class:`list-item ${selected==='all'?'selected':''}`,type:'button',text:'すべてのチャンネル',onclick:()=>{
@@ -7873,17 +8275,30 @@ function channelSheet(onChange,onEdit){
   sheet=openSheet(wrap,{title:'YouTubeチャンネル'});
 }
 
-function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.youtubeChannels,fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'チャンネルURL / @handle / Channel ID',placeholder:'https://youtube.com/@...'}],onSave:d=>{update('youtubeChannels',d);sheet.close();onDone();}}),{title:'YouTubeチャンネル編集'});}
+function manage(onDone){
+  let sheet;
+  sheet=openSheet(collectionManager({
+    items:state.youtubeChannels,
+    fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'チャンネルURL / @handle / Channel ID',placeholder:'例：UCDn8Lqf-x0zD8hmFUg08f6w'}],
+    onSave:d=>{update('youtubeChannels',d);localStorage.removeItem('pdv2:youtubeCache');sheet.close();onDone();}
+  }),{title:'YouTubeチャンネル編集'});
+}
 
 export async function renderYouTube(host,{refresh=false}={}){
   host.innerHTML='<div class="loading">YouTubeを読み込み中...</div>';
-  if(!state.youtubeChannels.length){host.replaceChildren(el('div',{class:'empty',text:'チャンネルを追加してください'}),el('button',{class:'primary-button full-button',type:'button',text:'YouTubeチャンネルを追加',onclick:()=>manage(()=>renderYouTube(host,{refresh:true}))}));return;}
-  try{await loadAll(refresh);draw();}catch(err){host.innerHTML=`<div class="error-box">${err.message}</div>`;}
+  if(!state.youtubeChannels.length){
+    host.replaceChildren(el('div',{class:'empty',text:'チャンネルを追加してください'}),el('button',{class:'primary-button full-button',type:'button',text:'YouTubeチャンネルを追加',onclick:()=>manage(()=>renderYouTube(host,{refresh:true}))}));
+    return;
+  }
+  try{await loadAll(refresh);draw();}catch(err){host.replaceChildren(el('div',{class:'error-box',text:err.message}),el('button',{class:'soft-button full-button',type:'button',text:'もう一度取得',onclick:()=>renderYouTube(host,{refresh:true})}));}
+
   function draw(){
+    if(selected!=='all'&&!cache.some(r=>r.channel.id===selected))selected='all';
     const selectedRow=selected==='all'?null:cache.find(r=>r.channel.id===selected);
-    const picker=el('button',{class:'soft-button channel-picker',type:'button',html:`<span>👤 ${selectedRow?.channel.name||'すべてのチャンネル'}</span><span>⌄</span>`,onclick:()=>channelSheet(()=>draw(),()=>manage(()=>renderYouTube(host,{refresh:true})))});
-    const seg=el('div',{class:'segmented'});[['long','動画'],['short','Shorts'],['live','LIVE']].forEach(([v,l])=>seg.append(el('button',{class:tab===v?'active':'',type:'button',text:l,onclick:()=>{tab=v;localStorage.setItem('pdv2:youtubeTab',v);draw();}})));
-    let items=(selectedRow?[selectedRow]:cache).flatMap(r=>r.items||[]).filter(x=>x.kind===tab).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
+    const picker=el('button',{class:'soft-button channel-picker',type:'button',html:`<span>チャンネル　${selectedRow?.channel.name||'すべて'}</span><span>⌄</span>`,onclick:()=>channelSheet(()=>draw(),()=>manage(()=>renderYouTube(host,{refresh:true})))});
+    const seg=el('div',{class:'segmented'});
+    [['long','動画'],['short','Shorts'],['live','LIVE']].forEach(([v,l])=>seg.append(el('button',{class:tab===v?'active':'',type:'button',text:l,onclick:()=>{tab=v;localStorage.setItem('pdv2:youtubeTab',v);draw();}})));
+    const items=(selectedRow?[selectedRow]:cache).flatMap(r=>r.items||[]).filter(x=>x.kind===tab).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
     const list=el('div',{class:'media-list'});
     items.forEach((item,i)=>{
       const row=el('button',{class:'media-row',type:'button',onclick:()=>openYouTubePlayer(items,i,{shorts:tab==='short'})});
@@ -7892,16 +8307,23 @@ export async function renderYouTube(host,{refresh=false}={}){
           : item.liveType==='upcoming' ? '<span class="upcoming-badge">配信予定</span> '
           : '<span class="live-badge">LIVE</span> '
         : '';
-      row.innerHTML=`<img class="thumb ${tab==='short'?'short-thumb':''}" src="${item.thumbnail||''}" alt=""><div><div>${liveLabel}<span class="media-title">${item.title}</span></div><div class="media-meta">${item.channelName||''}${item.premiere?' ・ プレミア公開':''}${item.liveType==='archive'?' ・ 配信アーカイブ':''}</div></div>`;list.append(row);
+      row.innerHTML=`<img class="thumb ${tab==='short'?'short-thumb':''}" src="${item.thumbnail||''}" alt=""><div><div>${liveLabel}<span class="media-title">${item.title}</span></div><div class="media-meta">${item.channelName||''}${item.premiere?' ・ プレミア公開':''}${item.liveType==='archive'?' ・ 配信アーカイブ':''}</div></div>`;
+      list.append(row);
     });
-    if(!items.length)list.append(el('div',{class:'empty',text:tab==='short'?'Shortsが見つかりません':'動画が見つかりません'}));
-    host.replaceChildren(picker,seg,list);
+    if(!items.length){
+      const label=tab==='short'?'Shorts':tab==='live'?'LIVE / 配信録画':'動画';
+      list.append(el('div',{class:'empty',text:`${label}が見つかりません`}));
+    }
+    const children=[picker,seg];
+    if(loadWarnings.length)children.push(el('div',{class:'media-warning',text:loadWarnings.join(' / ')}));
+    children.push(list);
+    host.replaceChildren(...children);
   }
 }
 
-========================================================================================
+============================================================================================
 FILE: src/main.js
-========================================================================================
+============================================================================================
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 import { renderHome } from './features/home/home.js';
@@ -7925,6 +8347,7 @@ const renderers = {
 let renderSerial = 0;
 
 export async function navigate(screen, options = {}) {
+  window.dispatchEvent(new CustomEvent('pdv2:before-navigate', { detail: { screen } }));
   if (!renderers[screen]) screen = 'home';
   if (options.readerMode) update('lastReaderMode', options.readerMode);
   if (options.mediaMode) update('lastMediaMode', options.mediaMode);
@@ -7960,9 +8383,9 @@ async function boot() {
 
 boot();
 
-========================================================================================
+============================================================================================
 FILE: src/shared/components.js
-========================================================================================
+============================================================================================
 import { el } from './dom.js';
 
 export function topbar(title, { subtitle='', actions=[] } = {}) {
@@ -8036,9 +8459,9 @@ export function collectionManager({ title='編集', items=[], fields=[], onSave,
   return wrap;
 }
 
-========================================================================================
+============================================================================================
 FILE: src/shared/dom.js
-========================================================================================
+============================================================================================
 export function el(tag, options = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(options)) {
@@ -8082,9 +8505,9 @@ export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
 }
 
-========================================================================================
+============================================================================================
 FILE: src/shared/gestures.js
-========================================================================================
+============================================================================================
 export function attachSwipe(node, { up, down, left, right, threshold = 54, edgeRightOnly = false } = {}) {
   let startX = 0, startY = 0, tracking = false;
   const onStart = e => {
@@ -8108,9 +8531,9 @@ export function attachSwipe(node, { up, down, left, right, threshold = 54, edgeR
   return () => { node.removeEventListener('touchstart', onStart); node.removeEventListener('touchend', onEnd); };
 }
 
-========================================================================================
+============================================================================================
 FILE: src/shared/rss.js
-========================================================================================
+============================================================================================
 import { relativeTime } from './time.js';
 
 function text(parent, selectors) {
@@ -8164,9 +8587,9 @@ export function dedupeSort(items, limit = 250) {
   }).sort((a,b) => b.pubDate - a.pubDate).slice(0, limit);
 }
 
-========================================================================================
+============================================================================================
 FILE: src/shared/storage.js
-========================================================================================
+============================================================================================
 const PREFIX = 'pdv2:';
 
 export function load(key, fallback) {
@@ -8203,9 +8626,9 @@ export function importAll(payload) {
   Object.entries(payload.values).forEach(([key, value]) => save(key, value));
 }
 
-========================================================================================
+============================================================================================
 FILE: src/shared/time.js
-========================================================================================
+============================================================================================
 export function relativeTime(value) {
   const ts = value instanceof Date ? value.getTime() : new Date(value).getTime();
   if (!Number.isFinite(ts)) return '';
@@ -8224,9 +8647,9 @@ export function shortDate(date) {
   return Number.isFinite(d.getTime()) ? d.toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
 }
 
-========================================================================================
+============================================================================================
 FILE: src/styles/base.css
-========================================================================================
+============================================================================================
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Hiragino Sans", "Yu Gothic UI", sans-serif; }
 html { overscroll-behavior: none; }
@@ -8254,24 +8677,24 @@ a { color: inherit; }
 .icon-button, .pill-button, .primary-button, .soft-button {
   min-height: 44px; min-width: 44px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px; font-weight: 650;
 }
-.icon-button { background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-soft); }
-.pill-button, .soft-button { padding: 0 14px; background: var(--surface); border: 1px solid var(--line); }
-.primary-button { padding: 0 16px; background: var(--feature-color); color: white; box-shadow: 0 8px 20px color-mix(in srgb, var(--feature-color) 32%, transparent); }
+.icon-button { background: var(--surface-2); border: 1px solid var(--line); }
+.pill-button, .soft-button { padding: 0 14px; background: var(--surface-2); border: 1px solid var(--line); }
+.primary-button { padding: 0 16px; background: color-mix(in srgb, var(--feature-color) 86%, #111 14%); color: #f7f9fb; border: 1px solid color-mix(in srgb, var(--feature-color) 60%, var(--line)); }
 
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 16px; box-shadow: var(--shadow-soft); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 16px; }
 .card + .card { margin-top: 12px; }
 .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 4px 2px 10px; }
 .section-title h2 { margin: 0; font-size: 18px; }
 .section-title small { color: var(--muted); }
 
-.segmented { display: flex; gap: 5px; padding: 4px; border-radius: 15px; background: color-mix(in srgb, var(--surface-2) 90%, transparent); border: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.segmented { display: flex; gap: 5px; padding: 4px; border-radius: 15px; background: var(--surface-2); border: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .segmented::-webkit-scrollbar { display: none; }
 .segmented button { min-height: 36px; padding: 0 13px; border-radius: 12px; background: transparent; color: var(--muted); white-space: nowrap; font-weight: 650; cursor: pointer; }
-.segmented button.active { background: var(--surface-solid); color: var(--text); box-shadow: 0 2px 10px rgba(0,0,0,.1); }
+.segmented button.active { background: var(--surface-3); color: var(--text-strong); }
 
 .chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px 0 6px; }
 .chips::-webkit-scrollbar { display: none; }
-.chip { flex: 0 0 auto; min-height: 38px; padding: 0 13px; border-radius: 999px; background: var(--surface); color: var(--muted); border: 1px solid var(--line); font-weight: 650; }
+.chip { flex: 0 0 auto; min-height: 38px; padding: 0 13px; border-radius: 999px; background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); font-weight: 650; }
 .chip.active { color: #fff; background: var(--feature-color); border-color: transparent; }
 
 .loading, .empty, .error-box { padding: 28px 14px; text-align: center; color: var(--muted); }
@@ -8281,14 +8704,14 @@ a { color: inherit; }
 @keyframes shimmer { to { transform: translateX(100%); } }
 
 .list { display: grid; gap: 8px; }
-.list-item { width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 13px 14px; cursor: pointer; }
+.list-item { width: 100%; text-align: left; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-md); padding: 13px 14px; cursor: pointer; }
 .list-item:active { transform: scale(.995); }
 .list-item-title { font-weight: 760; line-height: 1.45; }
 .list-meta { color: var(--muted); font-size: 12px; margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--feature-color); display: inline-block; margin-right: 7px; }
 
-.sheet-backdrop, .modal-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.3); display: flex; align-items: flex-end; justify-content: center; padding: 12px; }
-.bottom-sheet { width: min(100%, 640px); max-height: min(82dvh, 760px); overflow: auto; background: var(--surface-solid); border-radius: 28px; padding: 12px 14px calc(16px + env(safe-area-inset-bottom)); box-shadow: var(--shadow); }
+.sheet-backdrop, .modal-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,.66); display: flex; align-items: flex-end; justify-content: center; padding: 12px; }
+.bottom-sheet { width: min(100%, 640px); max-height: min(82dvh, 760px); overflow: auto; background: var(--surface-solid); border-radius: 22px; padding: 12px 14px calc(16px + env(safe-area-inset-bottom)); box-shadow: var(--shadow); }
 .sheet-handle { width: 42px; height: 5px; border-radius: 999px; margin: 2px auto 14px; background: color-mix(in srgb, var(--muted) 35%, transparent); }
 .sheet-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; border-bottom: 1px solid var(--line); }
 .sheet-row:last-child { border-bottom: 0; }
@@ -8323,122 +8746,100 @@ a { color: inherit; }
 .inline-actions { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
 .badge { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:4px 8px; background:color-mix(in srgb,var(--feature-color) 12%,transparent); color:var(--feature-color); font-weight:750; font-size:11px; }
 
-========================================================================================
-FILE: src/styles/liquid-glass.css
-========================================================================================
+============================================================================================
+FILE: src/styles/navigation.css
+============================================================================================
 /*
-  Web/PWAではSwiftUI/UIKitのネイティブLiquid Glass APIを直接使えない。
-  ここではApple HIGの「ナビゲーション層に限定」「背景を透かす」「可読性優先」を
-  CSSのbackdrop-filter等で再現する。iOS/Safariでは-webkit-backdrop-filterを優先。
-*/
-.liquid-nav {
+ * V2.3 Bottom navigation
+ * Liquid Glass / backdrop-filter を廃止し、本文に溶け込む固定ダークバーに変更。
+ * 選択状態は「色 + 細いインジケータ」だけで伝える。
+ */
+.bottom-nav {
   position: fixed;
   z-index: 60;
-  left: max(10px, env(safe-area-inset-left));
-  right: max(10px, env(safe-area-inset-right));
-  bottom: max(8px, env(safe-area-inset-bottom));
-  min-height: var(--nav-height);
-  padding: 7px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  min-height: calc(var(--nav-height) + env(safe-area-inset-bottom));
+  padding:
+    5px
+    max(8px, env(safe-area-inset-right))
+    max(5px, env(safe-area-inset-bottom))
+    max(8px, env(safe-area-inset-left));
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
-  border-radius: 27px;
-  border: 1px solid rgba(255,255,255,.34);
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.1)),
-    color-mix(in srgb, var(--surface) var(--glass-opacity-pct), transparent);
-  box-shadow:
-    0 20px 55px rgba(0,0,0,.18),
-    inset 0 1px 0 rgba(255,255,255,.48),
-    inset 0 -1px 0 rgba(255,255,255,.12);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
-  isolation: isolate;
+  gap: 0;
+  background: #0e1216;
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -10px 26px rgba(0,0,0,.16);
 }
-.liquid-nav::before {
-  content: "";
-  pointer-events: none;
-  position: absolute;
-  inset: 1px;
-  border-radius: inherit;
-  background: radial-gradient(80% 65% at 50% -15%, rgba(255,255,255,.48), transparent 70%);
-  opacity: .7;
-  z-index: -1;
-}
+
 .nav-item {
   position: relative;
   min-width: 0;
-  min-height: 58px;
-  border-radius: 20px;
+  min-height: 54px;
+  padding: 4px 2px 3px;
   background: transparent;
-  color: var(--muted);
+  color: var(--muted-2);
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 2px;
+  gap: 3px;
   cursor: pointer;
-  transition: transform .16s ease, color .18s ease, background .18s ease;
+  transition: color .16s ease, transform .12s ease;
 }
 .nav-item:active { transform: scale(.94); }
-.nav-item svg { width: 23px; height: 23px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
-.nav-item span { font-size: 10px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.nav-item.active {
-  color: var(--text);
-  background:
-    linear-gradient(180deg, rgba(255,255,255,.38), rgba(255,255,255,.08)),
-    color-mix(in srgb, var(--feature-color) 13%, transparent);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.52),
-    0 5px 16px color-mix(in srgb, var(--feature-color) 16%, transparent);
+.nav-item svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.85;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
-.nav-item.active::after {
+.nav-item span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  font-weight: 690;
+  letter-spacing: .01em;
+}
+.nav-item.active { color: var(--feature-color); }
+.nav-item.active::before {
   content: "";
   position: absolute;
-  bottom: 5px;
-  width: 18px;
-  height: 3px;
+  top: -6px;
+  width: 28px;
+  height: 2px;
   border-radius: 999px;
   background: var(--feature-color);
-  box-shadow: 0 0 12px color-mix(in srgb, var(--feature-color) 55%, transparent);
+  opacity: .9;
 }
 
-/* iPhone/PWAの表示領域の縁。物理パネル輪郭そのものではなくsafe-area内のviewport輪郭。 */
+/* safe-area を含むPWA viewportの輪郭。物理パネル形状そのものではない。 */
 #edge-frame {
   pointer-events: none;
   position: fixed;
   z-index: 120;
   inset: 0;
   border: var(--edge-width) solid color-mix(in srgb, var(--feature-color) var(--edge-opacity-pct), transparent);
-  border-radius: 0;
-  box-shadow: inset 0 0 var(--edge-glow) color-mix(in srgb, var(--feature-color) 13%, transparent);
-  transition: border-color .3s ease, box-shadow .3s ease, opacity .2s ease;
+  box-shadow: inset 0 0 var(--edge-glow) color-mix(in srgb, var(--feature-color) 9%, transparent);
+  transition: border-color .24s ease, box-shadow .24s ease, opacity .18s ease;
 }
 body.edge-off #edge-frame { opacity: 0; }
 
 @media (display-mode: standalone) {
   #edge-frame {
-    border-radius: 30px;
     inset: 1px;
+    border-radius: 29px;
   }
 }
 
-@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  .liquid-nav { background: color-mix(in srgb, var(--surface-solid) 94%, var(--feature-color) 6%); }
-}
-
-body.glass-off .liquid-nav {
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  background: color-mix(in srgb, var(--surface-solid) 96%, var(--feature-color) 4%);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .liquid-nav, .nav-item { transition:none; }
-}
-
-========================================================================================
+============================================================================================
 FILE: src/styles/screens.css
-========================================================================================
+============================================================================================
 /* HOME */
 .home-hero { padding: 18px; border-radius: 30px; background: linear-gradient(145deg, color-mix(in srgb, var(--feature-color) 16%, var(--surface)), var(--surface)); border: 1px solid var(--line); }
 .home-greeting { font-size: 28px; font-weight: 820; letter-spacing: -.04em; }
@@ -8598,72 +8999,289 @@ FILE: src/styles/screens.css
 .paper-keyword-family-title { margin:18px 2px 4px; font-size:18px; font-weight:850; letter-spacing:-.02em; }
 .paper-keyword-family-title:first-of-type { margin-top:6px; }
 
-========================================================================================
+/* ========================================================================
+   V2.3 dark UI refinement
+   ======================================================================== */
+.home-hero {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.change-tile,
+.media-row,
+.hour-card,
+.daily-row {
+  background: var(--surface);
+  box-shadow: none;
+}
+.change-tile:active,
+.media-row:active { background: var(--surface-2); }
+
+/* WEATHER: monochrome local SVG glyphs */
+.weather-location { font-weight: 760; color: var(--text-strong); }
+.weather-main-icon {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  margin: 8px 0 4px;
+  color: #b7c3ce;
+}
+.weather-glyph { display:block; color: currentColor; }
+.weather-now { background: var(--surface); }
+.weather-desc { color: var(--text-strong); }
+.weather-point {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+.weather-point-icon { color: var(--weather-color); flex:0 0 auto; }
+.hour-card .wx { display:grid; place-items:center; color:#aab6c1; min-height:31px; }
+.hour-card .rain { color:#70aee0; }
+.daily-weather { display:flex; align-items:center; gap:10px; min-width:0; color:#b7c3ce; }
+.daily-weather span { color:var(--text); line-height:1.35; }
+.daily-temp { text-align:right; display:grid; gap:2px; }
+.temp-high { color:#d98782; }
+.temp-low { color:#6fa7d5; }
+
+/* READER */
+.reader-toolbar { background: linear-gradient(var(--bg) 78%, transparent); }
+.focus-card { background: var(--surface); }
+.summary-preview { background: var(--surface-2); }
+.summary-why { background: var(--surface-2); }
+
+/* MEDIA */
+.media-warning {
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb,var(--warning) 35%,var(--line));
+  background: color-mix(in srgb,var(--warning) 8%,var(--surface));
+  color: #cfb177;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Twitch: iPhone縦画面で勝手に回転させず、画面上部へinline表示 */
+.twitch-inline-player-host:empty { display:none; }
+.twitch-inline-player-host {
+  scroll-margin-top: calc(env(safe-area-inset-top) + 76px);
+  margin: 8px 0 14px;
+}
+.twitch-inline-player {
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid var(--line-strong);
+  background: #080a0d;
+  color: #edf0f3;
+}
+.twitch-inline-head {
+  min-height: 48px;
+  padding: 7px 9px 7px 12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  background:#11151a;
+  border-bottom:1px solid #242c34;
+}
+.twitch-inline-head strong { font-size:13px; }
+.twitch-inline-kicker { color:var(--twitch-color); font-size:9px; font-weight:850; letter-spacing:.08em; margin-bottom:2px; }
+.twitch-close { min-width:38px; min-height:38px; background:#1b222a; box-shadow:none; }
+.twitch-inline-stage {
+  position:relative;
+  width:100%;
+  height:clamp(300px,56.25vw,438px);
+  min-height:300px;
+  overflow:hidden;
+  background:#000;
+}
+.twitch-embed-min {
+  position:absolute;
+  left:50%;
+  top:0;
+  transform:translateX(-50%);
+  width:max(400px,100%);
+  height:100%;
+}
+.twitch-embed-min iframe { width:100%; height:100%; border:0; display:block; }
+.twitch-inline-info { padding:11px 12px 13px; background:#0e1216; }
+.twitch-inline-controls { display:flex; gap:7px; overflow-x:auto; padding:10px 0 2px; scrollbar-width:none; }
+.twitch-inline-controls::-webkit-scrollbar { display:none; }
+.twitch-inline-controls .player-soft { flex:0 0 auto; }
+.twitch-inline-controls button:disabled { opacity:.35; }
+.twitch-live-zone { position:relative; top:auto; z-index:auto; background:none; }
+.twitch-live-zone .twitch-live-card { box-shadow:none; }
+.twitch-live-card { background:color-mix(in srgb,var(--twitch-color) 8%,var(--surface)); }
+.twitch-comment-lane { height:54px; }
+.player-pseudo-fullscreen {
+  position:fixed !important;
+  z-index:150 !important;
+  inset:0 !important;
+  margin:0 !important;
+  border:0 !important;
+  border-radius:0 !important;
+  display:flex;
+  flex-direction:column;
+  background:#000;
+  padding-top:env(safe-area-inset-top);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.player-pseudo-fullscreen .twitch-inline-stage { flex:1; height:auto; min-height:300px; }
+.player-pseudo-fullscreen .twitch-inline-info { flex:0 0 auto; }
+@media (orientation: landscape) {
+  .twitch-inline-player:fullscreen,
+  .player-pseudo-fullscreen { display:flex; flex-direction:column; }
+  .twitch-inline-player:fullscreen .twitch-inline-stage,
+  .player-pseudo-fullscreen .twitch-inline-stage { flex:1; height:auto; }
+}
+
+/* TWITTER: tweet本体はリンクにせず、外部URLと画像だけ明確な操作対象にする */
+.twitter-card { padding: 0 14px; }
+.tweet { padding: 15px 0 16px; }
+.tweet-body { color:var(--text); font-size:14px; line-height:1.62; }
+.tweet-images { border-radius:14px; gap:4px; }
+.tweet-image-button { display:block; padding:0; margin:0; border:0; background:#0b0d10; min-width:0; cursor:zoom-in; overflow:hidden; }
+.tweet-image-button img { width:100%; height:100%; min-height:128px; max-height:300px; object-fit:cover; display:block; }
+.tweet-images.count-1 { grid-template-columns:1fr; }
+.tweet-images.count-1 .tweet-image-button img { max-height:420px; }
+.tweet-images.count-3 .tweet-image-button:first-child { grid-row:span 2; }
+.tweet-external-links { display:grid; gap:6px; margin-top:10px; }
+.tweet-external-link {
+  min-height:42px;
+  display:flex;
+  align-items:center;
+  padding:9px 11px;
+  border-radius:11px;
+  border:1px solid var(--line);
+  background:var(--surface-2);
+  color:#86b8df;
+  text-decoration:none;
+  font-size:12px;
+  overflow-wrap:anywhere;
+}
+.tweet-footer { display:flex; justify-content:flex-end; margin-top:9px; }
+.tweet-open-x { color:var(--muted); font-size:11px; text-decoration:none; padding:5px 0; }
+.twitter-wake-status { min-height:150px; display:grid; place-items:center; align-content:center; gap:7px; text-align:center; color:var(--muted); padding:24px 10px; }
+.twitter-wake-status strong { color:var(--text); }
+.twitter-wake-status span { font-size:11px; line-height:1.5; }
+
+/* Image viewer: pinch zoom / pan / 1x時の左右スワイプ */
+.image-viewer {
+  position:fixed;
+  z-index:220;
+  inset:0;
+  background:#050608;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  user-select:none;
+  -webkit-user-select:none;
+}
+.image-viewer-stage { position:absolute; inset:0; overflow:hidden; touch-action:none; display:grid; place-items:center; }
+.image-viewer-img {
+  max-width:100%;
+  max-height:100%;
+  width:auto;
+  height:auto;
+  object-fit:contain;
+  transform-origin:center center;
+  will-change:transform;
+  pointer-events:none;
+}
+.image-viewer-close {
+  position:absolute;
+  z-index:3;
+  top:calc(env(safe-area-inset-top) + 10px);
+  right:max(12px,env(safe-area-inset-right));
+  width:44px;
+  height:44px;
+  border-radius:50%;
+  background:#1a1e23;
+  color:#e9edf1;
+  font-size:18px;
+}
+.image-viewer-count {
+  position:absolute;
+  z-index:3;
+  left:50%;
+  top:calc(env(safe-area-inset-top) + 20px);
+  transform:translateX(-50%);
+  color:#aab2ba;
+  font-size:12px;
+}
+
+@media (max-width: 399px) {
+  .twitch-inline-stage { height:300px; }
+}
+
+============================================================================================
 FILE: src/styles/tokens.css
-========================================================================================
+============================================================================================
 :root {
-  color-scheme: light dark;
-  --bg: #f5f5f7;
-  --surface: rgba(255,255,255,.86);
-  --surface-solid: #ffffff;
-  --surface-2: rgba(245,245,247,.9);
-  --text: #111114;
-  --muted: #6d6d72;
-  --line: rgba(60,60,67,.16);
-  --shadow: 0 14px 40px rgba(0,0,0,.12);
-  --shadow-soft: 0 6px 18px rgba(0,0,0,.08);
-  --accent: #4d8dff;
-  --feature-color: #4d8dff;
-  --danger: #ff453a;
-  --live: #ff375f;
-  --success: #30d158;
-  --radius-sm: 12px;
-  --radius-md: 18px;
-  --radius-lg: 26px;
-  --nav-height: 74px;
-  --edge-width: 2px;
-  --edge-opacity: .72;
-  --edge-opacity-pct: 72%;
-  --edge-glow: 10px;
-  --glass-opacity: .72;
-  --glass-opacity-pct: 72%;
-  --glass-blur: 28px;
+  color-scheme: dark;
+
+  /*
+   * V2.3 Dark palette
+   * - pure black / pure white を避ける
+   * - 階層は影よりも背景の明度差で表現
+   * - 青みをほんの少し含むニュートラルグレー
+   */
+  --bg: #090b0e;
+  --surface: #11151a;
+  --surface-solid: #151a20;
+  --surface-2: #1a2027;
+  --surface-3: #202832;
+  --text: #e7ebef;
+  --text-strong: #f2f4f6;
+  --muted: #8b949e;
+  --muted-2: #69737e;
+  --line: #252d36;
+  --line-strong: #333e49;
+  --shadow: 0 18px 44px rgba(0,0,0,.24);
+  --shadow-soft: 0 6px 18px rgba(0,0,0,.14);
+
+  --accent: #5b9cff;
+  --feature-color: #5b9cff;
+  --danger: #ff6961;
+  --live: #ff496f;
+  --success: #43c777;
+  --warning: #e9a33b;
+
+  --radius-sm: 10px;
+  --radius-md: 15px;
+  --radius-lg: 20px;
+  --nav-height: 66px;
   --tap-size: 48px;
   --content-max: 780px;
-  --weather-color: #4da5ff;
-  --reader-color: #8e73ff;
-  --youtube-color: #ff3b30;
-  --twitch-color: #9146ff;
-  --twitter-color: #31a7ff;
-  --home-color: #64d2ff;
-  --settings-color: #8e8e93;
+
+  /* 画面縁は文脈の再認に使うだけ。標準はかなり弱くする。 */
+  --edge-width: 1.5px;
+  --edge-opacity: .38;
+  --edge-opacity-pct: 38%;
+  --edge-glow: 4px;
+
+  --weather-color: #68a9dc;
+  --reader-color: #9b8bd3;
+  --youtube-color: #e75b55;
+  --twitch-color: #9a72e8;
+  --twitter-color: #66a6d9;
+  --home-color: #70a8c4;
+  --settings-color: #8a949e;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #09090b;
-    --surface: rgba(28,28,30,.8);
-    --surface-solid: #1c1c1e;
-    --surface-2: rgba(44,44,46,.88);
-    --text: #f7f7f8;
-    --muted: #a1a1a7;
-    --line: rgba(235,235,245,.16);
-    --shadow: 0 16px 44px rgba(0,0,0,.38);
-    --shadow-soft: 0 8px 20px rgba(0,0,0,.26);
-  }
-}
-
-========================================================================================
+============================================================================================
 FILE: sw.js
-========================================================================================
-const CACHE_NAME = 'personal-dashboard-v2-4';
+============================================================================================
+const CACHE_NAME = 'personal-dashboard-v2-5';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
   '/src/styles/tokens.css',
   '/src/styles/base.css',
-  '/src/styles/liquid-glass.css',
+  '/src/styles/navigation.css',
   '/src/styles/screens.css',
   '/src/main.js',
   '/shared/paper-creative-keywords.js',
@@ -8708,9 +9326,9 @@ self.addEventListener('fetch', event => {
   );
 });
 
-========================================================================================
+============================================================================================
 FILE: vercel.json
-========================================================================================
+============================================================================================
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
@@ -8729,4 +9347,3 @@ FILE: vercel.json
     }
   ]
 }
-
