@@ -984,3 +984,141 @@
   to { transform: rotate(360deg); }
 }
 
+/* ========================================================================== 
+   Personal Dashboard V2.11 overrides
+   screens.css の一番最後へ追記
+   ========================================================================== */
+
+/* ---------- Reader: おすすめ選定の進捗 ---------- */
+.recommendation-loading-card { display:grid; gap:12px; padding:18px; }
+.recommendation-loading-card > strong { font-size:15px; }
+.recommendation-loading-label { color:var(--muted); font-size:12px; }
+.recommendation-loading-track { height:5px; overflow:hidden; border-radius:999px; background:color-mix(in srgb,var(--line) 70%,transparent); }
+.recommendation-loading-fill { width:8%; height:100%; border-radius:inherit; background:var(--feature-color); transition:width .22s ease; }
+.recommendation-loading-steps { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
+.recommendation-loading-steps span { padding:6px 7px; text-align:center; border-radius:999px; color:var(--muted); background:var(--surface-2); font-size:10px; font-weight:700; transition:color .15s, background .15s; }
+.recommendation-loading-steps span.done { color:var(--text); background:color-mix(in srgb,var(--feature-color) 18%,var(--surface-2)); }
+
+/* ---------- 全bottom sheet: 下部navに埋めない + 白いハンドルを下スワイプで閉じる ---------- */
+.sheet-backdrop { z-index:150 !important; align-items:flex-end !important; padding-bottom:0 !important; }
+.bottom-sheet {
+  position:relative;
+  margin-bottom:calc(var(--nav-height,46px) + env(safe-area-inset-bottom) + 8px) !important;
+  max-height:calc(100dvh - var(--nav-height,46px) - env(safe-area-inset-bottom) - 28px) !important;
+  overflow:auto;
+  overscroll-behavior:contain;
+  transform:translate3d(0,0,0);
+  will-change:transform;
+}
+.sheet-grabber { position:sticky; z-index:4; top:-1px; height:34px; margin:-8px -4px 2px; display:grid; place-items:center; touch-action:none; background:linear-gradient(to bottom,var(--surface-solid) 70%,transparent); cursor:grab; }
+.sheet-grabber:active { cursor:grabbing; }
+.sheet-handle { width:38px !important; height:5px !important; border-radius:999px; background:color-mix(in srgb,var(--text) 42%,transparent) !important; }
+
+/* ---------- YouTube: Twitchと同じインラインプレイヤー ---------- */
+.youtube-inline-player-host:empty { display:none; }
+.youtube-inline-player { margin:10px 0 12px; }
+.youtube-inline-stage { aspect-ratio:16/9; background:#000; overflow:hidden; }
+.youtube-inline-stage .youtube-inline-embed,
+.youtube-inline-stage .youtube-inline-embed iframe { width:100% !important; height:100% !important; display:block !important; border:0 !important; }
+.youtube-shorts-inline .youtube-inline-stage { width:min(72vw,340px); max-height:70dvh; aspect-ratio:9/16; margin-inline:auto; border-radius:12px; }
+.youtube-inline-info .twitch-inline-controls { margin-top:10px; }
+.youtube-auto-next-btn { white-space:nowrap; }
+.youtube-css-landscape .youtube-inline-stage .youtube-inline-embed,
+.youtube-css-landscape .youtube-inline-stage .youtube-inline-embed iframe { position:absolute !important; inset:0 !important; width:100% !important; height:100% !important; }
+.youtube-css-landscape.youtube-shorts-inline .twitch-inline-stage { aspect-ratio:auto !important; width:min(100dvh,calc(100dvw * 16 / 9)) !important; height:min(100dvw,calc(100dvh * 9 / 16)) !important; }
+
+/* ---------- Twitter: 投稿者 + 横はみ出し防止 + 境界を明確に ---------- */
+.wikipedia-screen,
+.twitter-feed-host,
+.twitter-feed-host * { box-sizing:border-box; }
+.twitter-feed-host { width:100%; max-width:100%; overflow-x:hidden; overscroll-behavior-x:none; touch-action:pan-y; }
+.tweet-card {
+  width:100%; max-width:100%; overflow:hidden;
+  margin:0 0 10px; padding:14px 13px 13px;
+  border:1px solid color-mix(in srgb,var(--line) 88%,transparent) !important;
+  border-radius:14px;
+  background:color-mix(in srgb,var(--surface-solid) 82%,transparent);
+  box-shadow:0 1px 0 rgba(255,255,255,.025) inset;
+}
+.tweet-card + .tweet-card { margin-top:3px; }
+.tweet-author-row { display:flex; align-items:center; gap:9px; min-width:0; margin-bottom:9px; }
+.tweet-author-avatar { flex:0 0 30px; width:30px; height:30px; display:grid; place-items:center; border-radius:50%; color:var(--text); background:color-mix(in srgb,var(--feature-color) 20%,var(--surface-2)); font-size:12px; font-weight:800; }
+.tweet-author-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.tweet-text,.tweet-inline-link,.tweet-external-link { max-width:100%; overflow-wrap:anywhere; word-break:break-word; }
+.tweet-images { max-width:100%; overflow:hidden; }
+
+/* ---------- Wikipedia daily list ---------- */
+.wikipedia-screen { overflow-x:hidden; }
+.wiki-category-tabs { margin-bottom:12px; }
+.wiki-daily-list { display:grid; gap:11px; padding-bottom:12px; }
+.wiki-daily-card { position:relative; width:100%; min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center; padding:15px; text-align:left; color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:17px; box-shadow:var(--shadow-soft); overflow:hidden; }
+.wiki-daily-card:active { transform:scale(.988); }
+.wiki-daily-copy { min-width:0; display:grid; gap:7px; }
+.wiki-category-badge { justify-self:start; padding:4px 8px; border-radius:999px; font-size:9px; font-weight:800; letter-spacing:.03em; background:var(--surface-2); }
+.wiki-category-badge.wiki-classic { color:#e9bd72; background:rgba(209,153,62,.12); }
+.wiki-category-badge.wiki-deep { color:#c89cff; background:rgba(150,94,220,.12); }
+.wiki-category-badge.wiki-trivia { color:#74d5bb; background:rgba(55,190,153,.12); }
+.wiki-daily-title { font-size:16px; line-height:1.35; }
+.wiki-daily-reason { color:var(--muted); font-size:11px; line-height:1.45; }
+.wiki-daily-extract { margin:0; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; color:color-mix(in srgb,var(--text) 82%,var(--muted)); font-size:12px; line-height:1.65; }
+.wiki-daily-thumb { width:88px; height:88px; object-fit:cover; border-radius:12px; background:var(--surface-2); }
+.wiki-daily-number { position:absolute; right:8px; bottom:5px; color:color-mix(in srgb,var(--muted) 55%,transparent); font-size:9px; font-variant-numeric:tabular-nums; }
+.wiki-loading-card { display:grid; gap:12px; }
+.wiki-loading-line,.wiki-reader-loading-bar { height:4px; overflow:hidden; border-radius:999px; background:var(--line); }
+.wiki-loading-line::after,.wiki-reader-loading-fill { content:""; display:block; width:42%; height:100%; border-radius:inherit; background:var(--feature-color); animation:wikiLoading 1.05s ease-in-out infinite alternate; }
+@keyframes wikiLoading { from{ transform:translateX(-20%); opacity:.45; } to{ transform:translateX(155%); opacity:1; } }
+
+/* ---------- Wikipedia immersive reader ---------- */
+html.wiki-reading { overflow:hidden !important; background:#12100c; }
+html.wiki-reading body { overflow:hidden !important; }
+html.wiki-reading .bottom-nav { transform:translate3d(0,125%,0) !important; pointer-events:none !important; opacity:0 !important; }
+html.wiki-reading #app-main { padding-bottom:0 !important; }
+.wiki-reader,.wiki-reader-loading { position:fixed; z-index:125; inset:0; width:100vw; height:100dvh; overflow:hidden; background:#f1ead8; color:#28231c; }
+.wiki-reader-loading { display:grid; place-content:center; gap:13px; padding:28px; text-align:center; }
+.wiki-reader-loading > span { font-size:11px; opacity:.65; }
+.wiki-theme-warm { background:#eee5ce; color:#29241c; }
+.wiki-theme-dark { background:#0b0b0c; color:#e9e4da; }
+.wiki-theme-paper { background:#f8f7f2; color:#202020; }
+.wiki-reader-stage { position:absolute; inset:0; perspective:1200px; overflow:hidden; }
+.wiki-page { position:absolute; inset:0; box-sizing:border-box; padding:max(62px,calc(env(safe-area-inset-top) + 48px)) 34px max(48px,calc(env(safe-area-inset-bottom) + 32px)); font-family:"Hiragino Mincho ProN","Yu Mincho",serif; font-size:var(--wiki-font-size,19px); line-height:var(--wiki-line-height,1.85); letter-spacing:.02em; white-space:pre-wrap; overflow:hidden; transform-style:preserve-3d; backface-visibility:hidden; }
+.wiki-page.vertical { writing-mode:vertical-rl; text-orientation:mixed; width:100%; height:100%; line-break:strict; }
+.wiki-page.horizontal { writing-mode:horizontal-tb; }
+.wiki-reader-controls { position:fixed; z-index:132; top:0; left:0; right:0; min-height:54px; padding:max(8px,env(safe-area-inset-top)) 12px 8px; display:grid; grid-template-columns:auto auto minmax(0,1fr) auto auto; gap:7px; align-items:center; background:linear-gradient(to bottom,rgba(15,13,10,.68),rgba(15,13,10,.12),transparent); color:white; transition:opacity .22s ease, transform .22s ease; }
+.wiki-reader-controls.hidden { opacity:0; transform:translateY(-14px); pointer-events:none; }
+.wiki-reader-control,.wiki-source-link { min-height:34px; display:grid; place-items:center; padding:0 9px; border-radius:999px; color:white; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.15); font-size:11px; text-decoration:none; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+.wiki-reader-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center; font-size:11px; font-weight:700; }
+.wiki-source-link { padding-inline:8px; font-size:9px; }
+.wiki-edge,.wiki-center-tap { position:absolute; z-index:128; top:54px; bottom:34px; border:0; background:transparent; -webkit-tap-highlight-color:transparent; }
+.wiki-edge { width:27%; }
+.wiki-edge-left { left:0; }
+.wiki-edge-right { right:0; }
+.wiki-center-tap { left:27%; right:27%; }
+.wiki-reader-progress { position:fixed; z-index:131; left:16px; right:16px; bottom:max(9px,env(safe-area-inset-bottom)); height:3px; border-radius:999px; background:rgba(127,110,82,.2); }
+.wiki-theme-dark .wiki-reader-progress { background:rgba(255,255,255,.12); }
+.wiki-reader-progress-fill { height:100%; border-radius:inherit; background:currentColor; opacity:.48; transition:width .22s ease; }
+.wiki-reader-progress-text { position:absolute; right:0; bottom:7px; font:600 9px/1 system-ui,sans-serif; opacity:.48; }
+.wiki-page-leave-next { animation:wikiPageLeaveNext .14s ease-in forwards; transform-origin:left center; }
+.wiki-page-leave-prev { animation:wikiPageLeavePrev .14s ease-in forwards; transform-origin:right center; }
+.wiki-page-enter-next { animation:wikiPageEnterNext .22s ease-out both; transform-origin:right center; }
+.wiki-page-enter-prev { animation:wikiPageEnterPrev .22s ease-out both; transform-origin:left center; }
+@keyframes wikiPageLeaveNext { to { transform:translateX(-8%) rotateY(12deg); opacity:.15; } }
+@keyframes wikiPageLeavePrev { to { transform:translateX(8%) rotateY(-12deg); opacity:.15; } }
+@keyframes wikiPageEnterNext { from { transform:translateX(7%) rotateY(-10deg); opacity:.18; } to { transform:none; opacity:1; } }
+@keyframes wikiPageEnterPrev { from { transform:translateX(-7%) rotateY(10deg); opacity:.18; } to { transform:none; opacity:1; } }
+.wiki-settings-sheet { display:grid; gap:14px; padding-bottom:8px; }
+.wiki-setting-label { margin-top:3px; color:var(--muted); font-size:11px; font-weight:750; }
+.wiki-setting-row { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:center; font-size:12px; }
+.wiki-setting-row input[type="range"] { grid-column:1/-1; width:100%; accent-color:var(--feature-color); }
+.wiki-setting-value { color:var(--muted); font-variant-numeric:tabular-nums; }
+html.wiki-reading .bottom-sheet { margin-bottom:max(6px,env(safe-area-inset-bottom)) !important; max-height:calc(100dvh - env(safe-area-inset-bottom) - 20px) !important; }
+
+@media (max-width:390px) {
+  .wiki-daily-thumb { width:72px; height:72px; }
+  .wiki-page { padding-inline:25px; }
+  .wiki-reader-controls { grid-template-columns:auto auto minmax(0,1fr) auto; }
+  .wiki-source-link { display:none; }
+}
+
+/* iOSでTwitterを横へ引いた時にbodyの空白まで見せない */
+html, body, #app-main { max-width:100%; overflow-x:clip; }
+
