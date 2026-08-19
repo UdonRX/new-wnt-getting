@@ -1122,3 +1122,49 @@ html.wiki-reading .bottom-sheet { margin-bottom:max(6px,env(safe-area-inset-bott
 /* iOSでTwitterを横へ引いた時にbodyの空白まで見せない */
 html, body, #app-main { max-width:100%; overflow-x:clip; }
 
+
+/* ========================================================================== 
+   V2.12 Wikipedia: 今日の出来事 / 縦書き数字 / 左→右スワイプ
+   screens.css の一番最後へ追記
+   ========================================================================== */
+
+/* 「今日の出来事」を既存3ジャンルと見分けやすくする */
+.wiki-category-badge.wiki-today {
+  border-color: color-mix(in srgb, var(--feature-color) 48%, var(--line));
+  background: color-mix(in srgb, var(--feature-color) 14%, var(--surface));
+  color: color-mix(in srgb, var(--feature-color) 76%, white);
+}
+.wiki-daily-card.wiki-daily-today {
+  border-color: color-mix(in srgb, var(--feature-color) 34%, var(--line));
+}
+
+/* 縦書き本文内の年号・日付・数量を正立させる（Safari/iPhone対応） */
+.wiki-page.vertical .wiki-tcy {
+  text-combine-upright: all;
+  -webkit-text-combine: horizontal;
+  text-orientation: upright;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.wiki-page.vertical .wiki-upright-number {
+  text-orientation: upright;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* V2.12は左→右で次ページ。アニメーション方向も指の移動に合わせる */
+@keyframes wikiPageLeaveNext {
+  to { transform: translateX(8%) rotateY(-12deg); opacity: .15; }
+}
+@keyframes wikiPageLeavePrev {
+  to { transform: translateX(-8%) rotateY(12deg); opacity: .15; }
+}
+@keyframes wikiPageEnterNext {
+  from { transform: translateX(-6%) rotateY(9deg); opacity: .2; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes wikiPageEnterPrev {
+  from { transform: translateX(6%) rotateY(-9deg); opacity: .2; }
+  to { transform: none; opacity: 1; }
+}
+
