@@ -3,7 +3,7 @@ import { topbar, segmented } from '../../shared/components.js';
 import { iconSvg } from '../../shared/icons.js';
 
 const DAILY_KEY = 'pdv2:wikipediaDaily:v213';
-const ARTICLE_PREFIX = 'pdv2:wikipediaArticle:v211:';
+const ARTICLE_PREFIX = 'pdv2:wikipediaArticle:v2131:';
 const SETTINGS_KEY = 'pdv2:wikipediaReaderSettings';
 const DEFAULT_SETTINGS = { writing: 'vertical', fontSize: 19, lineHeight: 1.85, theme: 'warm' };
 let articleGeneration = 0;
@@ -41,23 +41,62 @@ async function loadArticle(title) {
   return result;
 }
 
-function safeSplit(text, limit) {
-  const value = String(text || '').trim();
+/*
+ * v2.13.1
+ * ページ境界で文字を単純切断しない。
+ * まず文単位へ分け、1文だけが長すぎる時に限って読点などで分割する。
+ * trim()でページ境界の文字を落とさないよう、本文は最後まで同じ順序で連結する。
+ */
+function sentenceUnits(text) {
+  const value = String(text || '');
+  if (!value) return [];
+
+  try {
+    if (typeof Intl?.Segmenter === 'function') {
+      const segmenter = new Intl.Segmenter('ja', { granularity: 'sentence' });
+      const rows = [...segmenter.segment(value)].map(row => row.segment).filter(Boolean);
+      if (rows.length) return rows;
+    }
+  } catch {}
+
+  const rows = value.match(/[^。！？!?\n]+[。！？!?]?[ \t]*|\n+/g);
+  return rows?.length ? rows : [value];
+}
+
+function splitLongUnit(text, limit) {
+  const value = String(text || '');
   if (value.length <= limit) return [value];
+
   const out = [];
-  let rest = value;
-  while (rest.length > limit) {
-    let cut = Math.max(
-      rest.lastIndexOf('。', limit), rest.lastIndexOf('！', limit), rest.lastIndexOf('？', limit),
-      rest.lastIndexOf('、', limit), rest.lastIndexOf(' ', limit)
-    );
-    if (cut < Math.floor(limit * .55)) cut = limit;
-    else cut += 1;
-    out.push(rest.slice(0, cut).trim());
-    rest = rest.slice(cut).trim();
+  let offset = 0;
+  while (offset < value.length) {
+    const remaining = value.length - offset;
+    if (remaining <= limit) {
+      out.push(value.slice(offset));
+      break;
+    }
+
+    const windowText = value.slice(offset, offset + limit + 1);
+    const minCut = Math.floor(limit * .62);
+    let cut = -1;
+
+    for (const mark of ['。', '！', '？', '!', '?', '；', ';', '、', '，', ',', ' ']) {
+      const at = windowText.lastIndexOf(mark, limit);
+      if (at >= minCut) cut = Math.max(cut, at + 1);
+    }
+    if (cut < minCut) cut = limit;
+
+    out.push(value.slice(offset, offset + cut));
+    offset += cut;
   }
-  if (rest) out.push(rest);
   return out;
+}
+
+function blockText(block) {
+  if (!block) return '';
+  if (block.type === 'heading') return `◆ ${block.text}\n\n`;
+  if (block.type === 'list') return `・${block.text}\n`;
+  return `${block.text}\n\n`;
 }
 
 function paginate(blocks, s) {
@@ -65,18 +104,41 @@ function paginate(blocks, s) {
   const target = Math.max(260, Math.min(1050,
     Math.round(base * Math.pow(19 / Number(s.fontSize || 19), 1.45) * (1.85 / Number(s.lineHeight || 1.85)))
   ));
-  const chunks = [];
+
+  const units = [];
   for (const block of blocks || []) {
-    const prefix = block.type === 'heading' ? `◆ ${block.text}\n\n` : block.type === 'list' ? `・${block.text}\n` : `${block.text}\n\n`;
-    safeSplit(prefix, Math.max(180, target - 80)).forEach(part => chunks.push(part));
+    const text = blockText(block);
+    for (const sentence of sentenceUnits(text)) {
+      units.push(...splitLongUnit(sentence, Math.max(180, target - 70)));
+    }
   }
+
   const pages = [];
   let page = '';
-  chunks.forEach(chunk => {
-    if (page && page.length + chunk.length > target) { pages.push(page.trim()); page = ''; }
-    page += chunk;
-  });
-  if (page.trim()) pages.push(page.trim());
+
+  for (const unit of units) {
+    // 文が入るなら同じページに載せる。入らない時は文の手前で改ページする。
+    if (page && page.length + unit.length > target) {
+      pages.push(page);
+      page = '';
+    }
+
+    // 1 unit 自体がtargetより大きいケースも文字を落とさず処理。
+    if (unit.length > target) {
+      const pieces = splitLongUnit(unit, target);
+      for (const piece of pieces) {
+        if (page && page.length + piece.length > target) {
+          pages.push(page);
+          page = '';
+        }
+        page += piece;
+      }
+    } else {
+      page += unit;
+    }
+  }
+
+  if (page) pages.push(page);
   return pages.length ? pages : ['本文を表示できませんでした。'];
 }
 
@@ -112,8 +174,6 @@ function appendReadableVerticalText(node, text, vertical) {
     return;
   }
 
-  // Safariの縦書きでは数字が横倒しになりやすい。
-  // 1〜4桁の数字を縦中横にして、年号・日付・数量を正立させる。
   const parts = String(text || '').split(/([0-9０-９]{1,4})/g);
   for (const part of parts) {
     if (!part) continue;
@@ -139,7 +199,7 @@ function showReader(root, articleMeta, article, backToList) {
 
   const shell = el('section', { class: `wiki-reader wiki-theme-${s.theme}` });
   const controls = el('div', { class: 'wiki-reader-controls' });
-  const close = el('button', { class: 'wiki-reader-control', type: 'button', text: '✕', 'aria-label': '今日の10本へ戻る', onclick: backToList });
+  const close = el('button', { class: 'wiki-reader-control', type: 'button', text: '✕', 'aria-label': '記事一覧へ戻る', onclick: backToList });
   const listButton = el('button', { class: 'wiki-reader-control wiki-list-button', type: 'button', text: '10選', onclick: backToList });
   const title = el('div', { class: 'wiki-reader-title', text: articleMeta.title });
   const aa = el('button', { class: 'wiki-reader-control', type: 'button', text: 'Aa', onclick: () => settingsSheet({ ...s }, next => applySettings(next)) });
@@ -209,30 +269,41 @@ function showReader(root, articleMeta, article, backToList) {
   const horizontalNextFlow = () =>
     s.writing === 'horizontal' || window.matchMedia?.('(orientation: landscape)')?.matches;
 
-  // 縦書き・縦持ちでは左側が次ページ。
-  // 横書き、または端末を横向きにして読む場合は右側が次ページ。
   edgeLeft.onclick = () => go(horizontalNextFlow() ? -1 : 1);
   edgeRight.onclick = () => go(horizontalNextFlow() ? 1 : -1);
   centerTap.onclick = () => controls.classList.contains('hidden') ? scheduleHide() : controls.classList.add('hidden');
 
   let sx = 0, sy = 0;
+  let edgeBackCandidate = false;
+
   stage.addEventListener('touchstart', event => {
-    if (event.touches?.length === 1) {
-      sx = event.touches[0].clientX;
-      sy = event.touches[0].clientY;
-    }
+    if (event.touches?.length !== 1) return;
+    sx = event.touches[0].clientX;
+    sy = event.touches[0].clientY;
+    // iPhoneの「画面左端から戻る」に近い判定。通常のページめくりと競合させない。
+    edgeBackCandidate = sx <= Math.max(24, Number(window.visualViewport?.offsetLeft || 0) + 24);
   }, { passive: true });
+
   stage.addEventListener('touchend', event => {
     const t = event.changedTouches?.[0];
     if (!t) return;
     const dx = t.clientX - sx;
     const dy = t.clientY - sy;
-    if (Math.abs(dx) > 54 && Math.abs(dx) > Math.abs(dy) * 1.25) {
-      // 縦書き・縦持ち: 左→右で次ページ。
-      // 横書き、または端末横向き: 右→左で次ページ。
+    const horizontalGesture = Math.abs(dx) > Math.abs(dy) * 1.25;
+
+    if (edgeBackCandidate && dx >= 72 && horizontalGesture) {
+      edgeBackCandidate = false;
+      backToList();
+      return;
+    }
+    edgeBackCandidate = false;
+
+    if (Math.abs(dx) > 54 && horizontalGesture) {
       go(horizontalNextFlow() ? (dx < 0 ? 1 : -1) : (dx > 0 ? 1 : -1));
     }
   }, { passive: true });
+
+  stage.addEventListener('touchcancel', () => { edgeBackCandidate = false; }, { passive: true });
 
   paint();
   scheduleHide();
@@ -354,7 +425,6 @@ export async function renderWikipedia(root, { navigate, refresh = false, initial
     });
   };
 
-  // 一覧上の左右スワイプで「今日 → 王道 → 考察 → 雑学」を切り替える。
   host.addEventListener('touchstart', event => {
     if (event.touches?.length !== 1) return;
     sx = event.touches[0].clientX;
