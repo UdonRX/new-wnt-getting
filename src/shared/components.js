@@ -12,6 +12,45 @@ export function topbar(title, { subtitle='', actions=[] } = {}) {
   return el('header', { class:'topbar' }, [left, right]);
 }
 
+export function centerScrollItem(container, item, { behavior = 'smooth' } = {}) {
+  if (!container || !item) return;
+
+  let attempts = 0;
+  const maxAttempts = 8;
+
+  const center = () => {
+    attempts += 1;
+
+    // buildFeedChips() の直後など、まだ DOM に接続されていない瞬間は次フレームへ送る。
+    if (
+      !container.isConnected ||
+      !item.isConnected ||
+      container.clientWidth <= 0 ||
+      item.offsetWidth <= 0
+    ) {
+      if (attempts < maxAttempts) requestAnimationFrame(center);
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+
+    const rawLeft =
+      container.scrollLeft +
+      (itemRect.left - containerRect.left) -
+      (containerRect.width - itemRect.width) / 2;
+
+    const maxLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    const nextLeft = Math.min(maxLeft, Math.max(0, rawLeft));
+
+    container.scrollTo({ left: nextLeft, behavior });
+  };
+
+  // iPhone Safari では1フレーム目に幅が確定していないことがあるため2フレーム待つ。
+  requestAnimationFrame(() => requestAnimationFrame(center));
+}
+
+
 export function segmented(items, active, onChange) {
   const box = el('div', { class:'segmented' });
   items.forEach(item => box.append(el('button', { type:'button', class:item.value===active?'active':'', text:item.label, onclick:()=>onChange(item.value) })));
