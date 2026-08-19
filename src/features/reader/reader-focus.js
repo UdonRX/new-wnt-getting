@@ -3,7 +3,7 @@ import { shortDate } from '../../shared/time.js';
 import { iconSvg } from '../../shared/icons.js';
 
 const summaryCache = new Map();
-let controller = null;
+const summaryPromises = new Map();
 
 function stripHtml(value = '') {
   const d = document.createElement('div');
@@ -21,28 +21,37 @@ function errorMessage(data, status) {
 async function fetchSummary(item, { force = false } = {}) {
   const key = item.link || item.id;
   if (!force && summaryCache.has(key)) return summaryCache.get(key);
+  if (!force && summaryPromises.has(key)) return summaryPromises.get(key);
 
-  controller?.abort();
-  controller = new AbortController();
-
-  const res = await fetch('/api/summary', {
+  const request = fetch('/api/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url: item.link,
       title: item.title,
-      description: stripHtml(item.description),
-      source: item.source
-    }),
-    signal: controller.signal
+      description: stripHtml(item.description).slice(0, 7000),
+      source: item.source,
+      fast: true
+    })
+  }).then(async res => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(errorMessage(data, res.status));
+    summaryCache.set(key, data);
+    while (summaryCache.size > 36) summaryCache.delete(summaryCache.keys().next().value);
+    return data;
+  }).finally(() => {
+    if (summaryPromises.get(key) === request) summaryPromises.delete(key);
   });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(errorMessage(data, res.status));
+  summaryPromises.set(key, request);
+  return request;
+}
 
-  summaryCache.set(key, data);
-  while (summaryCache.size > 28) summaryCache.delete(summaryCache.keys().next().value);
-  return data;
+function prefetchSummary(item) {
+  if (!item) return;
+  const key = item.link || item.id;
+  if (!key || summaryCache.has(key) || summaryPromises.has(key)) return;
+  fetchSummary(item).catch(() => {});
 }
 
 function chatSheet(item, summary) {
@@ -134,40 +143,76 @@ function renderProgress(progressHost, { label, index, total, onList }) {
   progressHost.replaceChildren(progress);
 }
 
+function createSummaryLoader() {
+  const box = el('div', { class: 'summary-loading-box' });
+  const label = el('div', { class: 'summary-loading-label', text: 'AI要約を作成中…' });
+  const track = el('div', { class: 'summary-loading-track' });
+  const fill = el('div', { class: 'summary-loading-fill' });
+  const percent = el('span', { class: 'summary-loading-percent', text: '8%' });
+  track.append(fill);
+  box.append(label, track, percent);
+
+  const startedAt = performance.now();
+  let raf = 0;
+  let stopped = false;
+  const tick = now => {
+    if (stopped || !box.isConnected) return;
+    const sec = Math.max(0, (now - startedAt) / 1000);
+    // 実通信の進捗率は取得できないため、待ち時間に合わせて95%まで滑らかに進める。
+    const value = Math.min(95, 8 + 87 * (1 - Math.exp(-sec / 3.0)));
+    fill.style.width = `${value}%`;
+    percent.textContent = `${Math.round(value)}%`;
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+
+  return {
+    node: box,
+    finish() {
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+      fill.style.width = '100%';
+      percent.textContent = '100%';
+    },
+    stop() {
+      stopped = true;
+      if (raf) cancelAnimationFrame(raf);
+    }
+  };
+}
+
+function paperDateLabel(item) {
+  const description = String(item?.description || '');
+  const yearOnly = description.match(/(?:公開年|出版年):\s*(\d{4})/);
+  if (/日付精度:\s*不明/.test(description)) return '日付不明';
+  if (/日付精度:\s*年/.test(description) && yearOnly) return `${yearOnly[1]}年`;
+  return shortDate(item?.pubDate);
+}
+
 function renderSummary(summaryHost, summary) {
   summaryHost.replaceChildren();
 
   if (summary.short) {
-    summaryHost.append(el('div', { class: 'summary-block' }, [
-      el('h3', { text: '5秒で分かる' }),
+    summaryHost.append(el('div', { class: 'summary-block summary-block-compact' }, [
+      el('h3', { text: 'ひとことで' }),
       el('div', { class: 'summary-short', text: summary.short })
     ]));
   }
 
-  if (summary.why) {
-    summaryHost.append(el('div', { class: 'summary-block' }, [
-      el('h3', { text: 'なぜ重要？' }),
-      el('div', { class: 'summary-why', text: summary.why })
-    ]));
-  }
-
-  const points = Array.isArray(summary.points) ? summary.points : [];
+  const points = Array.isArray(summary.points) ? summary.points.slice(0, 3) : [];
   if (points.length) {
-    const ul = el('ul');
+    const ul = el('ul', { class: 'summary-points-compact' });
     points.forEach(point => ul.append(el('li', { text: point })));
-    summaryHost.append(el('div', { class: 'summary-block' }, [
-      el('h3', { text: 'ポイント' }),
+    summaryHost.append(el('div', { class: 'summary-block summary-block-compact' }, [
+      el('h3', { text: '要点' }),
       ul
     ]));
   }
 
-  const note = summary.contentSource === 'pdf'
-    ? `PDF本文から要約${summary.pdfPageCount ? `（${summary.pdfPageCount}ページ）` : ''}`
-    : summary.contentSource === 'article'
-      ? 'リンク先本文から要約'
-      : `RSS本文から要約${summary.fallbackReason ? `（${summary.fallbackReason.slice(0, 70)}）` : ''}`;
-
-  summaryHost.append(el('div', { class: 'source-note', text: note }));
+  summaryHost.append(el('div', {
+    class: 'source-note',
+    text: summary.fastPath === 'rss-abstract-fast' ? 'RSS本文・抄録から高速要約' : 'AI要約'
+  }));
 }
 
 function isDocumentScroller(scroller) {
@@ -325,6 +370,7 @@ export function mountFocus(host, {
   initialIndex = 0,
   label = 'おすすめ',
   onList,
+  onStart = null,
   onEnd = null,
   onIndexChange,
   onPrevFeed,
@@ -337,7 +383,6 @@ export function mountFocus(host, {
   let destroyed = false;
 
   const render = ({ scrollToTop = false } = {}) => {
-    controller?.abort();
     const item = items[index];
 
     if (!item) {
@@ -359,7 +404,7 @@ export function mountFocus(host, {
     body.append(
       el('div', {
         class: 'focus-source',
-        text: `${item.source || ''} ・ ${shortDate(item.pubDate)}`
+        text: `${item.source || ''} ・ ${paperDateLabel(item)}`
       }),
       el('h2', {
         class: 'focus-title',
@@ -373,9 +418,13 @@ export function mountFocus(host, {
 
     const summaryHost = el('div', { class: 'summary-area' });
     const cached = summaryCache.get(item.link || item.id);
+    let loader = null;
 
     if (cached) renderSummary(summaryHost, cached);
-    else summaryHost.append(el('div', { class: 'summary-preview', text: 'AI要約を読み込み中…' }));
+    else {
+      loader = createSummaryLoader();
+      summaryHost.append(loader.node);
+    }
 
     body.append(summaryHost);
 
@@ -418,7 +467,10 @@ export function mountFocus(host, {
     detach();
     detach = attachFocusGesture(card, {
       up: () => move(1),
-      down: () => move(-1),
+      down: () => {
+        if (index === 0 && typeof onStart === 'function') onStart();
+        else move(-1);
+      },
       left: onNextFeed,
       right: onPrevFeed
     });
@@ -429,11 +481,15 @@ export function mountFocus(host, {
     if (!cached) {
       fetchSummary(item)
         .then(summary => {
+          loader?.finish();
           if (destroyed || items[index] !== item || !summaryHost.isConnected) return;
           renderSummary(summaryHost, summary);
+          // 次の記事はユーザーが今の記事を読んでいる間に先読みする。
+          prefetchSummary(items[index + 1]);
         })
         .catch(err => {
-          if (err.name === 'AbortError' || destroyed || !summaryHost.isConnected) return;
+          loader?.stop();
+          if (destroyed || !summaryHost.isConnected) return;
 
           summaryHost.replaceChildren(el('div', { class: 'error-box' }, [
             el('div', { text: err.message }),
@@ -443,11 +499,11 @@ export function mountFocus(host, {
               text: '要約を再取得',
               onclick: async () => {
                 try {
-                  summaryHost.replaceChildren(el('div', {
-                    class: 'summary-preview',
-                    text: 'AI要約を再取得中…'
-                  }));
-                  renderSummary(summaryHost, await fetchSummary(item, { force: true }));
+                  const retryLoader = createSummaryLoader();
+                  summaryHost.replaceChildren(retryLoader.node);
+                  const retrySummary = await fetchSummary(item, { force: true });
+                  retryLoader.finish();
+                  renderSummary(summaryHost, retrySummary);
                 } catch (retryError) {
                   summaryHost.replaceChildren(el('div', {
                     class: 'error-box',
@@ -487,7 +543,6 @@ export function mountFocus(host, {
   return {
     destroy() {
       destroyed = true;
-      controller?.abort();
       detach();
       progressHost?.replaceChildren();
     },
