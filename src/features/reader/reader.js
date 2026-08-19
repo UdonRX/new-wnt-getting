@@ -1,6 +1,6 @@
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
-import { topbar, segmented, collectionManager, centerScrollItem } from '../../shared/components.js';
+import { topbar, segmented, collectionManager } from '../../shared/components.js';
 import { loadReader, feedsFor } from './reader-data.js';
 import { chooseTop, requestAiRank } from './reader-rank.js';
 import { mountFocus } from './reader-focus.js';
@@ -85,6 +85,86 @@ function setSelectedFeed(mode, name) {
   localStorage.setItem(selectedFeedKey(mode), name || '');
 }
 
+function itemDateLabel(item) {
+  const description = String(item?.description || '');
+  const yearOnly = description.match(/(?:公開年|出版年):\s*(\d{4})/);
+  if (/日付精度:\s*不明/.test(description)) return '日付不明';
+  if (/日付精度:\s*年/.test(description) && yearOnly) return `${yearOnly[1]}年`;
+  return shortDate(item?.pubDate);
+}
+
+function centerActiveChip(chips, { behavior = 'auto' } = {}) {
+  // 古い選択位置を一度動かしてから戻す処理を避けるため、
+  // 新DOMが描画された後に「現在のactive」だけへ1回スクロールする。
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!chips?.isConnected) return;
+    const active = chips.querySelector('.chip.active');
+    if (!active) return;
+    const max = Math.max(0, chips.scrollWidth - chips.clientWidth);
+    const target = Math.max(0, Math.min(max,
+      active.offsetLeft - (chips.clientWidth - active.offsetWidth) / 2
+    ));
+    chips.scrollTo({ left: target, behavior });
+  }));
+}
+
+function attachReaderListSwipe(host, { left, right, threshold = 68 } = {}) {
+  let start = null;
+  let horizontal = false;
+
+  const clear = () => {
+    start = null;
+    horizontal = false;
+    host.classList.remove('reader-horizontal-swiping');
+    if (document.activeElement?.matches?.('.reader-content-host .list-item')) document.activeElement.blur();
+  };
+
+  const onStart = event => {
+    if (event.touches?.length !== 1) return clear();
+    const touch = event.touches[0];
+    start = { x: touch.clientX, y: touch.clientY };
+    horizontal = false;
+  };
+
+  const onMove = event => {
+    if (!start || event.touches?.length !== 1) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (!horizontal && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.15) {
+      horizontal = true;
+      host.classList.add('reader-horizontal-swiping');
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    }
+    if (horizontal && event.cancelable) event.preventDefault();
+  };
+
+  const onEnd = event => {
+    if (!start || !event.changedTouches?.length) return clear();
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const isSwipe = Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.2;
+    const direction = dx < 0 ? 'left' : 'right';
+    clear();
+    if (!isSwipe) return;
+    if (direction === 'left') left?.();
+    else right?.();
+  };
+
+  host.addEventListener('touchstart', onStart, { passive: true });
+  host.addEventListener('touchmove', onMove, { passive: false });
+  host.addEventListener('touchend', onEnd, { passive: true });
+  host.addEventListener('touchcancel', clear, { passive: true });
+  return () => {
+    host.removeEventListener('touchstart', onStart);
+    host.removeEventListener('touchmove', onMove);
+    host.removeEventListener('touchend', onEnd);
+    host.removeEventListener('touchcancel', clear);
+    clear();
+  };
+}
+
 function manageFeeds(mode, rerender) {
   const key = mode === 'papers'
     ? 'paperFeeds'
@@ -106,11 +186,6 @@ function manageFeeds(mode, rerender) {
       rerender(true);
     }
   }), { title: `${modeLabel(mode)}のタブ編集` });
-}
-
-function centerActiveChip(chips) {
-  const active = chips?.querySelector('.chip.active');
-  if (active) centerScrollItem(chips, active, { behavior: 'smooth' });
 }
 
 function buildFeedChips(mode, onChange) {
@@ -142,7 +217,7 @@ function buildFeedChips(mode, onChange) {
     }
   })));
 
-  requestAnimationFrame(() => centerActiveChip(chips));
+  centerActiveChip(chips, { behavior: 'auto' });
   return chips;
 }
 
@@ -170,7 +245,7 @@ function buildCreativeFamilyTabs(onChange) {
     onclick: () => onChange(item.value)
   })));
 
-  requestAnimationFrame(() => centerActiveChip(row));
+  centerActiveChip(row, { behavior: 'auto' });
   return row;
 }
 
@@ -214,7 +289,7 @@ function renderList(host, mode, track, family, items, onOpen) {
         button.innerHTML = `
           <div class="list-item-title">${unread ? '<span class="unread-dot"></span>' : ''}${item.titleJa || item.title}</div>
           ${item.titleJa ? `<div class="focus-original">${item.title}</div>` : ''}
-          <div class="list-meta"><span>${item.source || ''}</span><span>${shortDate(item.pubDate)}</span></div>
+          <div class="list-meta"><span>${item.source || ''}</span><span>${itemDateLabel(item)}</span></div>
         `;
         list.append(button);
       });
@@ -357,45 +432,77 @@ export async function renderReader(root, { navigate, refresh = false }) {
 
   let chosen = [];
 
-  const cycleFeed = delta => {
-    const feeds = feedsFor(mode);
-    if (feeds.length <= 1) return;
-
-    const names = ['', ...feeds.map(feed => feed.name)];
-    const current = getSelectedFeed(mode);
-    const index = Math.max(0, names.indexOf(current));
-    const next = Math.max(0, Math.min(names.length - 1, index + delta));
-    if (next === index) return;
-
-    setSelectedFeed(mode, names[next]);
+  const goLeaf = ({ nextMode = mode, feed, nextTrack, family } = {}) => {
+    if (nextMode !== mode) update('lastReaderMode', nextMode);
+    if (feed !== undefined && nextMode !== 'papers') setSelectedFeed(nextMode, feed);
+    if (nextMode === 'papers' && nextTrack) update('paperTrack', nextTrack);
+    if (nextMode === 'papers' && family) update('creativePaperFamily', family);
     view = 'list';
     articleIndex = 0;
     renderReader(root, { navigate });
   };
 
-  const cyclePaperTrack = delta => {
-    const tracks = ['core', 'creative'];
-    const index = tracks.indexOf(track);
-    const next = Math.max(0, Math.min(tracks.length - 1, index + delta));
-    if (next === index) return;
+  const lastFeedName = targetMode => {
+    const names = feedsFor(targetMode).map(feed => feed.name).filter(Boolean);
+    return names[names.length - 1] || '';
+  };
 
-    update('paperTrack', tracks[next]);
-    view = 'list';
-    articleIndex = 0;
-    renderReader(root, { navigate });
+  const cycleFeed = delta => {
+    const names = ['', ...feedsFor(mode).map(feed => feed.name)];
+    const current = getSelectedFeed(mode);
+    const index = Math.max(0, names.indexOf(current));
+    const nextIndex = index + delta;
+
+    if (nextIndex >= 0 && nextIndex < names.length) {
+      setSelectedFeed(mode, names[nextIndex]);
+      view = 'list';
+      articleIndex = 0;
+      renderReader(root, { navigate });
+      return;
+    }
+
+    // ニュース右端 → 知識 All / 知識 All → ニュース右端
+    if (mode === 'news' && delta > 0) {
+      goLeaf({ nextMode: 'knowledge', feed: '' });
+      return;
+    }
+    if (mode === 'knowledge' && delta < 0) {
+      goLeaf({ nextMode: 'news', feed: lastFeedName('news') });
+      return;
+    }
+
+    // 知識右端 → 論文「製品・熱研究」
+    if (mode === 'knowledge' && delta > 0) {
+      goLeaf({ nextMode: 'papers', nextTrack: 'core' });
+    }
+  };
+
+  const cyclePaperCore = delta => {
+    if (delta > 0) {
+      // 製品・熱研究 → 独創研究「すべて」
+      goLeaf({ nextMode: 'papers', nextTrack: 'creative', family: 'all' });
+    } else {
+      // 製品・熱研究 → 知識右端
+      goLeaf({ nextMode: 'knowledge', feed: lastFeedName('knowledge') });
+    }
   };
 
   const cycleCreativeFamily = delta => {
     const families = ['all', 'applied', 'general'];
     const current = creativeFamily();
-    const index = families.indexOf(current);
-    const next = Math.max(0, Math.min(families.length - 1, index + delta));
-    if (next === index) return;
+    const index = Math.max(0, families.indexOf(current));
+    const next = index + delta;
 
-    update('creativePaperFamily', families[next]);
-    view = 'list';
-    articleIndex = 0;
-    renderReader(root, { navigate });
+    if (next >= 0 && next < families.length) {
+      update('creativePaperFamily', families[next]);
+      view = 'list';
+      articleIndex = 0;
+      renderReader(root, { navigate });
+      return;
+    }
+
+    // 独創研究「すべて」から右スワイプ → 製品・熱研究
+    if (delta < 0 && index === 0) goLeaf({ nextMode: 'papers', nextTrack: 'core' });
   };
 
   const horizontalOptions = mode === 'papers'
@@ -406,8 +513,8 @@ export async function renderReader(root, { navigate, refresh = false }) {
           horizontalHint: '独創研究タブ'
         }
       : {
-          onPrevFeed: () => cyclePaperTrack(-1),
-          onNextFeed: () => cyclePaperTrack(1),
+          onPrevFeed: () => cyclePaperCore(-1),
+          onNextFeed: () => cyclePaperCore(1),
           horizontalHint: '論文タブ'
         })
     : {
@@ -443,10 +550,10 @@ export async function renderReader(root, { navigate, refresh = false }) {
         renderContent();
       });
 
-      const detachListSwipe = attachSwipe(host, {
+      const detachListSwipe = attachReaderListSwipe(host, {
         left: horizontalOptions.onNextFeed,
         right: horizontalOptions.onPrevFeed,
-        threshold: 72
+        threshold: 68
       });
       focusHandle = { destroy: detachListSwipe };
       return;
@@ -461,6 +568,11 @@ export async function renderReader(root, { navigate, refresh = false }) {
         initialIndex: articleIndex,
         label: '記事',
         progressHost: null,
+        onStart: () => {
+          view = 'list';
+          renderContent();
+          scrollContentToTop(host);
+        },
         onList: () => {
           view = 'list';
           renderContent();
@@ -503,6 +615,13 @@ export async function renderReader(root, { navigate, refresh = false }) {
       initialIndex: recommendationIndex,
       label: recommendationLabel(mode, track, family),
       progressHost,
+      onStart: () => {
+        // おすすめの1本目を先頭から下へスワイプ → すぐ記事一覧。
+        view = 'list';
+        recommendationIndex = 0;
+        renderContent();
+        scrollContentToTop(host);
+      },
       onList: () => {
         view = 'list';
         renderContent();
