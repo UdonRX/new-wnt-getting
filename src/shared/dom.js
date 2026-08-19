@@ -27,12 +27,71 @@ export function openSheet(content, { title = '', onClose } = {}) {
   const root = document.getElementById('overlay-root');
   const backdrop = el('div', { class: 'sheet-backdrop' });
   const sheet = el('section', { class: 'bottom-sheet', role: 'dialog', 'aria-modal': 'true' });
-  sheet.append(el('div', { class: 'sheet-handle' }));
+  const grabber = el('div', { class: 'sheet-grabber', 'aria-label': '下にスワイプして閉じる' });
+  grabber.append(el('div', { class: 'sheet-handle' }));
+  sheet.append(grabber);
   if (title) sheet.append(el('div', { class: 'section-title' }, [el('h2', { text: title })]));
   sheet.append(content);
   backdrop.append(sheet);
-  const close = () => { backdrop.remove(); onClose?.(); };
-  backdrop.addEventListener('click', e => { if (e.target === backdrop) close(); });
+
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    backdrop.remove();
+    onClose?.();
+  };
+  backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
+
+  let startY = 0;
+  let startX = 0;
+  let dragging = false;
+
+  const reset = () => {
+    dragging = false;
+    sheet.style.transition = 'transform .18s ease';
+    sheet.style.transform = '';
+    setTimeout(() => { if (sheet.isConnected) sheet.style.transition = ''; }, 190);
+  };
+
+  grabber.addEventListener('touchstart', event => {
+    if (event.touches?.length !== 1) return;
+    event.stopPropagation();
+    startY = event.touches[0].clientY;
+    startX = event.touches[0].clientX;
+    dragging = true;
+    sheet.style.transition = 'none';
+  }, { passive: true });
+
+  grabber.addEventListener('touchmove', event => {
+    if (!dragging || event.touches?.length !== 1) return;
+    event.stopPropagation();
+    const dy = event.touches[0].clientY - startY;
+    const dx = event.touches[0].clientX - startX;
+    if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) return;
+    if (event.cancelable) event.preventDefault();
+    sheet.style.transform = `translate3d(0, ${Math.min(180, dy * .78)}px, 0)`;
+  }, { passive: false });
+
+  const endDrag = event => {
+    if (!dragging) return;
+    event.stopPropagation();
+    const touch = event.changedTouches?.[0];
+    const dy = touch ? touch.clientY - startY : 0;
+    const dx = touch ? touch.clientX - startX : 0;
+    dragging = false;
+    if (dy >= 68 && Math.abs(dy) > Math.abs(dx) * 1.1) {
+      sheet.style.transition = 'transform .16s ease';
+      sheet.style.transform = 'translate3d(0, 115%, 0)';
+      setTimeout(close, 145);
+      return;
+    }
+    reset();
+  };
+
+  grabber.addEventListener('touchend', endDrag, { passive: true });
+  grabber.addEventListener('touchcancel', reset, { passive: true });
+
   root.append(backdrop);
   return { backdrop, sheet, close };
 }
