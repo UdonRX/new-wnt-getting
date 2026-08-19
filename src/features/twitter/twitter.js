@@ -287,9 +287,17 @@ function tweetCard(item) {
     el('div', { class: 'tweet-author-avatar', text: String(author).replace(/^@/, '').slice(0, 1).toUpperCase() || 'X' }),
     el('strong', { class: 'tweet-author-name', text: author })
   ]));
-  const text = el('div', { class: 'tweet-text' });
-  appendLinkified(text, clean.text || item.title || '');
-  card.append(text);
+  const rawTitle = String(item?.title || '').trim();
+  const titleIsPlaceholder = /^(?:無題|untitled|no\s*title|\(no\s*title\))$/i.test(rawTitle);
+  const displayText = clean.text || (!clean.images.length && !titleIsPlaceholder ? rawTitle : '');
+
+  if (displayText) {
+    const text = el('div', { class: 'tweet-text' });
+    appendLinkified(text, displayText);
+    card.append(text);
+  } else if (clean.images.length) {
+    card.classList.add('tweet-card-photo-only');
+  }
 
   if (clean.images.length) {
     const grid = el('div', { class: `tweet-images count-${Math.min(4, clean.images.length)}` });
