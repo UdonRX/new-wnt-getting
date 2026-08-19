@@ -1,7 +1,7 @@
 /*
- * Compact bottom navigation
+ * v2.10 bottom navigation
  * iPhone のホームインジケータ用 safe-area は残しつつ、
- * ナビ本体と本文側の予約領域を小さくする。
+ * ナビ本体は document のスクロール/ゴム引っ張りから独立させる。
  */
 :root {
   --nav-height: 46px;
@@ -12,11 +12,13 @@
 }
 
 .bottom-nav {
-  position: fixed;
-  z-index: 60;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: fixed !important;
+  z-index: 90;
+  left: 0 !important;
+  right: 0 !important;
+  top: auto !important;
+  bottom: 0 !important;
+  inset-inline: 0 !important;
   min-height: calc(var(--nav-height) + env(safe-area-inset-bottom));
   padding:
     0
@@ -29,6 +31,13 @@
   background: #0c1014;
   border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
   box-shadow: 0 -7px 18px rgba(0,0,0,.12);
+
+  /* iOS Safari/PWAでoverscroll時にfixed要素が一緒に浮くのを抑える */
+  transform: translate3d(0, 0, 0) !important;
+  -webkit-transform: translate3d(0, 0, 0) !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  will-change: transform;
 }
 
 .nav-item {
@@ -84,4 +93,10 @@
   border-radius: 999px;
   background: var(--feature-color);
   opacity: .88;
+}
+
+/* 縦方向のbounceを可能な範囲でapp内に閉じ込める。 */
+html,
+body {
+  overscroll-behavior-y: none;
 }
