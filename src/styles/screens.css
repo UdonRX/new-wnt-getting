@@ -581,3 +581,143 @@
 .reader-list-toolbar .reader-list-header {
   flex: 1 1 auto;
 }
+
+/* =========================================================
+   V2.9 HOME / WEATHER / READER / TWITCH / SNS FIX
+   V2.8までの src/styles/screens.css の一番下へ追記してください。
+   ========================================================= */
+
+/* ---------- READER: AI要約ロード ---------- */
+.summary-loading-box {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "label percent"
+    "track track";
+  align-items: center;
+  gap: 8px 10px;
+  margin: 12px 0 8px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-solid);
+}
+
+.summary-loading-label {
+  grid-area: label;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.summary-loading-percent {
+  grid-area: percent;
+  min-width: 34px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-loading-track {
+  grid-area: track;
+  position: relative;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 72%, transparent);
+}
+
+.summary-loading-fill {
+  width: 8%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--feature-color);
+  transition: width .14s linear;
+  will-change: width;
+}
+
+/* 要約は「ひとことで + 最大3点」に圧縮。 */
+.summary-block-compact {
+  margin: 9px 0;
+  padding: 12px 13px;
+}
+
+.summary-block-compact h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.summary-short {
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.summary-points-compact {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 19px;
+}
+
+.summary-points-compact li {
+  line-height: 1.55;
+}
+
+/* ---------- READER: 横スワイプ時のiOS押下暗転を抑止 ---------- */
+.reader-content-host {
+  overscroll-behavior-x: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reader-content-host .list,
+.reader-content-host .list-item {
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reader-content-host .list-item:active,
+.reader-horizontal-swiping .list-item,
+.reader-horizontal-swiping .list-item:active {
+  opacity: 1 !important;
+  filter: none !important;
+  transform: none !important;
+}
+
+.reader-horizontal-swiping {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 最下層タブだけを固定。V2.8定義を明示的に維持する。 */
+.reader-sticky-context {
+  position: sticky !important;
+  top: calc(env(safe-area-inset-top) + 2px) !important;
+  z-index: 38 !important;
+}
+
+.reader-mode-nav,
+.paper-track-level {
+  position: static !important;
+  top: auto !important;
+  z-index: auto !important;
+}
+
+/* ---------- TWITCH: 欠損サムネイルの代替 ---------- */
+.twitch-archive-thumb {
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+.twitch-archive-thumb.thumb-missing {
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--surface-2) 88%, var(--feature-color)),
+      var(--surface-solid));
+}
+
+.twitch-live-title {
+  margin-top: 7px;
+}
+
