@@ -2,7 +2,7 @@ import { el, openSheet, showToast } from '../../shared/dom.js';
 import { topbar, segmented } from '../../shared/components.js';
 import { iconSvg } from '../../shared/icons.js';
 
-const DAILY_KEY = 'pdv2:wikipediaDaily:v211';
+const DAILY_KEY = 'pdv2:wikipediaDaily:v212';
 const ARTICLE_PREFIX = 'pdv2:wikipediaArticle:v211:';
 const SETTINGS_KEY = 'pdv2:wikipediaReaderSettings';
 const DEFAULT_SETTINGS = { writing: 'vertical', fontSize: 19, lineHeight: 1.85, theme: 'warm' };
@@ -85,11 +85,17 @@ function settingsSheet(current, onChange) {
   const addRange = (label, key, min, max, step, suffix) => {
     const value = el('span', { class: 'wiki-setting-value', text: `${current[key]}${suffix}` });
     const input = el('input', { type: 'range', min, max, step, value: current[key] });
-    input.addEventListener('input', () => { current[key] = Number(input.value); value.textContent = `${current[key]}${suffix}`; onChange({ ...current }); });
+    input.addEventListener('input', () => {
+      current[key] = Number(input.value);
+      value.textContent = `${current[key]}${suffix}`;
+      onChange({ ...current });
+    });
     wrap.append(el('label', { class: 'wiki-setting-row' }, [el('span', { text: label }), value, input]));
   };
   wrap.append(el('div', { class: 'wiki-setting-label', text: '組み方向' }));
-  wrap.append(segmented([{ value: 'vertical', label: '縦書き' }, { value: 'horizontal', label: '横書き' }], current.writing, value => { current.writing = value; onChange({ ...current }); }));
+  wrap.append(segmented([
+    { value: 'vertical', label: '縦書き' }, { value: 'horizontal', label: '横書き' }
+  ], current.writing, value => { current.writing = value; onChange({ ...current }); }));
   addRange('文字サイズ', 'fontSize', 15, 27, .5, 'px');
   addRange('行間', 'lineHeight', 1.35, 2.5, .05, '');
   wrap.append(el('div', { class: 'wiki-setting-label', text: '背景' }));
@@ -97,6 +103,28 @@ function settingsSheet(current, onChange) {
     { value: 'warm', label: '暖色' }, { value: 'dark', label: '黒' }, { value: 'paper', label: '白' }
   ], current.theme, value => { current.theme = value; onChange({ ...current }); }));
   return openSheet(wrap, { title: '読書表示' });
+}
+
+function appendReadableVerticalText(node, text, vertical) {
+  node.replaceChildren();
+  if (!vertical) {
+    node.textContent = text;
+    return;
+  }
+
+  // Safariの縦書きでは数字が横倒しになりやすい。
+  // 1〜4桁の数字を縦中横にして、年号・日付・数量を正立させる。
+  const parts = String(text || '').split(/([0-9０-９]{1,4})/g);
+  for (const part of parts) {
+    if (!part) continue;
+    if (/^[0-9０-９]{1,2}$/.test(part)) {
+      node.append(el('span', { class: 'wiki-tcy', text: part }));
+    } else if (/^[0-9０-９]{3,4}$/.test(part)) {
+      node.append(el('span', { class: 'wiki-upright-number', text: part }));
+    } else {
+      node.append(document.createTextNode(part));
+    }
+  }
 }
 
 function showReader(root, articleMeta, article, backToList) {
@@ -119,10 +147,11 @@ function showReader(root, articleMeta, article, backToList) {
 
   const stage = el('div', { class: 'wiki-reader-stage' });
   const page = el('article', { class: 'wiki-page' });
-  const edgeLeft = el('button', { class: 'wiki-edge wiki-edge-left', type: 'button', 'aria-label': '前後のページ' });
-  const edgeRight = el('button', { class: 'wiki-edge wiki-edge-right', type: 'button', 'aria-label': '前後のページ' });
+  const edgeLeft = el('button', { class: 'wiki-edge wiki-edge-left', type: 'button', 'aria-label': '次のページ' });
+  const edgeRight = el('button', { class: 'wiki-edge wiki-edge-right', type: 'button', 'aria-label': '前のページ' });
   const centerTap = el('button', { class: 'wiki-center-tap', type: 'button', 'aria-label': '操作ボタンを表示' });
   stage.append(page, edgeLeft, edgeRight, centerTap);
+
   const progress = el('div', { class: 'wiki-reader-progress' });
   const progressFill = el('div', { class: 'wiki-reader-progress-fill' });
   const progressText = el('span', { class: 'wiki-reader-progress-text' });
@@ -137,24 +166,29 @@ function showReader(root, articleMeta, article, backToList) {
     controls.classList.remove('hidden');
     hideTimer = setTimeout(() => controls.classList.add('hidden'), 2600);
   };
+
   const paint = (entryClass = '') => {
     if (generation !== articleGeneration) return;
     shell.className = `wiki-reader wiki-theme-${s.theme}`;
-    page.className = `wiki-page ${s.writing === 'vertical' ? 'vertical' : 'horizontal'} ${entryClass}`.trim();
+    const vertical = s.writing === 'vertical';
+    page.className = `wiki-page ${vertical ? 'vertical' : 'horizontal'} ${entryClass}`.trim();
     page.style.setProperty('--wiki-font-size', `${s.fontSize}px`);
     page.style.setProperty('--wiki-line-height', String(s.lineHeight));
-    page.textContent = pages[pageIndex] || '';
+    appendReadableVerticalText(page, pages[pageIndex] || '', vertical);
     progressFill.style.width = `${((pageIndex + 1) / pages.length) * 100}%`;
     progressText.textContent = `${pageIndex + 1} / ${pages.length}`;
   };
+
   const applySettings = next => {
     const ratio = pages.length > 1 ? pageIndex / (pages.length - 1) : 0;
     s = { ...s, ...next };
     saveJson(SETTINGS_KEY, s);
     pages = paginate(article.blocks, s);
     pageIndex = Math.max(0, Math.min(pages.length - 1, Math.round(ratio * Math.max(0, pages.length - 1))));
-    paint(); scheduleHide();
+    paint();
+    scheduleHide();
   };
+
   const go = delta => {
     if (animating) return;
     const next = pageIndex + delta;
@@ -165,20 +199,38 @@ function showReader(root, articleMeta, article, backToList) {
     setTimeout(() => {
       pageIndex = next;
       paint(delta > 0 ? 'wiki-page-enter-next' : 'wiki-page-enter-prev');
-      setTimeout(() => { page.classList.remove('wiki-page-enter-next', 'wiki-page-enter-prev'); animating = false; }, 230);
+      setTimeout(() => {
+        page.classList.remove('wiki-page-enter-next', 'wiki-page-enter-prev');
+        animating = false;
+      }, 230);
     }, 130);
   };
+
+  // 縦書きは「左側＝次ページ」。横書きは一般的な左右配置を維持。
   edgeLeft.onclick = () => go(s.writing === 'vertical' ? 1 : -1);
   edgeRight.onclick = () => go(s.writing === 'vertical' ? -1 : 1);
   centerTap.onclick = () => controls.classList.contains('hidden') ? scheduleHide() : controls.classList.add('hidden');
+
   let sx = 0, sy = 0;
-  stage.addEventListener('touchstart', event => { if (event.touches?.length === 1) { sx = event.touches[0].clientX; sy = event.touches[0].clientY; } }, { passive: true });
-  stage.addEventListener('touchend', event => {
-    const t = event.changedTouches?.[0]; if (!t) return;
-    const dx = t.clientX - sx, dy = t.clientY - sy;
-    if (Math.abs(dx) > 54 && Math.abs(dx) > Math.abs(dy) * 1.25) go(dx < 0 ? 1 : -1);
+  stage.addEventListener('touchstart', event => {
+    if (event.touches?.length === 1) {
+      sx = event.touches[0].clientX;
+      sy = event.touches[0].clientY;
+    }
   }, { passive: true });
-  paint(); scheduleHide();
+  stage.addEventListener('touchend', event => {
+    const t = event.changedTouches?.[0];
+    if (!t) return;
+    const dx = t.clientX - sx;
+    const dy = t.clientY - sy;
+    if (Math.abs(dx) > 54 && Math.abs(dx) > Math.abs(dy) * 1.25) {
+      // V2.12: 左→右スワイプで次ページ、右→左で前ページ。
+      go(dx > 0 ? 1 : -1);
+    }
+  }, { passive: true });
+
+  paint();
+  scheduleHide();
 }
 
 export async function renderWikipedia(root, { navigate, refresh = false } = {}) {
@@ -193,29 +245,41 @@ export async function renderWikipedia(root, { navigate, refresh = false } = {}) 
       { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   }));
+
   const categoryHost = el('div', { class: 'wiki-category-tabs' });
   const host = el('div', { class: 'wiki-daily-list' });
   screen.append(categoryHost, host);
   root.replaceChildren(screen);
-  host.replaceChildren(el('div', { class: 'card wiki-loading-card' }, [el('strong', { text: '今日の10本を選んでいます…' }), el('div', { class: 'wiki-loading-line' })]));
+  host.replaceChildren(el('div', { class: 'card wiki-loading-card' }, [
+    el('strong', { text: '今日の10本を選んでいます…' }),
+    el('div', { class: 'wiki-loading-line' })
+  ]));
 
   try {
     const data = await loadDaily(refresh);
     const draw = () => {
-      categoryHost.replaceChildren(segmented([
-        { value: 'all', label: '今日の10本' }, { value: 'classic', label: '王道' }, { value: 'deep', label: '考察' }, { value: 'trivia', label: '雑学' }
-      ], filter, value => { filter = value; draw(); }));
+      const tabs = [
+        { value: 'all', label: '今日の10本' },
+        ...(Number(data.eventCount || 0) > 0 ? [{ value: 'today', label: '今日の出来事' }] : []),
+        { value: 'classic', label: '王道' },
+        { value: 'deep', label: '考察' },
+        { value: 'trivia', label: '雑学' }
+      ];
+      categoryHost.replaceChildren(segmented(tabs, filter, value => { filter = value; draw(); }));
       const items = (data.items || []).filter(item => filter === 'all' || item.kind === filter);
       host.replaceChildren();
+
       items.forEach((item, index) => {
-        const card = el('button', { class: 'wiki-daily-card', type: 'button' });
+        const card = el('button', { class: `wiki-daily-card wiki-daily-${item.kind}`, type: 'button' });
         const copy = el('div', { class: 'wiki-daily-copy' }, [
           el('div', { class: `wiki-category-badge wiki-${item.kind}`, text: item.category }),
           el('strong', { class: 'wiki-daily-title', text: item.title }),
           el('div', { class: 'wiki-daily-reason', text: item.reason }),
           el('p', { class: 'wiki-daily-extract', text: item.extract || '' })
         ]);
-        if (item.thumbnail) card.append(el('img', { class: 'wiki-daily-thumb', src: item.thumbnail, alt: '', loading: 'lazy', decoding: 'async' }));
+        if (item.thumbnail) card.append(el('img', {
+          class: 'wiki-daily-thumb', src: item.thumbnail, alt: '', loading: 'lazy', decoding: 'async'
+        }));
         card.append(copy, el('span', { class: 'wiki-daily-number', text: String(index + 1).padStart(2, '0') }));
         card.onclick = async () => {
           const loading = el('section', { class: 'wiki-reader-loading' }, [
