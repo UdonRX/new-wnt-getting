@@ -4,6 +4,7 @@ import { topbar, collectionManager, centerScrollItem } from '../../shared/compon
 import { parseFeed } from '../../shared/rss.js';
 import { shortDate } from '../../shared/time.js';
 import { openImageViewer } from './image-viewer.js';
+import { iconSvg } from '../../shared/icons.js';
 
 let selected = Number(localStorage.getItem('pdv2:twitterIndex') || 0);
 let retryTimer = null;
@@ -100,6 +101,101 @@ export async function warmTwitterFeeds({ force = false } = {}) {
   };
   await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
   return results;
+}
+
+
+function attachPullToRefresh(screen, indicator, onRefresh) {
+  let startY = null;
+  let startX = null;
+  let distance = 0;
+  let tracking = false;
+  let refreshing = false;
+  const trigger = 82;
+
+  const scrollTop = () => Math.max(0, Number(window.scrollY || document.scrollingElement?.scrollTop || 0));
+
+  const reset = () => {
+    startY = null;
+    startX = null;
+    distance = 0;
+    tracking = false;
+    indicator.classList.remove('pulling', 'ready');
+    indicator.style.setProperty('--pull', '0px');
+    const label = indicator.querySelector('.twitter-pull-label');
+    if (label) label.textContent = '下に引いて更新';
+  };
+
+  const onTouchStart = event => {
+    if (refreshing || event.touches.length !== 1 || scrollTop() > 1) return;
+    startY = event.touches[0].clientY;
+    startX = event.touches[0].clientX;
+    distance = 0;
+    tracking = true;
+  };
+
+  const onTouchMove = event => {
+    if (!tracking || refreshing || startY == null || event.touches.length !== 1) return;
+    const raw = event.touches[0].clientY - startY;
+    const dx = startX == null ? 0 : event.touches[0].clientX - startX;
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(raw) * 1.15) {
+      reset();
+      return;
+    }
+    if (raw <= 0) {
+      reset();
+      return;
+    }
+    if (scrollTop() > 1) {
+      reset();
+      return;
+    }
+
+    distance = raw;
+    const visual = Math.min(64, raw * 0.48);
+    indicator.classList.add('pulling');
+    indicator.classList.toggle('ready', raw >= trigger);
+    indicator.style.setProperty('--pull', `${visual}px`);
+    const label = indicator.querySelector('.twitter-pull-label');
+    if (label) label.textContent = raw >= trigger ? '指を離して更新' : '下に引いて更新';
+
+    // Safariのページ全体のゴム引っ張りより、アプリ側の更新UIを優先する。
+    if (raw > 8 && event.cancelable) event.preventDefault();
+  };
+
+  const onTouchEnd = () => {
+    if (!tracking || refreshing) return;
+    const shouldRefresh = distance >= trigger && scrollTop() <= 1;
+    if (!shouldRefresh) {
+      reset();
+      return;
+    }
+
+    refreshing = true;
+    tracking = false;
+    indicator.classList.remove('ready');
+    indicator.classList.add('pulling', 'refreshing');
+    indicator.style.setProperty('--pull', '48px');
+    const label = indicator.querySelector('.twitter-pull-label');
+    if (label) label.textContent = '更新中…';
+
+    Promise.resolve(onRefresh()).finally(() => {
+      refreshing = false;
+      indicator.classList.remove('refreshing');
+      reset();
+    });
+  };
+
+  screen.addEventListener('touchstart', onTouchStart, { passive: true });
+  screen.addEventListener('touchmove', onTouchMove, { passive: false });
+  screen.addEventListener('touchend', onTouchEnd, { passive: true });
+  screen.addEventListener('touchcancel', reset, { passive: true });
+
+  return () => {
+    screen.removeEventListener('touchstart', onTouchStart);
+    screen.removeEventListener('touchmove', onTouchMove);
+    screen.removeEventListener('touchend', onTouchEnd);
+    screen.removeEventListener('touchcancel', reset);
+  };
 }
 
 function manage(onDone) {
@@ -214,7 +310,7 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     actions: [
       { label: '＋', title: '追加/編集', onClick: () => manage(() => renderTwitter(root, { navigate, refresh: true })) },
       { label: '↻', title: '更新', onClick: () => renderTwitter(root, { navigate, refresh: true }) },
-      { label: '⚙︎', title: '設定', onClick: () => navigate('settings') }
+      { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   }));
 
@@ -238,11 +334,20 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   })));
   screen.append(chips);
 
+  const pullIndicator = el('div', { class: 'twitter-pull-refresh', 'aria-hidden': 'true' }, [
+    el('span', { class: 'twitter-pull-spinner', text: '↻' }),
+    el('span', { class: 'twitter-pull-label', text: '下に引いて更新' })
+  ]);
   const host = el('div', { class: 'twitter-feed-host' });
-  screen.append(host);
+  screen.append(pullIndicator, host);
   root.replaceChildren(screen);
   const active = chips.querySelector('.chip.active');
-  if (active) centerScrollItem(chips, active);
+  if (active) centerScrollItem(chips, active, { behavior: 'auto' });
+
+  attachPullToRefresh(screen, pullIndicator, () => {
+    localStorage.setItem(`pdv2:twitterScroll:${selected}`, '0');
+    return renderTwitter(root, { navigate, refresh: true });
+  });
 
   const draw = items => {
     if (generation !== renderGeneration) return;
