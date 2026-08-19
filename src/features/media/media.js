@@ -4,6 +4,7 @@ import { topbar, segmented } from '../../shared/components.js';
 import { renderYouTube } from '../youtube/youtube.js';
 import { renderTwitch } from '../twitch/twitch.js';
 import { applyTheme } from '../../app/router.js';
+import { iconSvg } from '../../shared/icons.js';
 
 export async function renderMedia(root, { navigate, refresh = false }) {
   window.dispatchEvent(new CustomEvent('pdv2:before-navigate', { detail: { screen: 'media', internal: true } }));
@@ -13,7 +14,7 @@ export async function renderMedia(root, { navigate, refresh = false }) {
     subtitle: 'YouTube / Twitch',
     actions: [
       { label: '↻', title: '更新', onClick: () => renderMedia(root, { navigate, refresh: true }) },
-      { label: '⚙︎', title: '設定', onClick: () => navigate('settings') }
+      { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   }));
   const segHost = el('div', { class: 'media-mode-nav' });
