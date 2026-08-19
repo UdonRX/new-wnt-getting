@@ -4,6 +4,66 @@ import { iconSvg } from '../../shared/icons.js';
 
 const summaryCache = new Map();
 const summaryPromises = new Map();
+const SUMMARY_STORAGE_KEY = 'pdv2:summaryCache:v210';
+const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v210';
+const AI_DAILY_LIMIT = 12;
+const AI_LAST_REQUEST_KEY = 'pdv2:summaryAiLastRequest:v210';
+const AI_MIN_INTERVAL_MS = 5000;
+const GEMINI_BLOCK_KEY = 'pdv2:geminiSummaryBlockedUntil';
+
+function todayKey() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function loadPersistentSummaries() {
+  try {
+    const rows = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '[]');
+    const now = Date.now();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!row?.key || !row?.summary) continue;
+      const ttl = row.summary.provider === 'gemini' ? 7 * 24 * 60 * 60 * 1000 : 12 * 60 * 60 * 1000;
+      if (now - Number(row.at || 0) > ttl) continue;
+      summaryCache.set(row.key, row.summary);
+    }
+  } catch {}
+}
+
+function savePersistentSummary(key, summary) {
+  if (!key || !summary) return;
+  try {
+    let rows = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '[]');
+    if (!Array.isArray(rows)) rows = [];
+    rows = rows.filter(row => row?.key !== key);
+    rows.unshift({ key, at: Date.now(), summary });
+    localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(rows.slice(0, 90)));
+  } catch {}
+}
+
+function aiBudget() {
+  try {
+    const value = JSON.parse(localStorage.getItem(AI_BUDGET_KEY) || 'null');
+    if (value?.day === todayKey()) return Math.max(0, Number(value.count || 0));
+  } catch {}
+  return 0;
+}
+
+function incrementAiBudget() {
+  localStorage.setItem(AI_BUDGET_KEY, JSON.stringify({ day: todayKey(), count: aiBudget() + 1 }));
+  localStorage.setItem(AI_LAST_REQUEST_KEY, String(Date.now()));
+}
+
+function canUseAiSummary() {
+  const now = Date.now();
+  const blockedUntil = Number(localStorage.getItem(GEMINI_BLOCK_KEY) || 0);
+  const lastRequest = Number(localStorage.getItem(AI_LAST_REQUEST_KEY) || 0);
+  return now >= blockedUntil && aiBudget() < AI_DAILY_LIMIT && now - lastRequest >= AI_MIN_INTERVAL_MS;
+}
+
+loadPersistentSummaries();
 
 function stripHtml(value = '') {
   const d = document.createElement('div');
@@ -20,24 +80,39 @@ function errorMessage(data, status) {
 
 async function fetchSummary(item, { force = false } = {}) {
   const key = item.link || item.id;
+  if (!key) throw new Error('記事IDがありません');
+
   if (!force && summaryCache.has(key)) return summaryCache.get(key);
   if (!force && summaryPromises.has(key)) return summaryPromises.get(key);
 
+  const allowAi = canUseAiSummary();
   const request = fetch('/api/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url: item.link,
       title: item.title,
-      description: stripHtml(item.description).slice(0, 7000),
+      description: stripHtml(item.description).slice(0, 6200),
       source: item.source,
-      fast: true
+      fast: true,
+      allowAi
     })
   }).then(async res => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(errorMessage(data, res.status));
+
+    if (data.provider === 'gemini') incrementAiBudget();
+    if (data.fallbackReason === 'quota') {
+      // 同じ画面操作で429を連発しない。30分はローカル要約へ直行。
+      localStorage.setItem(GEMINI_BLOCK_KEY, String(Date.now() + 30 * 60 * 1000));
+    } else if (data.fallbackReason && data.fallbackReason !== 'client-budget') {
+      // API一時障害/キー設定中でも記事ごとに失敗リクエストを連打しない。
+      localStorage.setItem(GEMINI_BLOCK_KEY, String(Date.now() + 5 * 60 * 1000));
+    }
+
     summaryCache.set(key, data);
-    while (summaryCache.size > 36) summaryCache.delete(summaryCache.keys().next().value);
+    savePersistentSummary(key, data);
+    while (summaryCache.size > 90) summaryCache.delete(summaryCache.keys().next().value);
     return data;
   }).finally(() => {
     if (summaryPromises.get(key) === request) summaryPromises.delete(key);
@@ -47,11 +122,15 @@ async function fetchSummary(item, { force = false } = {}) {
   return request;
 }
 
+/*
+ * V2.10: 自動先読みで無料Gemini枠を消費しない。
+ * 次の記事に既存キャッシュがあればMapへ戻すだけにする。
+ */
 function prefetchSummary(item) {
   if (!item) return;
   const key = item.link || item.id;
-  if (!key || summaryCache.has(key) || summaryPromises.has(key)) return;
-  fetchSummary(item).catch(() => {});
+  if (!key || summaryCache.has(key)) return;
+  // ネットワーク呼び出しはしない。実際に記事を開いた時だけ要約する。
 }
 
 function chatSheet(item, summary) {
@@ -105,7 +184,11 @@ function chatSheet(item, summary) {
         { role: 'assistant', content: answer }
       );
     } catch (err) {
-      log.append(el('div', { class: 'error-box', text: err.message }));
+      const raw = String(err?.message || '');
+      const message = /quota|rate.?limit|resource_exhausted|too many requests/i.test(raw)
+        ? 'AI質問は現在利用上限です。記事の要約はそのまま読めます。'
+        : raw;
+      log.append(el('div', { class: 'error-box', text: message }));
     } finally {
       send.disabled = false;
     }
@@ -145,7 +228,7 @@ function renderProgress(progressHost, { label, index, total, onList }) {
 
 function createSummaryLoader() {
   const box = el('div', { class: 'summary-loading-box' });
-  const label = el('div', { class: 'summary-loading-label', text: 'AI要約を作成中…' });
+  const label = el('div', { class: 'summary-loading-label', text: '要約を準備中…' });
   const track = el('div', { class: 'summary-loading-track' });
   const fill = el('div', { class: 'summary-loading-fill' });
   const percent = el('span', { class: 'summary-loading-percent', text: '8%' });
@@ -189,7 +272,7 @@ function paperDateLabel(item) {
   return shortDate(item?.pubDate);
 }
 
-function renderSummary(summaryHost, summary) {
+function renderSummary(summaryHost, summary, item = null) {
   summaryHost.replaceChildren();
 
   if (summary.short) {
@@ -199,7 +282,7 @@ function renderSummary(summaryHost, summary) {
     ]));
   }
 
-  const points = Array.isArray(summary.points) ? summary.points.slice(0, 3) : [];
+  const points = Array.isArray(summary.points) ? summary.points.slice(0, 2) : [];
   if (points.length) {
     const ul = el('ul', { class: 'summary-points-compact' });
     points.forEach(point => ul.append(el('li', { text: point })));
@@ -209,9 +292,12 @@ function renderSummary(summaryHost, summary) {
     ]));
   }
 
+  const noteParts = [];
+  if (item?._recommendationLabel) noteParts.push(item._recommendationLabel);
+  noteParts.push(summary.provider === 'gemini' ? 'AI要約' : 'RSS本文・抄録から高速要約');
   summaryHost.append(el('div', {
     class: 'source-note',
-    text: summary.fastPath === 'rss-abstract-fast' ? 'RSS本文・抄録から高速要約' : 'AI要約'
+    text: noteParts.join(' ・ ')
   }));
 }
 
@@ -404,7 +490,7 @@ export function mountFocus(host, {
     body.append(
       el('div', {
         class: 'focus-source',
-        text: `${item.source || ''} ・ ${paperDateLabel(item)}`
+        text: `${item._recommendationLabel ? `${item._recommendationLabel} ・ ` : ''}${item.source || ''} ・ ${paperDateLabel(item)}`
       }),
       el('h2', {
         class: 'focus-title',
@@ -420,7 +506,7 @@ export function mountFocus(host, {
     const cached = summaryCache.get(item.link || item.id);
     let loader = null;
 
-    if (cached) renderSummary(summaryHost, cached);
+    if (cached) renderSummary(summaryHost, cached, item);
     else {
       loader = createSummaryLoader();
       summaryHost.append(loader.node);
@@ -483,7 +569,7 @@ export function mountFocus(host, {
         .then(summary => {
           loader?.finish();
           if (destroyed || items[index] !== item || !summaryHost.isConnected) return;
-          renderSummary(summaryHost, summary);
+          renderSummary(summaryHost, summary, item);
           // 次の記事はユーザーが今の記事を読んでいる間に先読みする。
           prefetchSummary(items[index + 1]);
         })
@@ -503,7 +589,7 @@ export function mountFocus(host, {
                   summaryHost.replaceChildren(retryLoader.node);
                   const retrySummary = await fetchSummary(item, { force: true });
                   retryLoader.finish();
-                  renderSummary(summaryHost, retrySummary);
+                  renderSummary(summaryHost, retrySummary, item);
                 } catch (retryError) {
                   summaryHost.replaceChildren(el('div', {
                     class: 'error-box',
