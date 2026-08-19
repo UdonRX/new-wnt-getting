@@ -2,10 +2,11 @@ import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
 import { topbar, segmented, collectionManager } from '../../shared/components.js';
 import { loadReader, feedsFor } from './reader-data.js';
-import { chooseTop, requestAiRank } from './reader-rank.js';
+import { chooseTop } from './reader-rank.js';
 import { mountFocus } from './reader-focus.js';
 import { shortDate } from '../../shared/time.js';
 import { attachSwipe } from '../../shared/gestures.js';
+import { iconSvg } from '../../shared/icons.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
 
@@ -311,6 +312,69 @@ function cachedAiRanking(mode, track, family = 'all') {
   }
 }
 
+
+function tagRecommendation(item, mode, track = 'core') {
+  return {
+    ...item,
+    _readerMode: mode,
+    _paperTrack: track,
+    _recommendationLabel: mode === 'news' ? 'ニュース' : mode === 'knowledge' ? '知識' : '論文'
+  };
+}
+
+function uniqueItems(items) {
+  const seen = new Set();
+  return items.filter(item => {
+    const key = item?.id || item?.link || item?.title;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function loadMixedRecommendations(force = false) {
+  const jobs = [
+    loadReader('news', { force, selectedFeed: '' }),
+    loadReader('knowledge', { force, selectedFeed: '' }),
+    loadReader('papers', { force, selectedFeed: '', paperTrack: 'core' }),
+    loadReader('papers', { force, selectedFeed: '', paperTrack: 'creative' })
+  ];
+  const settled = await Promise.allSettled(jobs);
+  const rows = settled.map(result => result.status === 'fulfilled' ? result.value?.items || [] : []);
+
+  const news = uniqueItems(rows[0]).map(item => tagRecommendation(item, 'news', 'core'));
+  const knowledge = uniqueItems(rows[1]).map(item => tagRecommendation(item, 'knowledge', 'core'));
+  const core = uniqueItems(rows[2]).map(item => tagRecommendation(item, 'papers', 'core'));
+  const creative = uniqueItems(rows[3]).map(item => tagRecommendation(item, 'papers', 'creative'));
+
+  // Gemini順位付けは使わない。無料枠は実際に読む記事の要約へ残す。
+  const newsTop = chooseTop(news, 'news', getRead('news', 'core'), Math.min(3, news.length), []);
+  const knowledgeTop = chooseTop(knowledge, 'knowledge', getRead('knowledge', 'core'), Math.min(3, knowledge.length), []);
+  const coreTop = chooseTop(core, 'papers', getRead('papers', 'core'), Math.min(2, core.length), []);
+  const creativeTop = chooseTop(creative, 'papers', getRead('papers', 'creative'), Math.min(2, creative.length), []);
+  const paperTop = [];
+  if (coreTop[0]) paperTop.push(coreTop[0]);
+  if (creativeTop[0]) paperTop.push(creativeTop[0]);
+  if (coreTop[1]) paperTop.push(coreTop[1]);
+  if (creativeTop[1]) paperTop.push(creativeTop[1]);
+
+  // ニュース・知識・論文が偏らないよう1件ずつ交互に並べる。
+  const mixed = [];
+  const buckets = [newsTop, knowledgeTop, paperTop];
+  for (let i = 0; i < 3; i += 1) {
+    buckets.forEach(bucket => { if (bucket[i]) mixed.push(bucket[i]); });
+  }
+  return uniqueItems(mixed).slice(0, 8);
+}
+
+function markRecommendationRead(item) {
+  const mode = item?._readerMode || 'news';
+  const track = item?._paperTrack || 'core';
+  const read = getRead(mode, track);
+  read.add(item.id);
+  saveRead(mode, track, read);
+}
+
 function scrollContentToTop(host) {
   requestAnimationFrame(() => {
     if (!host?.isConnected) return;
@@ -328,16 +392,17 @@ export async function renderReader(root, { navigate, refresh = false }) {
   const firstEntry = !readerSessionStarted;
   readerSessionStarted = true;
 
-  const mode = state.readerMode || 'news';
-  const track = mode === 'papers' ? paperTrack() : 'core';
-
-  // 「読む」へ入った最初の1回だけおすすめ。
-  // ニュース/知識では保存済みの小タブに依存せず All から候補を選ぶ。
+  // V2.10: Readerへ外から入った時だけ、ニュース・知識・論文を横断したおすすめを表示。
+  // おすすめを閉じた後の起点は必ず「ニュース / All」に統一する。
   if (firstEntry) {
+    update('lastReaderMode', 'news');
+    setSelectedFeed('news', '');
     view = 'recommendations';
     recommendationIndex = 0;
-    if (mode !== 'papers') setSelectedFeed(mode, '');
   }
+
+  const mode = state.readerMode || 'news';
+  const track = mode === 'papers' ? paperTrack() : 'core';
 
   const screen = el('section', { class: 'screen reader-screen' });
   const rerender = (force = false) => renderReader(root, { navigate, refresh: force });
@@ -349,7 +414,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
     actions: [
       { label: '＋', title: '追加/編集', onClick: () => manageFeeds(mode, rerender) },
       { label: '↻', title: '更新', onClick: () => rerender(true) },
-      { label: '⚙︎', title: '設定', onClick: () => navigate('settings') }
+      { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   }));
 
@@ -431,6 +496,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
   }
 
   let chosen = [];
+  let recommendationItems = [];
 
   const goLeaf = ({ nextMode = mode, feed, nextTrack, family } = {}) => {
     if (nextMode !== mode) update('lastReaderMode', nextMode);
@@ -528,6 +594,47 @@ export async function renderReader(root, { navigate, refresh = false }) {
     focusHandle = null;
     progressHost.replaceChildren();
 
+    if (view === 'recommendations') {
+      if (!recommendationItems.length) {
+        host.replaceChildren(el('div', { class: 'empty', text: 'おすすめを取得できませんでした。記事一覧を表示します。' }));
+        setTimeout(() => {
+          setSelectedFeed('news', '');
+          update('lastReaderMode', 'news');
+          view = 'list';
+          renderReader(root, { navigate });
+        }, 450);
+        return;
+      }
+
+      recommendationIndex = Math.max(0, Math.min(recommendationIndex, recommendationItems.length - 1));
+      host.replaceChildren();
+
+      const closeRecommendations = () => {
+        // ユーザー指定: おすすめ終了後は必ずニュースのAllへ。
+        setSelectedFeed('news', '');
+        update('lastReaderMode', 'news');
+        view = 'list';
+        recommendationIndex = 0;
+        renderReader(root, { navigate });
+      };
+
+      focusHandle = mountFocus(host, {
+        items: recommendationItems,
+        initialIndex: recommendationIndex,
+        label: 'おすすめ',
+        progressHost,
+        onStart: closeRecommendations,
+        onList: closeRecommendations,
+        onEnd: closeRecommendations,
+        onIndexChange: (index, item) => {
+          recommendationIndex = index;
+          markRecommendationRead(item);
+        },
+        horizontalHint: 'おすすめ'
+      });
+      return;
+    }
+
     const family = mode === 'papers' && track === 'creative' ? creativeFamily() : 'all';
     const visibleItems = mode === 'papers' && track === 'creative'
       ? filterCreativeItems(allItems, family)
@@ -589,61 +696,18 @@ export async function renderReader(root, { navigate, refresh = false }) {
       return;
     }
 
-    // 初回おすすめ。件数はUI上で固定せず、取得できた件数をそのまま進捗に使う。
-    // ニュース/知識では firstEntry 時に selectedFeed を All に戻しているため、
-    // すべての小タブの記事を候補にランキングされる。
-    const read = getRead(mode, track);
-    chosen = chooseTop(
-      visibleItems,
-      rankMode,
-      read,
-      Math.min(5, visibleItems.length),
-      state.settings.rankWithAi ? cachedAiRanking(mode, track, family) : []
-    );
+    // recommendations は上の専用分岐で処理する。
 
-    if (!chosen.length) {
-      view = 'list';
+  };
+
+  try {
+    if (view === 'recommendations') {
+      host.replaceChildren(el('div', { class: 'card', html: '<div class="loading">ニュース・知識・論文からおすすめを選んでいます...</div>' }));
+      recommendationItems = await loadMixedRecommendations(refresh);
       renderContent();
       return;
     }
 
-    recommendationIndex = Math.max(0, Math.min(recommendationIndex, chosen.length - 1));
-    host.replaceChildren();
-
-    focusHandle = mountFocus(host, {
-      items: chosen,
-      initialIndex: recommendationIndex,
-      label: recommendationLabel(mode, track, family),
-      progressHost,
-      onStart: () => {
-        // おすすめの1本目を先頭から下へスワイプ → すぐ記事一覧。
-        view = 'list';
-        recommendationIndex = 0;
-        renderContent();
-        scrollContentToTop(host);
-      },
-      onList: () => {
-        view = 'list';
-        renderContent();
-        scrollContentToTop(host);
-      },
-      onEnd: () => {
-        // 最後のおすすめを読み切った後、末尾でもう一度上スワイプ → 記事一覧。
-        view = 'list';
-        recommendationIndex = 0;
-        renderContent();
-        scrollContentToTop(host);
-      },
-      onIndexChange: (index, item) => {
-        recommendationIndex = index;
-        read.add(item.id);
-        saveRead(mode, track, read);
-      },
-      ...horizontalOptions
-    });
-  };
-
-  try {
     const selectedFeed = getSelectedFeed(mode);
     const result = await loadReader(mode, {
       force: refresh,
@@ -660,26 +724,6 @@ export async function renderReader(root, { navigate, refresh = false }) {
     allItems = result.items;
     renderContent();
 
-    if (state.settings.rankWithAi && allItems.length) {
-      const family = mode === 'papers' && track === 'creative' ? creativeFamily() : 'all';
-      const visible = mode === 'papers' && track === 'creative'
-        ? filterCreativeItems(allItems, family)
-        : allItems;
-      const rankMode = mode === 'papers' && track === 'creative'
-        ? creativeRankMode(family)
-        : mode;
-
-      requestAiRank(visible, rankMode)
-        .then(data => {
-          if (data?.ranking?.length) {
-            localStorage.setItem(rankKey(mode, track, family), JSON.stringify({
-              at: Date.now(),
-              ranking: data.ranking
-            }));
-          }
-        })
-        .catch(() => {});
-    }
   } catch (err) {
     progressHost.replaceChildren();
     host.replaceChildren(el('div', { class: 'error-box', text: err.message }));
