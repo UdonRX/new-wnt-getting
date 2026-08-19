@@ -18,15 +18,14 @@ export function readerCacheKey(mode, paperTrack = 'core') {
 export function readReaderCache(mode, paperTrack = 'core') {
   try {
     let data = JSON.parse(localStorage.getItem(readerCacheKey(mode, paperTrack)) || 'null');
-    // beta初期版の論文キャッシュがあれば「製品・熱」側だけ互換読込する。
     if (!data && mode === 'papers' && paperTrack !== 'creative') {
       data = JSON.parse(localStorage.getItem('pdv2:readerCache:papers') || 'null');
     }
     if (!data?.items?.length) return null;
     return {
       ...data,
-      items: data.items.map(i => ({ ...i, pubDate: new Date(i.pubDate) })),
-      fresh: Date.now() - data.at < CACHE_TTL
+      items: data.items.map(item => ({ ...item, pubDate: new Date(item.pubDate) })),
+      fresh: Date.now() - Number(data.at || 0) < CACHE_TTL
     };
   } catch {
     return null;
@@ -75,16 +74,23 @@ export async function loadReader(mode, {
   force = false,
   onProgress,
   selectedFeed = '',
-  paperTrack = 'core'
+  paperTrack = 'core',
+  fastOnly = false,
+  preferCache = false
 } = {}) {
   const normalizedTrack = paperTrack === 'creative' ? 'creative' : 'core';
   const cached = !force ? readReaderCache(mode, normalizedTrack) : null;
 
+  let visibleCached = [];
   if (cached?.items?.length) {
-    const visibleCached = selectedFeed && mode !== 'papers'
+    visibleCached = selectedFeed && mode !== 'papers'
       ? cached.items.filter(item => item.feedName === selectedFeed)
       : cached.items;
     if (visibleCached.length) onProgress?.(visibleCached, { cached: true, paperTrack: normalizedTrack });
+    // おすすめ選定など「速さ優先」の用途では、既存キャッシュを即返して外部API待ちをなくす。
+    if (preferCache && visibleCached.length) {
+      return { items: visibleCached, failures: [], cached: true, paperTrack: normalizedTrack };
+    }
   }
 
   const allFeeds = feedsFor(mode);
@@ -97,24 +103,19 @@ export async function loadReader(mode, {
   if (mode === 'papers') {
     const base = normalizedTrack === 'creative' ? '/api/creative-papers-feed' : '/api/papers-feed';
     const label = normalizedTrack === 'creative' ? '独創研究' : '製品・熱研究';
-
     try {
       const fast = await fetchFeed({ name: label, url: `${base}?mode=fast` });
       collected.push(...fast);
       onProgress?.(dedupeSort(collected), { stage: 'fast', paperTrack: normalizedTrack });
-    } catch (err) {
-      failures.push(err);
-    }
-
-    // 先行表示後に詳細ソースを追加する。fastが失敗してもdeepは試す。
-    try {
-      const deep = await fetchFeed({ name: label, url: `${base}?mode=deep` });
-      collected.push(...deep);
-    } catch (err) {
-      failures.push(err);
+    } catch (err) { failures.push(err); }
+    if (!fastOnly) {
+      try {
+        const deep = await fetchFeed({ name: label, url: `${base}?mode=deep` });
+        collected.push(...deep);
+      } catch (err) { failures.push(err); }
     }
   } else {
-    const queue = feeds.map((feed, index) => ({ feed, index }));
+    const queue = feeds.map(feed => ({ feed }));
     const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
       while (queue.length) {
         const { feed } = queue.shift();
