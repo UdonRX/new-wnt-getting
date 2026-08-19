@@ -1,7 +1,7 @@
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
 import { topbar, segmented, collectionManager } from '../../shared/components.js';
-import { loadReader, feedsFor } from './reader-data.js';
+import { loadReader, feedsFor, readReaderCache } from './reader-data.js';
 import { chooseTop } from './reader-rank.js';
 import { mountFocus } from './reader-focus.js';
 import { shortDate } from '../../shared/time.js';
@@ -332,39 +332,134 @@ function uniqueItems(items) {
   });
 }
 
-async function loadMixedRecommendations(force = false) {
-  const jobs = [
-    loadReader('news', { force, selectedFeed: '' }),
-    loadReader('knowledge', { force, selectedFeed: '' }),
-    loadReader('papers', { force, selectedFeed: '', paperTrack: 'core' }),
-    loadReader('papers', { force, selectedFeed: '', paperTrack: 'creative' })
-  ];
-  const settled = await Promise.allSettled(jobs);
-  const rows = settled.map(result => result.status === 'fulfilled' ? result.value?.items || [] : []);
+async function loadMixedRecommendations(force = false, onProgress = () => {}) {
+  const cacheKey = 'pdv2:mixedRecommendations:v211';
+  const CACHE_TTL = 2 * 60 * 60 * 1000;
 
-  const news = uniqueItems(rows[0]).map(item => tagRecommendation(item, 'news', 'core'));
-  const knowledge = uniqueItems(rows[1]).map(item => tagRecommendation(item, 'knowledge', 'core'));
-  const core = uniqueItems(rows[2]).map(item => tagRecommendation(item, 'papers', 'core'));
-  const creative = uniqueItems(rows[3]).map(item => tagRecommendation(item, 'papers', 'creative'));
+  if (!force) {
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+      if (cached?.items?.length && Date.now() - Number(cached.at || 0) < CACHE_TTL) {
+        onProgress({ percent: 100, label: 'おすすめを準備しました', done: ['news','knowledge','papers'], cached: true });
+        return cached.items.map(item => ({ ...item, pubDate: new Date(item.pubDate) }));
+      }
+    } catch {}
+  }
 
-  // Gemini順位付けは使わない。無料枠は実際に読む記事の要約へ残す。
-  const newsTop = chooseTop(news, 'news', getRead('news', 'core'), Math.min(3, news.length), []);
-  const knowledgeTop = chooseTop(knowledge, 'knowledge', getRead('knowledge', 'core'), Math.min(3, knowledge.length), []);
-  const coreTop = chooseTop(core, 'papers', getRead('papers', 'core'), Math.min(2, core.length), []);
-  const creativeTop = chooseTop(creative, 'papers', getRead('papers', 'creative'), Math.min(2, creative.length), []);
+  const done = new Set();
+  const updateProgress = (bucket, label) => {
+    done.add(bucket);
+    const percent = 8 + Math.round(done.size / 3 * 88);
+    onProgress({ percent, label, done: [...done] });
+  };
+  onProgress({ percent: 8, label: '候補を準備しています', done: [] });
+
+  const newsJob = loadReader('news', {
+    force,
+    selectedFeed: '',
+    preferCache: !force
+  }).then(result => {
+    updateProgress('news', 'ニュースを選びました');
+    return result?.items || [];
+  }).catch(() => {
+    updateProgress('news', 'ニュースを確認しました');
+    return readReaderCache('news')?.items || [];
+  });
+
+  const knowledgeJob = loadReader('knowledge', {
+    force,
+    selectedFeed: '',
+    preferCache: !force
+  }).then(result => {
+    updateProgress('knowledge', '知識を選びました');
+    return result?.items || [];
+  }).catch(() => {
+    updateProgress('knowledge', '知識を確認しました');
+    return readReaderCache('knowledge')?.items || [];
+  });
+
+  const papersJob = (async () => {
+    const cachedCore = !force ? readReaderCache('papers', 'core')?.items || [] : [];
+    const cachedCreative = !force ? readReaderCache('papers', 'creative')?.items || [] : [];
+    if (cachedCore.length || cachedCreative.length) {
+      updateProgress('papers', '論文を選びました');
+      return { core: cachedCore, creative: cachedCreative };
+    }
+
+    // 初回でも deep 検索を待たない。fast だけを並列取得し、Reader表示を先に返す。
+    const [coreResult, creativeResult] = await Promise.allSettled([
+      loadReader('papers', { force, selectedFeed: '', paperTrack: 'core', fastOnly: true }),
+      loadReader('papers', { force, selectedFeed: '', paperTrack: 'creative', fastOnly: true })
+    ]);
+    updateProgress('papers', '論文を選びました');
+    return {
+      core: coreResult.status === 'fulfilled' ? coreResult.value?.items || [] : [],
+      creative: creativeResult.status === 'fulfilled' ? creativeResult.value?.items || [] : []
+    };
+  })().catch(() => {
+    updateProgress('papers', '論文を確認しました');
+    return {
+      core: readReaderCache('papers', 'core')?.items || [],
+      creative: readReaderCache('papers', 'creative')?.items || []
+    };
+  });
+
+  const [newsRows, knowledgeRows, paperRows] = await Promise.all([newsJob, knowledgeJob, papersJob]);
+
+  const news = uniqueItems(newsRows).map(item => tagRecommendation(item, 'news', 'core'));
+  const knowledge = uniqueItems(knowledgeRows).map(item => tagRecommendation(item, 'knowledge', 'core'));
+  const core = uniqueItems(paperRows.core || []).map(item => tagRecommendation(item, 'papers', 'core'));
+  const creative = uniqueItems(paperRows.creative || []).map(item => tagRecommendation(item, 'papers', 'creative'));
+
+  const newsTop = chooseTop(news, 'news', getRead('news', 'core'), Math.min(4, news.length), []);
+  const knowledgeTop = chooseTop(knowledge, 'knowledge', getRead('knowledge', 'core'), Math.min(4, knowledge.length), []);
+  const coreTop = chooseTop(core, 'papers', getRead('papers', 'core'), Math.min(3, core.length), []);
+  const creativeTop = chooseTop(creative, 'papers', getRead('papers', 'creative'), Math.min(3, creative.length), []);
+
   const paperTop = [];
-  if (coreTop[0]) paperTop.push(coreTop[0]);
-  if (creativeTop[0]) paperTop.push(creativeTop[0]);
-  if (coreTop[1]) paperTop.push(coreTop[1]);
-  if (creativeTop[1]) paperTop.push(creativeTop[1]);
+  for (let i = 0; i < 3; i += 1) {
+    if (coreTop[i]) paperTop.push(coreTop[i]);
+    if (creativeTop[i]) paperTop.push(creativeTop[i]);
+  }
 
-  // ニュース・知識・論文が偏らないよう1件ずつ交互に並べる。
   const mixed = [];
   const buckets = [newsTop, knowledgeTop, paperTop];
-  for (let i = 0; i < 3; i += 1) {
-    buckets.forEach(bucket => { if (bucket[i]) mixed.push(bucket[i]); });
-  }
-  return uniqueItems(mixed).slice(0, 8);
+  for (let i = 0; i < 4; i += 1) buckets.forEach(bucket => { if (bucket[i]) mixed.push(bucket[i]); });
+  const result = uniqueItems(mixed).slice(0, 10);
+
+  try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), items: result })); } catch {}
+  onProgress({ percent: 100, label: 'おすすめを準備しました', done: ['news','knowledge','papers'] });
+  return result;
+}
+
+export function warmReaderRecommendations() {
+  return loadMixedRecommendations(false, () => {});
+}
+
+function createRecommendationLoader() {
+  const card = el('div', { class: 'card recommendation-loading-card' });
+  const title = el('strong', { text: '今日のおすすめを選んでいます' });
+  const label = el('div', { class: 'recommendation-loading-label', text: '候補を準備しています' });
+  const track = el('div', { class: 'recommendation-loading-track' });
+  const fill = el('div', { class: 'recommendation-loading-fill' });
+  track.append(fill);
+  const steps = el('div', { class: 'recommendation-loading-steps' });
+  const stepNodes = new Map();
+  [['news','ニュース'],['knowledge','知識'],['papers','論文']].forEach(([key, text]) => {
+    const node = el('span', { text });
+    stepNodes.set(key, node);
+    steps.append(node);
+  });
+  card.append(title, label, track, steps);
+  return {
+    node: card,
+    update(state = {}) {
+      fill.style.width = `${Math.max(6, Math.min(100, Number(state.percent || 0)))}%`;
+      if (state.label) label.textContent = state.label;
+      const done = new Set(state.done || []);
+      stepNodes.forEach((node, key) => node.classList.toggle('done', done.has(key)));
+    }
+  };
 }
 
 function markRecommendationRead(item) {
@@ -702,8 +797,9 @@ export async function renderReader(root, { navigate, refresh = false }) {
 
   try {
     if (view === 'recommendations') {
-      host.replaceChildren(el('div', { class: 'card', html: '<div class="loading">ニュース・知識・論文からおすすめを選んでいます...</div>' }));
-      recommendationItems = await loadMixedRecommendations(refresh);
+      const loader = createRecommendationLoader();
+      host.replaceChildren(loader.node);
+      recommendationItems = await loadMixedRecommendations(refresh, progress => loader.update(progress));
       renderContent();
       return;
     }
