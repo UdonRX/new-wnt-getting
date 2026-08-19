@@ -2,14 +2,15 @@ import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 import { renderHome } from './features/home/home.js';
 import { renderWeather } from './features/weather/weather.js';
-import { renderReader } from './features/reader/reader.js';
+import { renderReader, warmReaderRecommendations } from './features/reader/reader.js';
 import { renderMedia } from './features/media/media.js';
 import { renderTwitter, warmTwitterFeeds } from './features/twitter/twitter.js';
+import { renderWikipedia } from './features/wikipedia/wikipedia.js';
 import { renderSettings } from './features/settings/settings.js';
 import { handleTwitchOAuthReturn } from './features/twitch/twitch-chat.js';
 
 const root = document.getElementById('app-main');
-const renderers = { home: renderHome, weather: renderWeather, reader: renderReader, media: renderMedia, twitter: renderTwitter, settings: renderSettings };
+const renderers = { home: renderHome, weather: renderWeather, reader: renderReader, media: renderMedia, twitter: renderTwitter, wikipedia: renderWikipedia, settings: renderSettings };
 let renderSerial = 0;
 
 export async function navigate(screen, options = {}) {
@@ -36,9 +37,10 @@ async function boot() {
   applyTheme();
 
   // 独創研究の日付/検索ロジックをV2.9で変更したため、旧1/1補完データを1回だけ破棄する。
-  if (localStorage.getItem('pdv2:creativeCacheVersion') !== 'v29') {
+  if (localStorage.getItem('pdv2:creativeCacheVersion') !== 'v211') {
     localStorage.removeItem('pdv2:readerCache:papers:creative');
-    localStorage.setItem('pdv2:creativeCacheVersion', 'v29');
+    localStorage.removeItem('pdv2:mixedRecommendations:v211');
+    localStorage.setItem('pdv2:creativeCacheVersion', 'v211');
   }
 
   // SNSは画面を開く前から裏で取得開始。Render/RSSHubが寝ていても他画面を見ている間に起こす。
@@ -49,6 +51,13 @@ async function boot() {
 
   // V2.9: PWA/ブラウザを起動した時は、前回終了画面に関係なく必ずホームから始める。
   await navigate('home');
+
+  // V2.11: ホームを見ている間にReaderおすすめ候補を先に温める。
+  // 画面表示をブロックせず、キャッシュがある場合はほぼ即完了する。
+  setTimeout(() => {
+    warmReaderRecommendations().catch(err => console.warn('[reader-warm]', err));
+  }, 450);
+
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(err => console.warn('[sw]', err));
   window.addEventListener('pdv2:settings-changed', applyTheme);
   window.addEventListener('pdv2:context-changed', () => { applyTheme(); renderNav(navigate); });
