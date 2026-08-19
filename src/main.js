@@ -4,7 +4,7 @@ import { renderHome } from './features/home/home.js';
 import { renderWeather } from './features/weather/weather.js';
 import { renderReader } from './features/reader/reader.js';
 import { renderMedia } from './features/media/media.js';
-import { renderTwitter } from './features/twitter/twitter.js';
+import { renderTwitter, warmTwitterFeeds } from './features/twitter/twitter.js';
 import { renderSettings } from './features/settings/settings.js';
 import { handleTwitchOAuthReturn } from './features/twitch/twitch-chat.js';
 
@@ -34,9 +34,21 @@ export async function navigate(screen, options = {}) {
 
 async function boot() {
   applyTheme();
+
+  // 独創研究の日付/検索ロジックをV2.9で変更したため、旧1/1補完データを1回だけ破棄する。
+  if (localStorage.getItem('pdv2:creativeCacheVersion') !== 'v29') {
+    localStorage.removeItem('pdv2:readerCache:papers:creative');
+    localStorage.setItem('pdv2:creativeCacheVersion', 'v29');
+  }
+
+  // SNSは画面を開く前から裏で取得開始。Render/RSSHubが寝ていても他画面を見ている間に起こす。
+  warmTwitterFeeds().catch(err => console.warn('[twitter-warm]', err));
+
   await handleTwitchOAuthReturn().catch(err => console.warn('[twitch-oauth]', err));
   renderNav(navigate);
-  await navigate(state.screen || 'home');
+
+  // V2.9: PWA/ブラウザを起動した時は、前回終了画面に関係なく必ずホームから始める。
+  await navigate('home');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(err => console.warn('[sw]', err));
   window.addEventListener('pdv2:settings-changed', applyTheme);
   window.addEventListener('pdv2:context-changed', () => { applyTheme(); renderNav(navigate); });
