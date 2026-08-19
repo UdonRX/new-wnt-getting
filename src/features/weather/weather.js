@@ -214,13 +214,76 @@ function openLocationManager(onDone) {
   sheet = openSheet(wrap, { title: '天気の地域' });
 }
 
+function attachPullDownDismiss(sheetRef) {
+  const sheet = sheetRef?.sheet;
+  if (!sheet) return () => {};
+  let startY = 0;
+  let startX = 0;
+  let pulling = false;
+
+  const reset = () => {
+    sheet.style.transition = 'transform .18s ease';
+    sheet.style.transform = '';
+    setTimeout(() => { if (sheet.isConnected) sheet.style.transition = ''; }, 190);
+  };
+
+  const onStart = event => {
+    if (event.touches?.length !== 1) return;
+    const touch = event.touches[0];
+    const rect = sheet.getBoundingClientRect();
+    // シート上端（ハンドル〜タイトル付近）から始めた下スワイプだけを対象にする。
+    if (touch.clientY - rect.top > 96) return;
+    startY = touch.clientY;
+    startX = touch.clientX;
+    pulling = true;
+    sheet.style.transition = 'none';
+  };
+
+  const onMove = event => {
+    if (!pulling || event.touches?.length !== 1) return;
+    const touch = event.touches[0];
+    const dy = touch.clientY - startY;
+    const dx = touch.clientX - startX;
+    if (dy <= 0 || Math.abs(dx) > Math.abs(dy) * .9) return;
+    if (event.cancelable) event.preventDefault();
+    sheet.style.transform = `translateY(${Math.min(150, dy * .72)}px)`;
+  };
+
+  const onEnd = event => {
+    if (!pulling) return;
+    pulling = false;
+    const touch = event.changedTouches?.[0];
+    const dy = touch ? touch.clientY - startY : 0;
+    const dx = touch ? touch.clientX - startX : 0;
+    if (dy >= 82 && Math.abs(dy) > Math.abs(dx)) {
+      sheet.style.transition = 'transform .16s ease';
+      sheet.style.transform = 'translateY(110%)';
+      setTimeout(() => sheetRef.close(), 140);
+      return;
+    }
+    reset();
+  };
+
+  sheet.addEventListener('touchstart', onStart, { passive: true });
+  sheet.addEventListener('touchmove', onMove, { passive: false });
+  sheet.addEventListener('touchend', onEnd, { passive: true });
+  sheet.addEventListener('touchcancel', onEnd, { passive: true });
+
+  return () => {
+    sheet.removeEventListener('touchstart', onStart);
+    sheet.removeEventListener('touchmove', onMove);
+    sheet.removeEventListener('touchend', onEnd);
+    sheet.removeEventListener('touchcancel', onEnd);
+  };
+}
+
 function openLocationAdd(onDone) {
   const wrap = el('div');
   let sheet;
 
   const field = el('div', { class: 'field' });
-  field.append(el('label', { text: '市区町村・地域名' }));
-  const input = el('input', { placeholder: '例：京都市、丸亀市、札幌市' });
+  field.append(el('label', { text: '都道府県・市区町村' }));
+  const input = el('input', { placeholder: '例：香川、高松、京都市' });
   field.append(input);
   wrap.append(field);
 
@@ -270,7 +333,9 @@ function openLocationAdd(onDone) {
   }));
 
   sheet = openSheet(wrap, { title: '地域を追加' });
+  attachPullDownDismiss(sheet);
 }
+
 
 export async function renderWeather(root, { navigate, refresh = false }) {
   if (selectedIndex >= state.weatherLocations.length) selectedIndex = 0;
