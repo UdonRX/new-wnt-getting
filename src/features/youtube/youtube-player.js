@@ -1,16 +1,151 @@
 import { el, showToast } from '../../shared/dom.js';
-import { attachSwipe } from '../../shared/gestures.js';
 
-let apiPromise=null;let player=null;let modal=null;let list=[];let index=0;let endedTimer=null;let detachShortSwipe=null;
-const autoNext=()=>localStorage.getItem('pdv2:youtubeAutoNext')!=='0';
-function ensureApi(){if(window.YT?.Player)return Promise.resolve(window.YT);if(apiPromise)return apiPromise;apiPromise=new Promise((resolve,reject)=>{const prev=window.onYouTubeIframeAPIReady;window.onYouTubeIframeAPIReady=()=>{prev?.();resolve(window.YT);};if(!document.querySelector('script[src*="youtube.com/iframe_api"]')){const s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';s.onerror=reject;document.head.append(s);}setTimeout(()=>window.YT?.Player&&resolve(window.YT),4000);});return apiPromise;}
-export function cleanupYouTubePlayer(){if(endedTimer)clearTimeout(endedTimer);endedTimer=null;detachShortSwipe?.();detachShortSwipe=null;try{player?.pauseVideo?.();}catch{}try{player?.destroy?.();}catch{}player=null;modal?.remove();modal=null;document.documentElement.classList.remove('media-player-open');}
-window.addEventListener('pdv2:before-navigate',cleanupYouTubePlayer);
-function setLandscape(on){if(!modal||modal.classList.contains('shorts'))return;modal.classList.toggle('css-landscape',Boolean(on));modal.dataset.landscape=on?'1':'0';document.documentElement.classList.toggle('media-player-open',Boolean(on));const button=modal.querySelector('.orientation-btn');if(button)button.textContent=on?'↕ 縦画面':'↔ 横画面';}
-function toggleLandscape(){if(!modal||modal.classList.contains('shorts'))return;setLandscape(modal.dataset.landscape!=='1');showToast(modal.dataset.landscape==='1'?'動画を90°回転しました。端末を横向きにしてください。':'通常表示に戻しました');}
-function updateMeta(item){if(!modal)return;modal.querySelector('.player-title').textContent=item.title;modal.querySelector('.player-channel').textContent=item.channelName||'';const btn=modal.querySelector('.auto-next-btn');if(btn)btn.textContent=`連続再生 ${autoNext()?'ON':'OFF'}`;const external=modal.querySelector('.youtube-external');if(external)external.href=`https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId)}`;}
-async function loadCurrent(){const item=list[index];if(!item||!modal)return;updateMeta(item);if(player?.loadVideoById){player.loadVideoById({videoId:item.videoId,startSeconds:0});return;}const YT=await ensureApi();if(!modal?.isConnected)return;player=new YT.Player('yt-v2-player',{videoId:item.videoId,playerVars:{autoplay:1,playsinline:1,rel:0,cc_load_policy:0},events:{onReady:e=>{try{e.target.playVideo();}catch{}},onStateChange:e=>{if(e.data===YT.PlayerState.ENDED&&autoNext())endedTimer=setTimeout(()=>move(1),250);}}});}
-function move(delta){const next=index+delta;if(next<0){showToast('最初の動画です');return;}if(next>=list.length){showToast('最後の動画です');return;}index=next;loadCurrent();}
-export function openYouTubePlayer(items,startIndex=0,{shorts=false}={}){
-  cleanupYouTubePlayer();list=Array.isArray(items)?items:[];if(!list.length)return;index=Math.max(0,Math.min(startIndex,list.length-1));modal=el('section',{class:`player-modal ${shorts?'shorts':''}`});const top=el('div',{class:'player-top'});top.append(el('button',{class:'icon-button',type:'button','aria-label':'閉じる',text:'✕',onclick:cleanupYouTubePlayer}),el('div',{class:'player-top-spacer'}));if(!shorts)top.append(el('button',{class:'player-soft orientation-btn',type:'button',text:'↔ 横画面',onclick:toggleLandscape}));const stage=el('div',{class:'player-stage'});stage.append(el('div',{id:'yt-v2-player',style:'width:100%;height:100%'}));const body=el('div',{class:'player-body'});body.append(el('div',{class:'player-title'}),el('div',{class:'player-channel'}));const actions=el('div',{class:'player-actions'});actions.append(el('button',{class:'player-soft',type:'button',text:'◀ 前',onclick:()=>move(-1)}),el('button',{class:'player-soft',type:'button',text:'次 ▶',onclick:()=>move(1)}));if(!shorts)actions.append(el('button',{class:'player-soft auto-next-btn',type:'button',onclick:e=>{localStorage.setItem('pdv2:youtubeAutoNext',autoNext()?'0':'1');e.currentTarget.textContent=`連続再生 ${autoNext()?'ON':'OFF'}`;}}));actions.append(el('a',{class:'player-soft youtube-external',target:'_blank',rel:'noopener noreferrer',href:'#',text:'YouTubeで開く ↗'}));body.append(actions);modal.append(top,stage,body);document.getElementById('overlay-root').append(modal);if(shorts)detachShortSwipe=attachSwipe(modal,{up:()=>move(1),down:()=>move(-1),threshold:70});loadCurrent();return{close:cleanupYouTubePlayer};
+let apiPromise = null;
+let player = null;
+let activeHost = null;
+let activePanel = null;
+let endedTimer = null;
+let generation = 0;
+
+const autoNext = () => localStorage.getItem('pdv2:youtubeAutoNext') !== '0';
+
+function ensureApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (apiPromise) return apiPromise;
+  apiPromise = new Promise((resolve, reject) => {
+    const previous = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { previous?.(); resolve(window.YT); };
+    if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+      const script = document.createElement('script');
+      script.src = 'https://www.youtube.com/iframe_api';
+      script.onerror = reject;
+      document.head.append(script);
+    }
+    setTimeout(() => window.YT?.Player && resolve(window.YT), 5000);
+  });
+  return apiPromise;
+}
+
+function setLandscape(panel, on) {
+  if (!panel) return;
+  panel.classList.toggle('twitch-css-landscape', Boolean(on));
+  panel.classList.toggle('youtube-css-landscape', Boolean(on));
+  document.documentElement.classList.toggle('media-player-open', Boolean(on));
+  const button = panel.querySelector('.youtube-orientation-btn');
+  if (button) button.textContent = on ? '↕ 縦画面' : '↔ 横画面';
+}
+
+export function cleanupYouTubePlayer() {
+  generation += 1;
+  if (endedTimer) clearTimeout(endedTimer);
+  endedTimer = null;
+  try { player?.pauseVideo?.(); } catch {}
+  try { player?.destroy?.(); } catch {}
+  player = null;
+  if (activePanel) setLandscape(activePanel, false);
+  activePanel = null;
+  if (activeHost?.isConnected) activeHost.replaceChildren();
+  activeHost = null;
+  document.documentElement.classList.remove('media-player-open');
+}
+
+window.addEventListener('pdv2:before-navigate', cleanupYouTubePlayer);
+
+function toggleLandscape(panel) {
+  const on = !panel.classList.contains('twitch-css-landscape');
+  setLandscape(panel, on);
+  showToast(on ? '動画を90°回転しました。端末を横向きにして見られます。' : '通常表示に戻しました');
+}
+
+export function mountYouTubePlayer({ host, queue, index = 0, shorts = false } = {}) {
+  cleanupYouTubePlayer();
+  if (!host || !Array.isArray(queue) || !queue.length) return null;
+  activeHost = host;
+  let current = Math.max(0, Math.min(index, queue.length - 1));
+  const myGeneration = generation;
+
+  const render = async () => {
+    if (myGeneration !== generation || !activeHost?.isConnected) return;
+    if (activePanel) setLandscape(activePanel, false);
+    try { player?.destroy?.(); } catch {}
+    player = null;
+
+    const item = queue[current];
+    const panel = el('section', { class: `twitch-inline-player youtube-inline-player ${shorts ? 'youtube-shorts-inline' : ''}` });
+    activePanel = panel;
+
+    const head = el('div', { class: 'twitch-inline-head' });
+    head.append(
+      el('div', {}, [
+        el('div', { class: 'twitch-inline-kicker', text: shorts ? 'SHORTS' : (item.kind === 'live' ? 'LIVE' : '動画') }),
+        el('strong', { text: item.channelName || 'YouTube' })
+      ]),
+      el('button', { class: 'icon-button twitch-close', type: 'button', 'aria-label': 'プレイヤーを閉じる', text: '✕', onclick: cleanupYouTubePlayer })
+    );
+
+    const stage = el('div', { class: 'twitch-inline-stage youtube-inline-stage' });
+    const holderId = `yt-v211-player-${Date.now()}-${current}`;
+    stage.append(el('div', { id: holderId, class: 'youtube-inline-embed' }));
+
+    const info = el('div', { class: 'twitch-inline-info youtube-inline-info' });
+    info.append(el('div', { class: 'player-title', text: item.title || 'YouTube' }));
+    const controls = el('div', { class: 'twitch-inline-controls' });
+    const prev = el('button', {
+      class: 'player-soft', type: 'button', text: '‹ 前へ', disabled: current <= 0,
+      onclick: () => { if (current > 0) { current -= 1; render(); } }
+    });
+    const next = el('button', {
+      class: 'player-soft', type: 'button', text: '次へ ›', disabled: current >= queue.length - 1,
+      onclick: () => { if (current < queue.length - 1) { current += 1; render(); } }
+    });
+    const landscape = el('button', {
+      class: 'player-soft youtube-orientation-btn', type: 'button', text: '↔ 横画面', onclick: () => toggleLandscape(panel)
+    });
+    const external = el('a', {
+      class: 'player-soft', target: '_blank', rel: 'noopener noreferrer',
+      href: `https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId || '')}`,
+      text: 'YouTubeで開く ↗'
+    });
+    const auto = el('button', {
+      class: 'player-soft youtube-auto-next-btn', type: 'button',
+      text: `連続再生 ${autoNext() ? 'ON' : 'OFF'}`,
+      onclick: event => {
+        localStorage.setItem('pdv2:youtubeAutoNext', autoNext() ? '0' : '1');
+        event.currentTarget.textContent = `連続再生 ${autoNext() ? 'ON' : 'OFF'}`;
+      }
+    });
+    controls.append(prev, next, landscape, external, auto);
+    info.append(controls);
+    panel.append(head, stage, info);
+    activeHost.replaceChildren(panel);
+    requestAnimationFrame(() => activeHost?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+
+    try {
+      const YT = await ensureApi();
+      if (myGeneration !== generation || !panel.isConnected) return;
+      player = new YT.Player(holderId, {
+        videoId: item.videoId,
+        playerVars: { autoplay: 1, playsinline: 1, rel: 0, cc_load_policy: 0 },
+        events: {
+          onReady: event => { try { event.target.playVideo(); } catch {} },
+          onStateChange: event => {
+            if (event.data === YT.PlayerState.ENDED && autoNext() && current < queue.length - 1) {
+              endedTimer = setTimeout(() => { current += 1; render(); }, 250);
+            }
+          }
+        }
+      });
+    } catch (error) {
+      if (panel.isConnected) info.append(el('div', { class: 'error-box', text: `YouTubeプレイヤーを読み込めませんでした: ${error.message}` }));
+    }
+  };
+
+  render();
+  return { close: cleanupYouTubePlayer };
+}
+
+// 既存コード互換用。v2.11ではyoutube.jsからはmountYouTubePlayerを使用する。
+export function openYouTubePlayer(items, startIndex = 0, { shorts = false, host } = {}) {
+  if (!host) return null;
+  return mountYouTubePlayer({ host, queue: items, index: startIndex, shorts });
 }
