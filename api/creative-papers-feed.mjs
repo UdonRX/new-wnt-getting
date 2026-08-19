@@ -7,9 +7,9 @@ const JSTAGE_ENDPOINT = 'https://api.jstage.jst.go.jp/searchapi/do';
 const S2_ENDPOINT = 'https://api.semanticscholar.org/graph/v1/paper/search/bulk';
 const FAST_TTL = 10 * 60 * 1000;
 const DEEP_TTL = 30 * 60 * 1000;
-const MAX_ITEMS = 320;
-const S2_LIMIT = 100;
-const JSTAGE_PER_TERM = 40;
+const MAX_ITEMS = 420;
+const S2_LIMIT = 120;
+const JSTAGE_PER_TERM = 55;
 const caches = { fast: { at: 0, xml: '' }, deep: { at: 0, xml: '' } };
 
 /*
@@ -27,7 +27,20 @@ const S2_DISCOVERY_QUERIES = [
   { label:'計測・AI', query:'(smartphone OR "low-cost sensor" OR "computational imaging" OR "human AI" OR "AI advice") + (measurement OR calibration OR decision OR trust OR validation)' },
   { label:'液滴・複雑系', query:'("droplet evaporation" OR "coffee-ring effect" OR "cascading failure" OR "complex network") + (transport OR deposition OR resilience OR model OR experiment)' }
 ];
-const FAST_S2 = [S2_DISCOVERY_QUERIES[0], S2_DISCOVERY_QUERIES[2], S2_DISCOVERY_QUERIES[3], S2_DISCOVERY_QUERIES[4], S2_DISCOVERY_QUERIES[7]];
+
+// V2.11: 応用発想の入口を、家電名そのものだけでなく「現象 + 計測/設計」まで広げる。
+const APPLIED_DISCOVERY_QUERIES = [
+  { label:'応用・沸騰界面', query:'(boiling OR nucleate boiling OR bubble OR heat transfer) + (wettability OR surface roughness OR heater OR cooking OR fouling)' },
+  { label:'応用・食品水分', query:'(rice OR starch OR cereal OR food) + (hydration OR moisture diffusion OR porous media OR microstructure OR texture OR rheology)' },
+  { label:'応用・香り抽出', query:'(aroma OR volatile OR coffee OR beverage) + (temperature OR extraction OR mass transfer OR brewing OR thermal history)' },
+  { label:'応用・注ぎ流体', query:'(pouring OR spout OR dripping OR droplet OR liquid jet) + (wettability OR contact angle OR surface tension OR fluid dynamics)' },
+  { label:'応用・非接触計測', query:'(cooking OR thermal appliance OR kettle OR cooker OR food process) + (infrared OR computer vision OR acoustic OR sensor fusion OR state estimation)' },
+  { label:'応用・人間工学', query:'(household appliance OR kitchen appliance OR control panel) + (human factors OR usability OR cognitive ergonomics OR older adults OR error prevention)' },
+  { label:'応用・触覚熱', query:'(thermal effusivity OR contact temperature OR heat transfer) + (touch OR grip OR haptic OR handle OR material perception)' },
+  { label:'応用・省エネ行動', query:'(electric kettle OR water heating OR household appliance) + (user behavior OR overfilling OR feedback OR nudge OR energy saving)' }
+];
+const ALL_S2_QUERIES = [...APPLIED_DISCOVERY_QUERIES, ...S2_DISCOVERY_QUERIES];
+const FAST_S2 = [...APPLIED_DISCOVERY_QUERIES.slice(0, 6), S2_DISCOVERY_QUERIES[0], S2_DISCOVERY_QUERIES[3]];
 
 const FAST_JSTAGE_IDS = new Set([
   'acoustic-cooking','pouring-wetting','surface-boiling-fouling','capillary-food','microstructure-sensory',
@@ -110,7 +123,8 @@ function evaluate(item) {
   // V2.9: 旧版より少し緩和。ただし「概念接続が1組もない論文」は通さない。
   if (rigor < 1 && maxConcept < 3) score -= 7;
   if (hasGeneral && rigor < 1 && maxConcept < 4) score -= 6;
-  const threshold = hasGeneral ? 12 : 10;
+  // 応用発想は『2概念が接続していて検証可能』なら取りこぼしを減らす。一般独創の厳しさは維持。
+  const threshold = hasGeneral ? 12 : 8.5;
   if (score < threshold) return null;
   return { score, rigor, groups: groups.map(row => row.group), families };
 }
@@ -158,7 +172,7 @@ async function searchJStage(term) {
   url.searchParams.set('service', '3');
   url.searchParams.set('text', term);
   url.searchParams.set('count', String(JSTAGE_PER_TERM));
-  const response = await fetchRetry(url, { headers: { Accept: 'application/atom+xml, application/xml, text/xml', 'User-Agent': 'PersonalDashboardCreativePapers/2.9' } });
+  const response = await fetchRetry(url, { headers: { Accept: 'application/atom+xml, application/xml, text/xml', 'User-Agent': 'PersonalDashboardCreativePapers/2.11' } });
   if (!response.ok) throw new Error(`J-STAGE HTTP ${response.status} (${term})`);
   const dom = new JSDOM(await response.text(), { contentType: 'text/xml' });
   try {
@@ -202,7 +216,7 @@ async function searchS2(discovery) {
   url.searchParams.set('sort', 'publicationDate:desc');
   url.searchParams.set('publicationDateOrYear', '2008-01-01:');
   url.searchParams.set('limit', String(S2_LIMIT));
-  const headers = { Accept: 'application/json', 'User-Agent': 'PersonalDashboardCreativePapers/2.9' };
+  const headers = { Accept: 'application/json', 'User-Agent': 'PersonalDashboardCreativePapers/2.11' };
   if (process.env.SEMANTIC_SCHOLAR_API_KEY) headers['x-api-key'] = process.env.SEMANTIC_SCHOLAR_API_KEY;
   // 旧版の `&openAccessPdf` フィルタを外し、抄録がある論文ページも取得対象にする。
   const response = await fetchRetry(url, { headers, timeoutMs: 17000 });
@@ -245,7 +259,7 @@ function dedupeAndRank(items) {
 }
 
 async function collect(mode) {
-  const s2Queries = mode === 'deep' ? S2_DISCOVERY_QUERIES : FAST_S2;
+  const s2Queries = mode === 'deep' ? ALL_S2_QUERIES : FAST_S2;
   const jstageGroups = mode === 'deep'
     ? CREATIVE_PAPER_GROUPS
     : CREATIVE_PAPER_GROUPS.filter(group => FAST_JSTAGE_IDS.has(group.id));
@@ -282,7 +296,7 @@ export default async function handler(req, res) {
     const result = await collect(mode);
     const xml = rssXml(
       '独創研究',
-      '異分野接続・実験性・検証性を重視。V2.9は公開PDF必須を解除し検索語を拡張。',
+      '異分野接続・実験性・検証性を重視。V2.11は応用発想の検索入口を現象・計測・人間工学まで拡張。',
       result.items
     );
     cache.at = Date.now();
@@ -295,7 +309,7 @@ export default async function handler(req, res) {
     if (result.errors.length) res.setHeader('X-Papers-Partial-Errors', String(result.errors.length));
     return res.status(200).send(xml);
   } catch (err) {
-    console.error('[creative-papers-feed-v29]', err);
+    console.error('[creative-papers-feed-v211]', err);
     if (cache.xml) {
       res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store');
