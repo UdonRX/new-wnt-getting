@@ -31,7 +31,7 @@ export const DEFAULTS = {
     twitchCommentDensity: 'normal',
     colors: {
       home:'#64d2ff', weather:'#4da5ff', news:'#ff9f0a', knowledge:'#30d158', papers:'#8e73ff', reader:'#8e73ff',
-      youtube:'#ff453a', twitch:'#9146ff', twitter:'#31a7ff', settings:'#8e8e93'
+      youtube:'#ff453a', twitch:'#9146ff', twitter:'#31a7ff', wikipedia:'#c89b5b', settings:'#8e8e93'
     },
     twitterRssBase:'https://rsshub-latest-wekl.onrender.com/twitter/list/'
   }
