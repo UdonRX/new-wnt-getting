@@ -265,10 +265,28 @@ function appendLinkified(container, text) {
   if (last < text.length) container.append(document.createTextNode(text.slice(last)));
 }
 
+function tweetAuthor(item, clean) {
+  const direct = String(item?.author || '').replace(/<!\[CDATA\[|\]\]>/g, '').trim();
+  if (direct) return direct;
+  const candidates = [String(item?.title || ''), String(clean?.text || '')];
+  for (const value of candidates) {
+    const match = value.match(/^\s*([^:：]{1,50}?(?:\s*\(@[A-Za-z0-9_]+\)|\s+@[A-Za-z0-9_]+))\s*[:：]/);
+    if (match?.[1]) return match[1].trim();
+    const handle = value.match(/^\s*(@[A-Za-z0-9_]{1,20})\b/);
+    if (handle?.[1]) return handle[1];
+  }
+  return item?.feedName || item?.source || 'Twitter / X';
+}
+
 function tweetCard(item) {
   const clean = cleanDescription(item.description);
   if (isRetweet(item, clean)) return null;
   const card = el('article', { class: 'tweet-card' });
+  const author = tweetAuthor(item, clean);
+  card.append(el('div', { class: 'tweet-author-row' }, [
+    el('div', { class: 'tweet-author-avatar', text: String(author).replace(/^@/, '').slice(0, 1).toUpperCase() || 'X' }),
+    el('strong', { class: 'tweet-author-name', text: author })
+  ]));
   const text = el('div', { class: 'tweet-text' });
   appendLinkified(text, clean.text || item.title || '');
   card.append(text);
