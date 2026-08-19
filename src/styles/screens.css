@@ -522,3 +522,62 @@
   scroll-padding-inline: 40%;
   scroll-behavior: smooth;
 }
+
+/* =========================================================
+   V2.8 READER FIX
+   v2.7までの src/styles/screens.css の一番下へ、そのまま追記してください。
+   ========================================================= */
+
+/* 上位階層は絶対に固定しない。 */
+.reader-mode-nav,
+.paper-track-level {
+  position: static !important;
+  top: auto !important;
+  z-index: auto !important;
+}
+
+/* 記事一覧では最下層タブだけが残る。
+   おすすめ表示中だけ、この中に進捗バーも追加される。 */
+.reader-sticky-context {
+  position: sticky !important;
+  top: calc(env(safe-area-inset-top) + 2px) !important;
+  z-index: 36 !important;
+  margin: 0 0 7px;
+  padding: 4px 0 6px;
+  background: color-mix(in srgb, var(--bg) 97%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 68%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+}
+
+.reader-lowest-tabs-host:empty,
+.reader-progress-host:empty {
+  display: none;
+}
+
+.reader-content-host {
+  min-width: 0;
+  scroll-margin-top: calc(env(safe-area-inset-top) + 58px);
+}
+
+/* AI要約を読む縦スクロールを最優先する。
+   JS側でも「最下部から始めた次の上スワイプ」だけ記事切替にしている。 */
+.reader-focus-scroll-safe,
+.reader-focus-scroll-safe .summary-area,
+.reader-focus-scroll-safe .summary-block {
+  touch-action: pan-y;
+}
+
+.reader-boundary-hint {
+  line-height: 1.45;
+}
+
+/* 記事一覧へ入った後は「おすすめへ戻る」ボタンを出さないため、
+   ヘッダーをシンプルに左寄せする。 */
+.reader-list-toolbar {
+  justify-content: flex-start;
+}
+
+.reader-list-toolbar .reader-list-header {
+  flex: 1 1 auto;
+}
