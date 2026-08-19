@@ -4,71 +4,46 @@ import { iconSvg } from '../../shared/icons.js';
 
 const summaryCache = new Map();
 const summaryPromises = new Map();
-const SUMMARY_STORAGE_KEY = 'pdv2:summaryCache:v210';
-const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v210';
+const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v2131';
 const AI_DAILY_LIMIT = 12;
-const AI_LAST_REQUEST_KEY = 'pdv2:summaryAiLastRequest:v210';
-const AI_MIN_INTERVAL_MS = 5000;
-const GEMINI_BLOCK_KEY = 'pdv2:geminiSummaryBlockedUntil';
 
-function todayKey() {
+function aiTodayKey() {
   const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function loadPersistentSummaries() {
+function takeAiBudget() {
   try {
-    const rows = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '[]');
-    const now = Date.now();
-    for (const row of Array.isArray(rows) ? rows : []) {
-      if (!row?.key || !row?.summary) continue;
-      const ttl = row.summary.provider === 'gemini' ? 7 * 24 * 60 * 60 * 1000 : 12 * 60 * 60 * 1000;
-      if (now - Number(row.at || 0) > ttl) continue;
-      summaryCache.set(row.key, row.summary);
-    }
-  } catch {}
+    const day = aiTodayKey();
+    const row = JSON.parse(localStorage.getItem(AI_BUDGET_KEY) || 'null');
+    const count = row?.day === day ? Number(row.count || 0) : 0;
+    if (count >= AI_DAILY_LIMIT) return false;
+    localStorage.setItem(AI_BUDGET_KEY, JSON.stringify({ day, count: count + 1 }));
+    return true;
+  } catch {
+    return true;
+  }
 }
-
-function savePersistentSummary(key, summary) {
-  if (!key || !summary) return;
-  try {
-    let rows = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '[]');
-    if (!Array.isArray(rows)) rows = [];
-    rows = rows.filter(row => row?.key !== key);
-    rows.unshift({ key, at: Date.now(), summary });
-    localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(rows.slice(0, 90)));
-  } catch {}
-}
-
-function aiBudget() {
-  try {
-    const value = JSON.parse(localStorage.getItem(AI_BUDGET_KEY) || 'null');
-    if (value?.day === todayKey()) return Math.max(0, Number(value.count || 0));
-  } catch {}
-  return 0;
-}
-
-function incrementAiBudget() {
-  localStorage.setItem(AI_BUDGET_KEY, JSON.stringify({ day: todayKey(), count: aiBudget() + 1 }));
-  localStorage.setItem(AI_LAST_REQUEST_KEY, String(Date.now()));
-}
-
-function canUseAiSummary() {
-  const now = Date.now();
-  const blockedUntil = Number(localStorage.getItem(GEMINI_BLOCK_KEY) || 0);
-  const lastRequest = Number(localStorage.getItem(AI_LAST_REQUEST_KEY) || 0);
-  return now >= blockedUntil && aiBudget() < AI_DAILY_LIMIT && now - lastRequest >= AI_MIN_INTERVAL_MS;
-}
-
-loadPersistentSummaries();
 
 function stripHtml(value = '') {
   const d = document.createElement('div');
   d.innerHTML = value;
   return (d.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function looksMostlyEnglish(value = '') {
+  const text = String(value || '').replace(/https?:\/\/\S+/g, ' ');
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  const ja = (text.match(/[\u3040-\u30ff\u3400-\u9fff]/g) || []).length;
+  return latin >= 24 && latin > ja * 1.4;
+}
+
+function summaryModeOf(item, fallback = '') {
+  return String(item?._readerMode || fallback || '').trim();
+}
+
+function summaryKey(item, mode = '') {
+  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2131`;
 }
 
 function errorMessage(data, status) {
@@ -78,41 +53,37 @@ function errorMessage(data, status) {
   return error || detail || `要約エラー (${status})`;
 }
 
-async function fetchSummary(item, { force = false } = {}) {
-  const key = item.link || item.id;
-  if (!key) throw new Error('記事IDがありません');
-
+async function fetchSummary(item, { force = false, mode = '' } = {}) {
+  const activeMode = summaryModeOf(item, mode);
+  const key = summaryKey(item, activeMode);
   if (!force && summaryCache.has(key)) return summaryCache.get(key);
   if (!force && summaryPromises.has(key)) return summaryPromises.get(key);
 
-  const allowAi = canUseAiSummary();
+  const description = stripHtml(item.description).slice(0, 7000);
+  const forceJapanese = looksMostlyEnglish(`${item.title || ''}\n${description}`);
+  // 論文PDFと英語翻訳は必ずAI。通常の日本語ニュース/知識は従来同様に日次予算内だけAI。
+  const allowAi = activeMode === 'papers' || forceJapanese || takeAiBudget();
   const request = fetch('/api/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url: item.link,
       title: item.title,
-      description: stripHtml(item.description).slice(0, 6200),
+      description,
       source: item.source,
-      fast: true,
-      allowAi
+      mode: activeMode,
+      // 論文だけはリンク先本文を取りに行き、PDFならPDF本文を優先する。
+      preferFullText: activeMode === 'papers',
+      // おすすめに英語記事が混ざっても要約だけは必ず日本語にする。
+      forceJapanese,
+      allowAi,
+      fast: activeMode !== 'papers'
     })
   }).then(async res => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(errorMessage(data, res.status));
-
-    if (data.provider === 'gemini') incrementAiBudget();
-    if (data.fallbackReason === 'quota') {
-      // 同じ画面操作で429を連発しない。30分はローカル要約へ直行。
-      localStorage.setItem(GEMINI_BLOCK_KEY, String(Date.now() + 30 * 60 * 1000));
-    } else if (data.fallbackReason && data.fallbackReason !== 'client-budget') {
-      // API一時障害/キー設定中でも記事ごとに失敗リクエストを連打しない。
-      localStorage.setItem(GEMINI_BLOCK_KEY, String(Date.now() + 5 * 60 * 1000));
-    }
-
     summaryCache.set(key, data);
-    savePersistentSummary(key, data);
-    while (summaryCache.size > 90) summaryCache.delete(summaryCache.keys().next().value);
+    while (summaryCache.size > 48) summaryCache.delete(summaryCache.keys().next().value);
     return data;
   }).finally(() => {
     if (summaryPromises.get(key) === request) summaryPromises.delete(key);
@@ -122,15 +93,15 @@ async function fetchSummary(item, { force = false } = {}) {
   return request;
 }
 
-/*
- * V2.10: 自動先読みで無料Gemini枠を消費しない。
- * 次の記事に既存キャッシュがあればMapへ戻すだけにする。
- */
-function prefetchSummary(item) {
+function prefetchSummary(item, { mode = '' } = {}) {
   if (!item) return;
-  const key = item.link || item.id;
-  if (!key || summaryCache.has(key)) return;
-  // ネットワーク呼び出しはしない。実際に記事を開いた時だけ要約する。
+  const key = summaryKey(item, mode);
+  if (!key || summaryCache.has(key) || summaryPromises.has(key)) return;
+  fetchSummary(item, { mode }).catch(() => {});
+}
+
+function cachedSummary(item, mode = '') {
+  return summaryCache.get(summaryKey(item, mode));
 }
 
 function chatSheet(item, summary) {
@@ -184,11 +155,7 @@ function chatSheet(item, summary) {
         { role: 'assistant', content: answer }
       );
     } catch (err) {
-      const raw = String(err?.message || '');
-      const message = /quota|rate.?limit|resource_exhausted|too many requests/i.test(raw)
-        ? 'AI質問は現在利用上限です。記事の要約はそのまま読めます。'
-        : raw;
-      log.append(el('div', { class: 'error-box', text: message }));
+      log.append(el('div', { class: 'error-box', text: err.message }));
     } finally {
       send.disabled = false;
     }
@@ -228,7 +195,7 @@ function renderProgress(progressHost, { label, index, total, onList }) {
 
 function createSummaryLoader() {
   const box = el('div', { class: 'summary-loading-box' });
-  const label = el('div', { class: 'summary-loading-label', text: '要約を準備中…' });
+  const label = el('div', { class: 'summary-loading-label', text: 'AI要約を作成中…' });
   const track = el('div', { class: 'summary-loading-track' });
   const fill = el('div', { class: 'summary-loading-fill' });
   const percent = el('span', { class: 'summary-loading-percent', text: '8%' });
@@ -241,8 +208,8 @@ function createSummaryLoader() {
   const tick = now => {
     if (stopped || !box.isConnected) return;
     const sec = Math.max(0, (now - startedAt) / 1000);
-    // 実通信の進捗率は取得できないため、待ち時間に合わせて95%まで滑らかに進める。
-    const value = Math.min(95, 8 + 87 * (1 - Math.exp(-sec / 3.0)));
+    // 通信の実進捗は取れないため95%までは疑似進捗。色は現在タブ色をCSSで使う。
+    const value = Math.min(95, 8 + 87 * (1 - Math.exp(-sec / 3.2)));
     fill.style.width = `${value}%`;
     percent.textContent = `${Math.round(value)}%`;
     raf = requestAnimationFrame(tick);
@@ -272,7 +239,7 @@ function paperDateLabel(item) {
   return shortDate(item?.pubDate);
 }
 
-function renderSummary(summaryHost, summary, item = null) {
+function renderSummary(summaryHost, summary) {
   summaryHost.replaceChildren();
 
   if (summary.short) {
@@ -282,7 +249,7 @@ function renderSummary(summaryHost, summary, item = null) {
     ]));
   }
 
-  const points = Array.isArray(summary.points) ? summary.points.slice(0, 2) : [];
+  const points = Array.isArray(summary.points) ? summary.points.slice(0, 3) : [];
   if (points.length) {
     const ul = el('ul', { class: 'summary-points-compact' });
     points.forEach(point => ul.append(el('li', { text: point })));
@@ -292,13 +259,14 @@ function renderSummary(summaryHost, summary, item = null) {
     ]));
   }
 
-  const noteParts = [];
-  if (item?._recommendationLabel) noteParts.push(item._recommendationLabel);
-  noteParts.push(summary.provider === 'gemini' ? 'AI要約' : 'RSS本文・抄録から高速要約');
-  summaryHost.append(el('div', {
-    class: 'source-note',
-    text: noteParts.join(' ・ ')
-  }));
+  const sourceText = summary.contentSource === 'pdf'
+    ? `PDF本文から要約${summary.pdfPageCount ? `（${summary.pdfPageCount}ページ）` : ''}`
+    : summary.contentSource === 'article'
+      ? 'リンク先本文から要約'
+      : summary.fastPath === 'rss-abstract-fast'
+        ? 'RSS本文・抄録から高速要約'
+        : 'AI要約';
+  summaryHost.append(el('div', { class: 'source-note', text: sourceText }));
 }
 
 function isDocumentScroller(scroller) {
@@ -353,15 +321,6 @@ function interactiveTarget(target) {
   return Boolean(target?.closest?.('a,button,input,textarea,select,[contenteditable="true"]'));
 }
 
-/*
- * Reader専用ジェスチャー。
- * 縦方向は「通常スクロール」と競合させない。
- * - 上スワイプで次へ進めるのは、指を置いた時点ですでに最下部だった場合だけ
- * - 下スワイプで前へ戻るのは、指を置いた時点ですでに最上部だった場合だけ
- *
- * これにより、要約を読むための普通の上スワイプでは記事が切り替わらない。
- * 最下部まで読み切った後、もう一度上へスワイプした時だけ次の記事へ進む。
- */
 function attachFocusGesture(card, { up, down, left, right }) {
   let start = null;
 
@@ -397,14 +356,12 @@ function attachFocusGesture(card, { up, down, left, right }) {
 
     if (started.interactive) return;
 
-    // 横方向は従来どおりタブ切替に使う。
     if (ax >= 58 && ax > ay * 1.2) {
       if (dx < 0) left?.();
       else right?.();
       return;
     }
 
-    // 縦方向はスクロール境界から開始した操作だけを記事移動として扱う。
     if (ay < 72 || ay <= ax * 1.25) return;
 
     if (dy < 0 && started.bottom && atBottom(card)) {
@@ -412,9 +369,7 @@ function attachFocusGesture(card, { up, down, left, right }) {
       return;
     }
 
-    if (dy > 0 && started.top && atTop(card)) {
-      down?.();
-    }
+    if (dy > 0 && started.top && atTop(card)) down?.();
   };
 
   const onTouchCancel = () => { start = null; };
@@ -462,7 +417,8 @@ export function mountFocus(host, {
   onPrevFeed,
   onNextFeed,
   horizontalHint = 'RSSタブ',
-  progressHost = null
+  progressHost = null,
+  summaryMode = ''
 }) {
   let index = Math.max(0, Math.min(initialIndex, items.length - 1));
   let detach = () => {};
@@ -498,15 +454,13 @@ export function mountFocus(host, {
       })
     );
 
-    if (item.titleJa) {
-      body.append(el('div', { class: 'focus-original', text: item.title }));
-    }
+    if (item.titleJa) body.append(el('div', { class: 'focus-original', text: item.title }));
 
     const summaryHost = el('div', { class: 'summary-area' });
-    const cached = summaryCache.get(item.link || item.id);
+    const cached = cachedSummary(item, summaryMode);
     let loader = null;
 
-    if (cached) renderSummary(summaryHost, cached, item);
+    if (cached) renderSummary(summaryHost, cached);
     else {
       loader = createSummaryLoader();
       summaryHost.append(loader.node);
@@ -526,7 +480,7 @@ export function mountFocus(host, {
         class: 'soft-button',
         type: 'button',
         text: 'AIに質問',
-        onclick: () => chatSheet(item, summaryCache.get(item.link || item.id))
+        onclick: () => chatSheet(item, cachedSummary(item, summaryMode))
       }),
       el('a', {
         class: 'soft-button',
@@ -565,13 +519,12 @@ export function mountFocus(host, {
     if (scrollToTop) scrollCardToStart(card);
 
     if (!cached) {
-      fetchSummary(item)
+      fetchSummary(item, { mode: summaryMode })
         .then(summary => {
           loader?.finish();
           if (destroyed || items[index] !== item || !summaryHost.isConnected) return;
-          renderSummary(summaryHost, summary, item);
-          // 次の記事はユーザーが今の記事を読んでいる間に先読みする。
-          prefetchSummary(items[index + 1]);
+          renderSummary(summaryHost, summary);
+          prefetchSummary(items[index + 1], { mode: summaryMode });
         })
         .catch(err => {
           loader?.stop();
@@ -587,9 +540,9 @@ export function mountFocus(host, {
                 try {
                   const retryLoader = createSummaryLoader();
                   summaryHost.replaceChildren(retryLoader.node);
-                  const retrySummary = await fetchSummary(item, { force: true });
+                  const retrySummary = await fetchSummary(item, { force: true, mode: summaryMode });
                   retryLoader.finish();
-                  renderSummary(summaryHost, retrySummary, item);
+                  renderSummary(summaryHost, retrySummary);
                 } catch (retryError) {
                   summaryHost.replaceChildren(el('div', {
                     class: 'error-box',
@@ -630,10 +583,9 @@ export function mountFocus(host, {
     destroy() {
       destroyed = true;
       detach();
-      progressHost?.replaceChildren();
     },
-    go(i) {
-      index = Math.max(0, Math.min(i, items.length - 1));
+    go(nextIndex) {
+      index = Math.max(0, Math.min(Number(nextIndex) || 0, items.length - 1));
       render({ scrollToTop: true });
     }
   };
