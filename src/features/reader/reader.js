@@ -16,7 +16,99 @@ let focusHandle = null;
 let modeSwipeDetach = null;
 let recommendationIndex = 0;
 let articleIndex = 0;
+let openedArticle = null;
 let readerSessionStarted = false;
+
+function readerItemKey(item) {
+  return String(item?.id || item?.link || item?.url || `${item?.source || ''}|${item?.title || ''}`);
+}
+
+function recommendationWindowJst(now = Date.now()) {
+  const JST = 9 * 60 * 60 * 1000;
+  const jst = new Date(now + JST);
+  const y = jst.getUTCFullYear();
+  const m = jst.getUTCMonth();
+  const d = jst.getUTCDate();
+  const h = jst.getUTCHours();
+
+  const startHour = h < 6 ? 0 : h < 12 ? 6 : h < 18 ? 12 : 18;
+  const nextHour = h < 6 ? 6 : h < 12 ? 12 : h < 18 ? 18 : 24;
+  const key = h < 6 ? 'late' : h < 12 ? 'morning' : h < 18 ? 'noon' : 'night';
+
+  const start = Date.UTC(y, m, d, startHour, 0, 0) - JST;
+  const until = nextHour === 24
+    ? Date.UTC(y, m, d + 1, 0, 0, 0) - JST
+    : Date.UTC(y, m, d, nextHour, 0, 0) - JST;
+
+  return {
+    day: `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+    key,
+    start,
+    until
+  };
+}
+
+function itemPubMs(item) {
+  const ms = new Date(item?.pubDate || 0).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function newestFirst(items) {
+  return [...items].sort((a, b) => itemPubMs(b) - itemPubMs(a));
+}
+
+/*
+ * ニュース/知識:
+ * 今の「未明・朝・昼・夜」の開始以降に公開された記事を全部おすすめ対象にする。
+ * その時間帯に1件も無い場合だけ、直近12時間へ広げる。
+ * 件数のslice()はしない。
+ */
+function freshRecommendationItems(items, windowInfo) {
+  const now = Date.now();
+  const dated = newestFirst(items).filter(item => itemPubMs(item) > 0);
+  const currentWindow = dated.filter(item => {
+    const ms = itemPubMs(item);
+    return ms >= windowInfo.start && ms <= now + 5 * 60 * 1000;
+  });
+  if (currentWindow.length) return currentWindow;
+
+  const recent = dated.filter(item => itemPubMs(item) >= now - 12 * 60 * 60 * 1000);
+  if (recent.length) return recent;
+
+  // pubDateを持たない独自RSSでも完全に空にしない。
+  return newestFirst(items);
+}
+
+/*
+ * 論文:
+ * 更新頻度が低いので時間帯では切らず、直近1年の対象論文を既存heuristicで順位付け。
+ * limitは候補総数を渡すため「3件/5件」等の固定上限を設けない。
+ * まず未読を全部、全て既読なら順位付き候補を全部返す。
+ */
+function paperRecommendationItems(items, readSet) {
+  const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
+  const recent = newestFirst(items).filter(item => {
+    const ms = itemPubMs(item);
+    return !ms || ms >= cutoff;
+  });
+  const ranked = chooseTop(recent, 'papers', readSet, recent.length, []);
+  const unread = ranked.filter(item => !readSet.has(item.id));
+  return unread.length ? unread : ranked;
+}
+
+function interleaveAll(buckets) {
+  const rows = buckets.map(bucket => Array.isArray(bucket) ? bucket : []);
+  const out = [];
+  let index = 0;
+  while (rows.some(bucket => index < bucket.length)) {
+    rows.forEach(bucket => {
+      if (bucket[index]) out.push(bucket[index]);
+    });
+    index += 1;
+  }
+  return uniqueItems(out);
+}
+
 
 /*
  * 「読む」から別画面へ出たら、次回入った時にだけおすすめを再表示する。
