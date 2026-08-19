@@ -1,12 +1,14 @@
 import { state, update } from './store.js';
 import { el, clear } from '../shared/dom.js';
+import { iconPath } from '../shared/icons.js';
 
 const NAV = [
-  ['home','ホーム','<path d="M3 11.5 12 4l9 7.5"/><path d="M5 10.5V21h14V10.5"/><path d="M9 21v-6h6v6"/>'],
-  ['weather','天気','<circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6 13 13"/><path d="M8 18h10a4 4 0 0 0 0-8 5.5 5.5 0 0 0-10.4 2"/>'],
-  ['reader','読む','<path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/>'],
-  ['media','動画','<path d="m9 7 8 5-8 5z"/><rect x="3" y="4" width="18" height="16" rx="4"/>'],
-  ['twitter','SNS','<path d="M4 5h16v12H8l-4 4z"/><path d="M8 9h8M8 13h5"/>']
+  ['home', 'ホーム', 'home'],
+  ['weather', '天気', 'weather'],
+  ['reader', '読む', 'reader'],
+  ['media', '動画', 'media'],
+  ['twitter', 'SNS', 'twitter'],
+  ['wikipedia', 'Wiki', 'wikipedia']
 ];
 
 const featureColorKey = screen => {
@@ -26,16 +28,20 @@ export function applyTheme() {
   root.style.setProperty('--edge-opacity-pct', `${Math.round(Number(settings.edgeOpacity ?? .38) * 100)}%`);
   root.style.setProperty('--edge-glow', `${Number(settings.edgeGlow ?? 4)}px`);
   document.body.classList.toggle('edge-off', !settings.edgeEnabled);
-  // ステータスバーは機能色ではなくアプリ背景へ溶け込ませる。
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#090b0e');
 }
 
 export function renderNav(onNavigate) {
   const nav = document.getElementById('bottom-nav');
   clear(nav);
-  NAV.forEach(([key,label,path]) => {
-    const button = el('button', { class:`nav-item ${state.screen===key?'active':''}`, type:'button', 'aria-label':label, onclick:()=>onNavigate(key) });
-    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg><span>${label}</span>`;
+  NAV.forEach(([key, label, icon]) => {
+    const button = el('button', {
+      class: `nav-item ${state.screen === key ? 'active' : ''}`,
+      type: 'button',
+      'aria-label': label,
+      onclick: () => onNavigate(key)
+    });
+    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${iconPath(icon)}</svg><span>${label}</span>`;
     nav.append(button);
   });
 }
