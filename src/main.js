@@ -9,15 +9,7 @@ import { renderSettings } from './features/settings/settings.js';
 import { handleTwitchOAuthReturn } from './features/twitch/twitch-chat.js';
 
 const root = document.getElementById('app-main');
-const renderers = {
-  home: renderHome,
-  weather: renderWeather,
-  reader: renderReader,
-  media: renderMedia,
-  twitter: renderTwitter,
-  settings: renderSettings
-};
-
+const renderers = { home: renderHome, weather: renderWeather, reader: renderReader, media: renderMedia, twitter: renderTwitter, settings: renderSettings };
 let renderSerial = 0;
 
 export async function navigate(screen, options = {}) {
@@ -30,9 +22,8 @@ export async function navigate(screen, options = {}) {
   renderNav(navigate);
   const serial = ++renderSerial;
   root.replaceChildren();
-  const renderer = renderers[screen];
   try {
-    await renderer(root, { navigate, refresh: Boolean(options.refresh) });
+    await renderers[screen](root, { navigate, refresh: Boolean(options.refresh) });
   } catch (err) {
     console.error('[pdv2] render failed:', screen, err);
     if (serial === renderSerial) {
@@ -46,12 +37,9 @@ async function boot() {
   await handleTwitchOAuthReturn().catch(err => console.warn('[twitch-oauth]', err));
   renderNav(navigate);
   await navigate(state.screen || 'home');
-
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(err => console.warn('[sw]', err));
-  }
-
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(err => console.warn('[sw]', err));
   window.addEventListener('pdv2:settings-changed', applyTheme);
+  window.addEventListener('pdv2:context-changed', () => { applyTheme(); renderNav(navigate); });
   window.addEventListener('popstate', () => navigate(state.screen || 'home'));
 }
 
