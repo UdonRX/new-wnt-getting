@@ -1,6 +1,7 @@
 import { JSDOM } from 'jsdom';
+
 const API = 'https://ja.wikipedia.org/w/api.php';
-const USER_AGENT = 'PersonalDashboardWikipedia/2.11';
+const USER_AGENT = 'PersonalDashboardWikipedia/2.12';
 
 const POOLS = {
   classic: [
@@ -59,14 +60,22 @@ const POOLS = {
 };
 
 const META = {
+  today: { label: '今日の出来事', short: '今日' },
   classic: { label: '王道・文学系', short: '王道' },
   deep: { label: '考察・読み物系', short: '考察' },
   trivia: { label: '雑学・トリビア系', short: '雑学' }
 };
 
-function jstDate() {
-  return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+function jstParts() {
+  const date = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const iso = date.toISOString();
+  return {
+    date: iso.slice(0, 10),
+    month: Number(iso.slice(5, 7)),
+    day: Number(iso.slice(8, 10))
+  };
 }
+
 function hash(text) {
   let h = 2166136261;
   for (const ch of String(text)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
@@ -81,15 +90,16 @@ function rng(seed) {
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
 }
-function pick(pool, count, seedText) {
+function shuffled(pool, seedText) {
   const random = rng(hash(seedText));
   const copy = [...pool];
   for (let i = copy.length - 1; i > 0; i -= 1) {
     const j = Math.floor(random() * (i + 1));
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
-  return copy.slice(0, count);
+  return copy;
 }
+function pick(pool, count, seedText) { return shuffled(pool, seedText).slice(0, count); }
 
 async function api(params, timeout = 14000) {
   const url = new URL(API);
@@ -106,26 +116,97 @@ function titleMap(query = {}) {
   const map = new Map();
   (query.normalized || []).forEach(row => map.set(row.from, row.to));
   (query.redirects || []).forEach(row => map.set(row.from, row.to));
-  const resolve = title => {
+  return title => {
     let current = title;
-    for (let i = 0; i < 4 && map.has(current); i += 1) current = map.get(current);
+    for (let i = 0; i < 5 && map.has(current); i += 1) current = map.get(current);
     return current;
   };
-  return resolve;
 }
 
-async function daily() {
-  const date = jstDate();
-  const selected = [
-    ...pick(POOLS.classic, 4, `${date}:classic`).map(row => ({ kind: 'classic', row })),
-    ...pick(POOLS.deep, 3, `${date}:deep`).map(row => ({ kind: 'deep', row })),
-    ...pick(POOLS.trivia, 3, `${date}:trivia`).map(row => ({ kind: 'trivia', row }))
+function cleanText(value) {
+  return String(value || '')
+    .replace(/\[[0-9０-９]+\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function goodEventTitle(title) {
+  const value = cleanText(title);
+  if (!value || value.includes(':') || value.includes('#')) return false;
+  if (/^(?:紀元前)?\d{1,4}年$/.test(value)) return false;
+  if (/^\d{1,2}月\d{1,2}日$/.test(value)) return false;
+  if (/^(グレゴリオ暦|ユリウス暦|旧暦|西暦|紀元前)$/.test(value)) return false;
+  return true;
+}
+
+async function onThisDayCandidates(month, day, dateSeed) {
+  const pageName = `${month}月${day}日`;
+  const data = await api({ action: 'parse', page: pageName, prop: 'text', redirects: '1' }, 16000);
+  const html = data.parse?.text || '';
+  if (!html) return [];
+  const dom = new JSDOM(`<main>${html}</main>`);
+  try {
+    const doc = dom.window.document;
+    const headings = Array.from(doc.querySelectorAll('h2,h3'));
+    const start = headings.find(node => /^(できごと|出来事)$/.test(cleanText(node.textContent).replace(/\[編集\]$/, '')));
+    if (!start) return [];
+
+    const rows = [];
+    // 現行MediaWiki HTMLでは h2/h3 が .mw-heading ラッパー内に入る場合がある。
+    // ラッパーの次から走査しないと編集リンクだけを見て終了してしまうため両構造に対応する。
+    const headingBlock = start.closest('.mw-heading') || start;
+    const isNextHeading = node => /^H[23]$/.test(node?.tagName || '') || Boolean(node?.matches?.('.mw-heading') && node.querySelector('h2,h3'));
+    let cursor = headingBlock.nextElementSibling;
+    while (cursor && !isNextHeading(cursor)) {
+      const lis = cursor.matches?.('ul,ol') ? Array.from(cursor.querySelectorAll(':scope > li')) : [];
+      for (const li of lis) {
+        const eventText = cleanText(li.textContent);
+        if (eventText.length < 12) continue;
+        const anchors = Array.from(li.querySelectorAll('a[title]'));
+        const target = anchors.map(a => cleanText(a.getAttribute('title'))).find(goodEventTitle);
+        if (!target) continue;
+        const year = eventText.match(/(?:紀元前\s*)?\d{1,4}年/)?.[0] || '';
+        rows.push({
+          title: target,
+          reason: `${year ? `${year}の今日` : 'この日の出来事'} — ${eventText.replace(/^[-–—\s]+/, '').slice(0, 120)}`
+        });
+      }
+      cursor = cursor.nextElementSibling;
+    }
+
+    const seen = new Set();
+    return shuffled(rows, `${dateSeed}:events`).filter(row => {
+      const key = row.title.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  } finally {
+    dom.window.close();
+  }
+}
+
+function makeCuratedCandidates(date) {
+  const primary = [
+    ...pick(POOLS.classic, 3, `${date}:classic` ).map(row => ({ kind: 'classic', row })),
+    ...pick(POOLS.deep, 2, `${date}:deep`).map(row => ({ kind: 'deep', row })),
+    ...pick(POOLS.trivia, 2, `${date}:trivia`).map(row => ({ kind: 'trivia', row }))
   ];
-  const titles = selected.map(item => item.row[0]);
+  const backup = [
+    ...shuffled(POOLS.classic, `${date}:classic-backup`).map(row => ({ kind: 'classic', row })),
+    ...shuffled(POOLS.deep, `${date}:deep-backup`).map(row => ({ kind: 'deep', row })),
+    ...shuffled(POOLS.trivia, `${date}:trivia-backup`).map(row => ({ kind: 'trivia', row }))
+  ];
+  const seen = new Set(primary.map(item => item.row[0]));
+  return [...primary, ...backup.filter(item => !seen.has(item.row[0]))];
+}
+
+async function fetchCards(titles) {
+  if (!titles.length) return { resolveTitle: title => title, pages: new Map() };
   const data = await api({
     action: 'query',
     prop: 'extracts|pageimages|info',
-    titles: titles.join('|'),
+    titles: titles.slice(0, 50).join('|'),
     redirects: '1',
     exintro: '1',
     explaintext: '1',
@@ -136,33 +217,66 @@ async function daily() {
   });
   const resolveTitle = titleMap(data.query || {});
   const pages = new Map((data.query?.pages || []).filter(page => !page.missing).map(page => [page.title, page]));
-  const rows = selected.map(({ kind, row }, index) => {
-    const [requestedTitle, reason] = row;
+  return { resolveTitle, pages };
+}
+
+function pageRow(page, { date, kind, reason, index }) {
+  return {
+    id: `${date}:${kind}:${page.pageid || index}`,
+    date,
+    kind,
+    category: META[kind].label,
+    categoryShort: META[kind].short,
+    title: page.title,
+    reason,
+    extract: String(page.extract || '').trim(),
+    thumbnail: page.thumbnail?.source || '',
+    url: page.fullurl || `https://ja.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`
+  };
+}
+
+async function daily() {
+  const { date, month, day } = jstParts();
+  let eventCandidates = [];
+  try { eventCandidates = await onThisDayCandidates(month, day, date); }
+  catch (error) { console.warn('[wikipedia-v212] on-this-day fallback:', error?.message || error); }
+
+  const eventWanted = eventCandidates.slice(0, 8);
+  const curated = makeCuratedCandidates(date);
+  const candidateTitles = [...new Set([
+    ...eventWanted.map(item => item.title),
+    ...curated.slice(0, 25).map(item => item.row[0])
+  ])];
+  const { resolveTitle, pages } = await fetchCards(candidateTitles);
+
+  const items = [];
+  const usedTitles = new Set();
+  for (const event of eventWanted) {
+    if (items.filter(item => item.kind === 'today').length >= 3) break;
+    const page = pages.get(resolveTitle(event.title));
+    if (!page || usedTitles.has(page.title)) continue;
+    usedTitles.add(page.title);
+    items.push(pageRow(page, { date, kind: 'today', reason: event.reason, index: items.length }));
+  }
+
+  for (const item of curated) {
+    if (items.length >= 10) break;
+    const [requestedTitle, reason] = item.row;
     const page = pages.get(resolveTitle(requestedTitle));
-    if (!page) return null;
-    return {
-      id: `${date}:${kind}:${page.pageid || index}`,
-      date,
-      kind,
-      category: META[kind].label,
-      categoryShort: META[kind].short,
-      title: page.title,
-      reason,
-      extract: String(page.extract || '').trim(),
-      thumbnail: page.thumbnail?.source || '',
-      url: page.fullurl || `https://ja.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`
-    };
-  }).filter(Boolean);
-  return { date, items: rows };
+    if (!page || usedTitles.has(page.title)) continue;
+    usedTitles.add(page.title);
+    items.push(pageRow(page, { date, kind: item.kind, reason, index: items.length }));
+  }
+
+  return {
+    date,
+    dateLabel: `${month}月${day}日`,
+    eventCount: items.filter(item => item.kind === 'today').length,
+    items: items.slice(0, 10)
+  };
 }
 
 const SKIP_HEADINGS = /^(脚注|注釈|出典|参考文献|参考資料|関連項目|外部リンク|参考|文献|ギャラリー|一覧)$/;
-function cleanText(value) {
-  return String(value || '')
-    .replace(/\[[0-9０-９]+\]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 async function article(title) {
   const data = await api({ action: 'parse', page: title, prop: 'text|displaytitle', redirects: '1' }, 18000);
   const html = data.parse?.text || '';
@@ -186,10 +300,10 @@ async function article(title) {
         continue;
       }
       if (skip) continue;
-      const text = cleanText(node.textContent);
-      if (text.length < 18) continue;
-      blocks.push({ type: node.tagName === 'LI' ? 'list' : 'paragraph', text });
-      totalChars += text.length;
+      const value = cleanText(node.textContent);
+      if (value.length < 18) continue;
+      blocks.push({ type: node.tagName === 'LI' ? 'list' : 'paragraph', text: value });
+      totalChars += value.length;
       if (totalChars > 65000) break;
     }
     const plain = blocks.map(block => block.text).join('\n\n');
@@ -199,9 +313,7 @@ async function article(title) {
       text: plain,
       url: `https://ja.wikipedia.org/wiki/${encodeURIComponent(String(title).replace(/ /g, '_'))}`
     };
-  } finally {
-    dom.window.close();
-  }
+  } finally { dom.window.close(); }
 }
 
 export default async function handler(req, res) {
@@ -219,7 +331,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=21600');
     return res.status(200).json(result);
   } catch (error) {
-    console.error('[wikipedia-v211]', error);
+    console.error('[wikipedia-v212]', error);
     return res.status(500).json({ error: String(error?.message || error) });
   }
 }
