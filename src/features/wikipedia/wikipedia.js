@@ -2,7 +2,7 @@ import { el, openSheet, showToast } from '../../shared/dom.js';
 import { topbar, segmented } from '../../shared/components.js';
 import { iconSvg } from '../../shared/icons.js';
 
-const DAILY_KEY = 'pdv2:wikipediaDaily:v212';
+const DAILY_KEY = 'pdv2:wikipediaDaily:v213';
 const ARTICLE_PREFIX = 'pdv2:wikipediaArticle:v211:';
 const SETTINGS_KEY = 'pdv2:wikipediaReaderSettings';
 const DEFAULT_SETTINGS = { writing: 'vertical', fontSize: 19, lineHeight: 1.85, theme: 'warm' };
@@ -206,9 +206,13 @@ function showReader(root, articleMeta, article, backToList) {
     }, 130);
   };
 
-  // 縦書きは「左側＝次ページ」。横書きは一般的な左右配置を維持。
-  edgeLeft.onclick = () => go(s.writing === 'vertical' ? 1 : -1);
-  edgeRight.onclick = () => go(s.writing === 'vertical' ? -1 : 1);
+  const horizontalNextFlow = () =>
+    s.writing === 'horizontal' || window.matchMedia?.('(orientation: landscape)')?.matches;
+
+  // 縦書き・縦持ちでは左側が次ページ。
+  // 横書き、または端末を横向きにして読む場合は右側が次ページ。
+  edgeLeft.onclick = () => go(horizontalNextFlow() ? -1 : 1);
+  edgeRight.onclick = () => go(horizontalNextFlow() ? 1 : -1);
   centerTap.onclick = () => controls.classList.contains('hidden') ? scheduleHide() : controls.classList.add('hidden');
 
   let sx = 0, sy = 0;
@@ -224,8 +228,9 @@ function showReader(root, articleMeta, article, backToList) {
     const dx = t.clientX - sx;
     const dy = t.clientY - sy;
     if (Math.abs(dx) > 54 && Math.abs(dx) > Math.abs(dy) * 1.25) {
-      // V2.12: 左→右スワイプで次ページ、右→左で前ページ。
-      go(dx > 0 ? 1 : -1);
+      // 縦書き・縦持ち: 左→右で次ページ。
+      // 横書き、または端末横向き: 右→左で次ページ。
+      go(horizontalNextFlow() ? (dx < 0 ? 1 : -1) : (dx > 0 ? 1 : -1));
     }
   }, { passive: true });
 
@@ -233,15 +238,22 @@ function showReader(root, articleMeta, article, backToList) {
   scheduleHide();
 }
 
-export async function renderWikipedia(root, { navigate, refresh = false } = {}) {
+export async function renderWikipedia(root, { navigate, refresh = false, initialFilter = 'today' } = {}) {
   articleGeneration += 1;
   document.documentElement.classList.remove('wiki-reading');
-  let filter = 'all';
+
+  const TAB_ORDER = ['today', 'classic', 'deep', 'trivia'];
+  let filter = TAB_ORDER.includes(initialFilter) ? initialFilter : 'today';
+  let data = null;
+  let sx = 0;
+  let sy = 0;
+  let suppressClickUntil = 0;
+
   const screen = el('section', { class: 'screen wikipedia-screen' });
   screen.append(topbar('Wikipedia', {
-    subtitle: '今日の面白い10本',
+    subtitle: '今日の出来事と読み物',
     actions: [
-      { label: '↻', title: '今日の10本を再取得', onClick: () => renderWikipedia(root, { navigate, refresh: true }) },
+      { label: '↻', title: '記事候補を再取得', onClick: () => renderWikipedia(root, { navigate, refresh: true, initialFilter: filter }) },
       { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   }));
@@ -250,56 +262,130 @@ export async function renderWikipedia(root, { navigate, refresh = false } = {}) 
   const host = el('div', { class: 'wiki-daily-list' });
   screen.append(categoryHost, host);
   root.replaceChildren(screen);
+
   host.replaceChildren(el('div', { class: 'card wiki-loading-card' }, [
-    el('strong', { text: '今日の10本を選んでいます…' }),
+    el('strong', { text: 'Wikipediaから記事を選んでいます…' }),
     el('div', { class: 'wiki-loading-line' })
   ]));
 
-  try {
-    const data = await loadDaily(refresh);
-    const draw = () => {
-      const tabs = [
-        { value: 'all', label: '今日の10本' },
-        ...(Number(data.eventCount || 0) > 0 ? [{ value: 'today', label: '今日の出来事' }] : []),
-        { value: 'classic', label: '王道' },
-        { value: 'deep', label: '考察' },
-        { value: 'trivia', label: '雑学' }
-      ];
-      categoryHost.replaceChildren(segmented(tabs, filter, value => { filter = value; draw(); }));
-      const items = (data.items || []).filter(item => filter === 'all' || item.kind === filter);
-      host.replaceChildren();
+  const tabs = [
+    { value: 'today', label: '今日の出来事' },
+    { value: 'classic', label: '王道' },
+    { value: 'deep', label: '考察' },
+    { value: 'trivia', label: '雑学' }
+  ];
 
-      items.forEach((item, index) => {
-        const card = el('button', { class: `wiki-daily-card wiki-daily-${item.kind}`, type: 'button' });
-        const copy = el('div', { class: 'wiki-daily-copy' }, [
-          el('div', { class: `wiki-category-badge wiki-${item.kind}`, text: item.category }),
-          el('strong', { class: 'wiki-daily-title', text: item.title }),
-          el('div', { class: 'wiki-daily-reason', text: item.reason }),
-          el('p', { class: 'wiki-daily-extract', text: item.extract || '' })
-        ]);
-        if (item.thumbnail) card.append(el('img', {
-          class: 'wiki-daily-thumb', src: item.thumbnail, alt: '', loading: 'lazy', decoding: 'async'
-        }));
-        card.append(copy, el('span', { class: 'wiki-daily-number', text: String(index + 1).padStart(2, '0') }));
-        card.onclick = async () => {
-          const loading = el('section', { class: 'wiki-reader-loading' }, [
-            el('strong', { text: item.title }),
-            el('div', { class: 'wiki-reader-loading-bar' }, [el('div', { class: 'wiki-reader-loading-fill' })]),
-            el('span', { text: '本文だけを整えています…' })
-          ]);
-          root.replaceChildren(loading);
-          try {
-            const article = await loadArticle(item.title);
-            showReader(root, item, article, () => renderWikipedia(root, { navigate }));
-          } catch (error) {
-            showToast(error.message);
-            renderWikipedia(root, { navigate });
-          }
-        };
-        host.append(card);
-      });
-    };
+  const centerActiveTab = () => {
+    requestAnimationFrame(() => {
+      const active = categoryHost.querySelector('button.active, [aria-selected="true"]');
+      active?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    });
+  };
+
+  const setFilter = next => {
+    if (!TAB_ORDER.includes(next)) return;
+    filter = next;
     draw();
+    centerActiveTab();
+  };
+
+  const openArticle = async item => {
+    const loading = el('section', { class: 'wiki-reader-loading' }, [
+      el('strong', { text: item.title }),
+      el('div', { class: 'wiki-reader-loading-bar' }, [el('div', { class: 'wiki-reader-loading-fill' })]),
+      el('span', { text: '本文だけを整えています…' })
+    ]);
+    root.replaceChildren(loading);
+    try {
+      const article = await loadArticle(item.title);
+      showReader(root, item, article, () => renderWikipedia(root, { navigate, initialFilter: filter }));
+    } catch (error) {
+      showToast(error.message);
+      renderWikipedia(root, { navigate, initialFilter: filter });
+    }
+  };
+
+  const draw = () => {
+    if (!data) return;
+    categoryHost.replaceChildren(segmented(tabs, filter, setFilter));
+
+    const items = (data.items || []).filter(item => item.kind === filter).slice(0, 10);
+    host.replaceChildren();
+
+    if (!items.length) {
+      host.append(el('div', { class: 'empty wiki-empty-category', text:
+        filter === 'today'
+          ? `${data.dateLabel || '今日'}の「できごと」から表示できる記事が見つかりませんでした`
+          : '今日は表示できる記事がありません'
+      }));
+      return;
+    }
+
+    items.forEach((item, index) => {
+      const card = el('button', {
+        class: `wiki-daily-card wiki-daily-${item.kind}${item.thumbnail ? ' has-image' : ''}`,
+        type: 'button'
+      });
+
+      const copy = el('div', { class: 'wiki-daily-copy' }, [
+        el('div', { class: `wiki-category-badge wiki-${item.kind}`, text: item.category }),
+        el('strong', { class: 'wiki-daily-title', text: item.title }),
+        el('div', { class: 'wiki-daily-reason', text: item.reason }),
+        el('p', { class: 'wiki-daily-extract', text: item.extract || '' }),
+        el('span', { class: 'wiki-daily-index', text: String(index + 1).padStart(2, '0') })
+      ]);
+      card.append(copy);
+
+      if (item.thumbnail) {
+        card.append(el('img', {
+          class: 'wiki-daily-thumb',
+          src: item.thumbnail,
+          alt: '',
+          loading: 'lazy',
+          decoding: 'async'
+        }));
+      }
+
+      card.onclick = () => {
+        if (Date.now() < suppressClickUntil) return;
+        openArticle(item);
+      };
+      host.append(card);
+    });
+  };
+
+  // 一覧上の左右スワイプで「今日 → 王道 → 考察 → 雑学」を切り替える。
+  host.addEventListener('touchstart', event => {
+    if (event.touches?.length !== 1) return;
+    sx = event.touches[0].clientX;
+    sy = event.touches[0].clientY;
+  }, { passive: true });
+
+  host.addEventListener('touchend', event => {
+    const touch = event.changedTouches?.[0];
+    if (!touch) return;
+    const dx = touch.clientX - sx;
+    const dy = touch.clientY - sy;
+    if (Math.abs(dx) < 58 || Math.abs(dx) <= Math.abs(dy) * 1.25) return;
+
+    const current = TAB_ORDER.indexOf(filter);
+    const nextIndex = dx < 0 ? current + 1 : current - 1;
+    if (nextIndex < 0 || nextIndex >= TAB_ORDER.length) return;
+
+    suppressClickUntil = Date.now() + 420;
+    setFilter(TAB_ORDER[nextIndex]);
+  }, { passive: true });
+
+  host.addEventListener('click', event => {
+    if (Date.now() >= suppressClickUntil) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+
+  try {
+    data = await loadDaily(refresh);
+    draw();
+    centerActiveTab();
   } catch (error) {
     host.replaceChildren(el('div', { class: 'error-box', text: error.message }));
   }
