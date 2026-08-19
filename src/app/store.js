@@ -30,7 +30,8 @@ export const DEFAULTS = {
     rankWithAi: true,
     twitchCommentDensity: 'normal',
     colors: {
-      home:'#64d2ff', weather:'#4da5ff', news:'#ff9f0a', knowledge:'#30d158', papers:'#8e73ff', reader:'#8e73ff', youtube:'#ff453a', twitch:'#9146ff', twitter:'#31a7ff', settings:'#8e8e93'
+      home:'#64d2ff', weather:'#4da5ff', news:'#ff9f0a', knowledge:'#30d158', papers:'#8e73ff', reader:'#8e73ff',
+      youtube:'#ff453a', twitch:'#9146ff', twitter:'#31a7ff', settings:'#8e8e93'
     },
     twitterRssBase:'https://rsshub-latest-wekl.onrender.com/twitter/list/'
   }
@@ -51,21 +52,22 @@ export const state = {
   twitterFeeds: load('twitterFeeds', DEFAULTS.twitterFeeds),
   settings: (() => {
     const saved = load('settings', DEFAULTS.settings) || {};
-    return {
-      ...DEFAULTS.settings,
-      ...saved,
-      colors: { ...DEFAULTS.settings.colors, ...(saved.colors || {}) }
-    };
+    return { ...DEFAULTS.settings, ...saved, colors: { ...DEFAULTS.settings.colors, ...(saved.colors || {}) } };
   })()
 };
 
 export function update(key, value) {
   state[key] = value;
   save(key, value);
+
   if (key === 'lastReaderMode') state.readerMode = value;
   if (key === 'lastMediaMode') state.mediaMode = value;
   if (key === 'paperTrack') state.paperTrack = value === 'creative' ? 'creative' : 'core';
-  if (key === 'creativePaperFamily') state.creativePaperFamily = ['all','applied','general'].includes(value) ? value : 'all';
+  if (key === 'creativePaperFamily') state.creativePaperFamily = ['all', 'applied', 'general'].includes(value) ? value : 'all';
+
+  if (['lastReaderMode', 'lastMediaMode', 'paperTrack', 'creativePaperFamily'].includes(key)) {
+    window.dispatchEvent(new CustomEvent('pdv2:context-changed', { detail: { key, value } }));
+  }
 }
 
 export function patchSettings(partial) {
