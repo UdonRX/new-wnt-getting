@@ -109,9 +109,10 @@ export async function renderHome(root, { navigate }) {
   const grid = el('div', { class: 'change-grid' });
   grid.append(
     tile('weather', '天気', '今日の予報', '現在・時間別・週間', 'weather', navigate, colors.weather),
-    tile('news', 'ニュース', newsNew ? `新着 ${newsNew}件` : '注目ニュース', 'おすすめ5件・全記事', 'reader', navigate, colors.news || colors.reader, { readerMode: 'news' }),
-    tile('knowledge', '知識', knowledgeNew ? `新着 ${knowledgeNew}件` : 'おすすめ記事', 'おすすめ5件・全記事', 'reader', navigate, colors.knowledge || colors.reader, { readerMode: 'knowledge' }),
+    tile('news', 'ニュース', newsNew ? `新着 ${newsNew}件` : '注目ニュース', 'おすすめ・全記事', 'reader', navigate, colors.news || colors.reader, { readerMode: 'news' }),
+    tile('knowledge', '知識', knowledgeNew ? `新着 ${knowledgeNew}件` : 'おすすめ記事', 'おすすめ・全記事', 'reader', navigate, colors.knowledge || colors.reader, { readerMode: 'knowledge' }),
     tile('papers', '論文', papers.total ? `新着 ${papers.total}件` : '注目論文', paperDetail, 'reader', navigate, colors.papers || colors.reader, { readerMode: 'papers', paperTrack: state.paperTrack || 'core' }),
+    tile('wikipedia', 'Wikipedia', '今日の10本', '王道・考察・雑学を縦書きで', 'wikipedia', navigate, colors.wikipedia || '#c89b5b'),
     tile('youtube', 'YouTube', youtubeNew ? `新着 ${youtubeNew}件` : '新着動画', '動画・Shorts・LIVE', 'media', navigate, colors.youtube, { mediaMode: 'youtube' }),
     tile('twitch', 'Twitch', live ? `${live}件 配信中` : 'アーカイブ', 'LIVE・アーカイブ', 'media', navigate, colors.twitch, { mediaMode: 'twitch' }),
     tile('twitter', 'SNS', '最新ポスト', 'Twitter / X リスト', 'twitter', navigate, colors.twitter)
