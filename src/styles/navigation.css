@@ -26,7 +26,7 @@
     max(1px, env(safe-area-inset-bottom))
     max(4px, env(safe-area-inset-left));
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
   background: #0c1014;
   border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
