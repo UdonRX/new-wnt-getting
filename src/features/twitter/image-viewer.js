@@ -1,78 +1,18 @@
 import { el } from '../../shared/dom.js';
-
-const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
-
+const clamp=(value,min,max)=>Math.min(max,Math.max(min,value));
 export function openImageViewer(images,startIndex=0){
-  const list=[...new Set((images||[]).filter(Boolean))];
-  if(!list.length)return;
-
-  let index=clamp(Number(startIndex)||0,0,list.length-1);
-  let scale=1,tx=0,ty=0;
-  let gestureStart=null;
-  const pointers=new Map();
-
-  const overlay=el('div',{class:'image-viewer','aria-label':'画像ビューア'});
-  const stage=el('div',{class:'image-viewer-stage'});
-  const img=el('img',{class:'image-viewer-img',alt:'拡大画像',draggable:'false'});
-  const close=el('button',{class:'image-viewer-close',type:'button','aria-label':'閉じる',text:'✕'});
-  const count=el('div',{class:'image-viewer-count'});
-  const reset=()=>{scale=1;tx=0;ty=0;apply();};
-  const apply=()=>{img.style.transform=`translate3d(${tx}px,${ty}px,0) scale(${scale})`;};
-  const show=()=>{img.src=list[index];count.textContent=list.length>1?`${index+1} / ${list.length}`:'';reset();};
-  const change=dir=>{if(list.length<2)return;index=(index+dir+list.length)%list.length;show();};
-  const distance=()=>{const a=[...pointers.values()];if(a.length<2)return 0;return Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y);};
-  const midpoint=()=>{const a=[...pointers.values()];if(a.length<2)return {x:0,y:0};return {x:(a[0].x+a[1].x)/2,y:(a[0].y+a[1].y)/2};};
-
-  close.onclick=()=>overlay.remove();
-  overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove();});
-  stage.addEventListener('dblclick',()=>{if(scale>1)reset();else{scale=2.5;apply();}});
-
-  stage.addEventListener('pointerdown',e=>{
-    stage.setPointerCapture?.(e.pointerId);
-    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
-    if(pointers.size===1){gestureStart={x:e.clientX,y:e.clientY,tx,ty,scale,time:Date.now()};}
-    if(pointers.size===2){gestureStart={distance:distance(),scale,mid:midpoint(),tx,ty};}
-  });
-  stage.addEventListener('pointermove',e=>{
-    if(!pointers.has(e.pointerId))return;
-    pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
-    if(pointers.size>=2&&gestureStart?.distance){
-      const d=distance();
-      scale=clamp(gestureStart.scale*(d/Math.max(1,gestureStart.distance)),1,5);
-      apply();
-      return;
-    }
-    if(pointers.size===1&&gestureStart?.x!=null){
-      const dx=e.clientX-gestureStart.x,dy=e.clientY-gestureStart.y;
-      if(scale>1){tx=gestureStart.tx+dx;ty=gestureStart.ty+dy;apply();}
-      else{tx=dx*.28;apply();}
-    }
-  });
-  const finishPointer=e=>{
-    const prev=pointers.get(e.pointerId);
-    pointers.delete(e.pointerId);
-    if(pointers.size===0&&gestureStart?.x!=null){
-      const dx=(prev?.x??e.clientX)-gestureStart.x;
-      const dt=Date.now()-gestureStart.time;
-      if(scale<=1.01&&Math.abs(dx)>55&&dt<700){change(dx<0?1:-1);}
-      else if(scale<=1.01)reset();
-      gestureStart=null;
-    }else if(pointers.size===1){
-      const one=[...pointers.values()][0];
-      gestureStart={x:one.x,y:one.y,tx,ty,scale,time:Date.now()};
-    }
-  };
-  stage.addEventListener('pointerup',finishPointer);
-  stage.addEventListener('pointercancel',finishPointer);
-  stage.addEventListener('wheel',e=>{
-    e.preventDefault();
-    scale=clamp(scale+(e.deltaY<0?.25:-.25),1,5);
-    if(scale===1){tx=0;ty=0;}
-    apply();
-  },{passive:false});
-
-  stage.append(img);
-  overlay.append(stage,close,count);
-  document.getElementById('overlay-root').append(overlay);
-  show();
+  const list=[...new Set((images||[]).filter(Boolean))];if(!list.length)return;
+  let index=clamp(Number(startIndex)||0,0,list.length-1),scale=1,tx=0,ty=0,gestureStart=null,rafId=0,lastTapAt=0,lastTapX=0,lastTapY=0;const pointers=new Map();
+  const overlay=el('div',{class:'image-viewer','aria-label':'画像ビューア'});const stage=el('div',{class:'image-viewer-stage'});const img=el('img',{class:'image-viewer-img',alt:'拡大画像',draggable:'false',decoding:'async'});const close=el('button',{class:'image-viewer-close',type:'button','aria-label':'閉じる',text:'✕'});const count=el('div',{class:'image-viewer-count'});
+  const applyNow=()=>{rafId=0;img.style.transform=`translate3d(${tx}px, ${ty}px, 0) scale(${scale})`;};const scheduleApply=()=>{if(!rafId)rafId=requestAnimationFrame(applyNow);};const reset=()=>{scale=1;tx=0;ty=0;scheduleApply();};
+  const twoPointers=()=>{const iterator=pointers.values();const a=iterator.next().value;const b=iterator.next().value;return a&&b?[a,b]:null;};const pointerDistance=()=>{const pair=twoPointers();return pair?Math.hypot(pair[0].x-pair[1].x,pair[0].y-pair[1].y):0;};const pointerMidpoint=()=>{const pair=twoPointers();return pair?{x:(pair[0].x+pair[1].x)/2,y:(pair[0].y+pair[1].y)/2}:{x:0,y:0};};
+  const preloadAround=()=>{if(list.length<2)return;[(index+1)%list.length,(index-1+list.length)%list.length].forEach(i=>{const preload=new Image();preload.decoding='async';preload.src=list[i];});};
+  const show=()=>{img.src=list[index];count.textContent=list.length>1?`${index+1} / ${list.length}`:'';reset();preloadAround();};const change=dir=>{if(list.length<2)return;index=(index+dir+list.length)%list.length;show();};
+  const toggleZoomAt=(x,y)=>{if(scale>1.05){reset();return;}scale=2.5;const rect=stage.getBoundingClientRect();tx=(rect.left+rect.width/2-x)*(scale-1)/scale;ty=(rect.top+rect.height/2-y)*(scale-1)/scale;scheduleApply();};
+  const remove=()=>{if(rafId)cancelAnimationFrame(rafId);overlay.remove();};close.onclick=remove;overlay.addEventListener('click',e=>{if(e.target===overlay)remove();});
+  stage.addEventListener('dblclick',e=>toggleZoomAt(e.clientX,e.clientY));
+  stage.addEventListener('pointerdown',event=>{stage.setPointerCapture?.(event.pointerId);pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});if(pointers.size===1)gestureStart={x:event.clientX,y:event.clientY,tx,ty,scale,time:performance.now()};else if(pointers.size===2)gestureStart={distance:pointerDistance(),scale,mid:pointerMidpoint(),tx,ty,time:performance.now()};});
+  stage.addEventListener('pointermove',event=>{if(!pointers.has(event.pointerId))return;pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});if(pointers.size>=2&&gestureStart?.distance){const d=pointerDistance();const mid=pointerMidpoint();scale=clamp(gestureStart.scale*(d/Math.max(1,gestureStart.distance)),1,5);tx=gestureStart.tx+(mid.x-gestureStart.mid.x);ty=gestureStart.ty+(mid.y-gestureStart.mid.y);scheduleApply();return;}if(pointers.size===1&&gestureStart?.x!=null&&scale>1.01){const p=pointers.values().next().value;tx=gestureStart.tx+(p.x-gestureStart.x);ty=gestureStart.ty+(p.y-gestureStart.y);scheduleApply();}} ,{passive:true});
+  const finishPointer=event=>{const previous=pointers.get(event.pointerId);pointers.delete(event.pointerId);if(pointers.size===0&&gestureStart?.x!=null){const endX=previous?.x??event.clientX,endY=previous?.y??event.clientY,dx=endX-gestureStart.x,dy=endY-gestureStart.y,elapsed=performance.now()-gestureStart.time,moved=Math.hypot(dx,dy);if(scale<=1.01&&Math.abs(dx)>52&&Math.abs(dx)>Math.abs(dy)&&elapsed<750)change(dx<0?1:-1);else if(scale<=1.01){tx=0;ty=0;scheduleApply();const now=performance.now();if(moved<12&&now-lastTapAt<330&&Math.hypot(endX-lastTapX,endY-lastTapY)<42){lastTapAt=0;toggleZoomAt(endX,endY);}else if(moved<12){lastTapAt=now;lastTapX=endX;lastTapY=endY;}}gestureStart=null;}else if(pointers.size===1){const one=pointers.values().next().value;gestureStart={x:one.x,y:one.y,tx,ty,scale,time:performance.now()};}};
+  stage.addEventListener('pointerup',finishPointer,{passive:true});stage.addEventListener('pointercancel',finishPointer,{passive:true});stage.addEventListener('wheel',event=>{event.preventDefault();scale=clamp(scale+(event.deltaY<0?0.25:-0.25),1,5);if(scale===1){tx=0;ty=0;}scheduleApply();},{passive:false});stage.append(img);overlay.append(stage,close,count);document.getElementById('overlay-root').append(overlay);show();
 }
