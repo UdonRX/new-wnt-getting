@@ -1168,3 +1168,86 @@ html, body, #app-main { max-width:100%; overflow-x:clip; }
   to { transform: none; opacity: 1; }
 }
 
+/* ========================================================================== 
+   V2.13 Wikipedia一覧 / タブスワイプ / Twitter写真のみ投稿
+   v2.12適用後の screens.css の一番最後へ追記
+   ========================================================================== */
+
+/* Wikipedia: 一覧カードは「文章=左 / 写真=右」を固定。写真と文字を絶対に重ねない。 */
+.wikipedia-screen,
+.wikipedia-screen .wiki-daily-list {
+  overflow-x: clip;
+  overscroll-behavior-x: none;
+}
+.wiki-category-tabs {
+  position: relative;
+  z-index: 2;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.wiki-category-tabs::-webkit-scrollbar { display: none; }
+.wiki-daily-list { touch-action: pan-y; }
+
+.wiki-daily-card {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 96px !important;
+  grid-template-areas: "copy media" !important;
+  gap: 13px !important;
+  align-items: stretch !important;
+  min-height: 126px;
+  padding: 14px !important;
+  overflow: hidden !important;
+}
+.wiki-daily-card:not(.has-image) {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-areas: "copy" !important;
+}
+.wiki-daily-copy {
+  grid-area: copy !important;
+  min-width: 0;
+  width: 100%;
+  align-content: start;
+  position: relative;
+  z-index: 1;
+}
+.wiki-daily-thumb {
+  grid-area: media !important;
+  width: 96px !important;
+  height: 100% !important;
+  min-height: 98px;
+  max-height: 142px;
+  justify-self: end;
+  align-self: stretch;
+  object-fit: cover;
+  border-radius: 13px;
+  position: static !important;
+  transform: none !important;
+}
+.wiki-daily-index {
+  margin-top: 2px;
+  color: color-mix(in srgb,var(--muted) 58%,transparent);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+/* v2.11/v2.12の絶対配置番号が残っていても無効化 */
+.wiki-daily-number { display: none !important; }
+.wiki-empty-category { min-height: 92px; display:grid; place-items:center; text-align:center; }
+
+@media (max-width:390px) {
+  .wiki-daily-card {
+    grid-template-columns: minmax(0, 1fr) 82px !important;
+    gap: 10px !important;
+    min-height: 114px;
+  }
+  .wiki-daily-thumb {
+    width: 82px !important;
+    min-height: 88px;
+    max-height: 126px;
+  }
+}
+
+/* Twitter: 写真だけの投稿はテキスト領域そのものを作らない */
+.tweet-card-photo-only .tweet-images { margin-top: 2px; }
+.tweet-card-photo-only .tweet-author-row { margin-bottom: 7px; }
