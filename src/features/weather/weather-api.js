@@ -48,6 +48,18 @@ function canonicalPrefecture(input) {
   return PREFECTURES.find(pref => q === pref || stripPrefSuffix(q) === stripPrefSuffix(pref)) || '';
 }
 
+function isJapanResult(result) {
+  const code = String(result?.country_code || result?.countryCode || '').toUpperCase();
+  const country = normalize(result?.country || '');
+  return !code || code === 'JP' || /日本|Japan/i.test(country);
+}
+
+function samePrefecture(value, prefecture) {
+  const a = stripPrefSuffix(value || '');
+  const b = stripPrefSuffix(prefecture || '');
+  return Boolean(a && b && a === b);
+}
+
 export function jmaCodeForAdmin(admin1 = '', placeText = '') {
   if (/北海道/.test(admin1)) {
     const hit = HOKKAIDO_SUB.find(([re]) => re.test(placeText));
@@ -61,15 +73,39 @@ export function jmaCodeForAdmin(admin1 = '', placeText = '') {
 }
 
 async function openMeteoSearch(name, count = 20) {
+  const query = String(name || '').trim();
+  if (!query) return [];
   const url = new URL('https://geocoding-api.open-meteo.com/v1/search');
-  url.searchParams.set('name', name);
+  url.searchParams.set('name', query);
   url.searchParams.set('count', String(count));
   url.searchParams.set('language', 'ja');
   url.searchParams.set('format', 'json');
   url.searchParams.set('countryCode', 'JP');
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error('地域検索に失敗しました');
-  return (await res.json()).results || [];
+  const data = await res.json();
+  return (data.results || []).filter(isJapanResult);
+}
+
+async function searchNames(names, count = 40) {
+  const seen = new Set();
+  const collected = [];
+  for (const raw of names) {
+    const name = String(raw || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    try {
+      const rows = await openMeteoSearch(name, count);
+      for (const row of rows) {
+        const key = `${row.id || ''}|${row.latitude}|${row.longitude}|${row.name || ''}`;
+        if (!collected.some(item => item._key === key)) collected.push({ ...row, _key: key });
+      }
+    } catch (error) {
+      // 1候補の検索失敗で全体を落とさず、別表記を試す。
+      console.warn('[weather-geocode-fallback]', name, error?.message || error);
+    }
+  }
+  return collected.map(({ _key, ...row }) => row);
 }
 
 async function loadMunicipalityCatalog() {
@@ -104,40 +140,74 @@ function municipalityMatches(catalog, input) {
   for (const [prefecture, municipalities] of Object.entries(catalog || {})) {
     for (const municipality of Array.isArray(municipalities) ? municipalities : []) {
       const name = normalize(municipality);
-      if (name === q || stripMunicipalitySuffix(name) === bare) add(prefecture, name);
+      const nameBare = stripMunicipalitySuffix(name);
 
-      // Geoloniaの一覧は政令指定都市を「京都市北区」のように区単位で持つため、
-      // 「京都」「京都市」の検索でも親市を実在自治体として候補にする。
+      // 完全一致と「市/区/町/村」を省いた一致。
+      if (name === q || nameBare === bare) add(prefecture, name);
+
+      // 政令指定都市は一覧が「仙台市青葉区」のように区単位なので、
+      // 「仙台」「仙台市」でも親市を候補として返す。
       const designated = name.match(/^(.+市).+区$/u)?.[1] || '';
       if (designated && (designated === q || stripMunicipalitySuffix(designated) === bare)) {
         add(prefecture, designated);
       }
     }
   }
-  return out.slice(0, 20);
+  return out.slice(0, 30);
 }
 
 function resultScore(result, municipality, prefecture) {
   const resultName = normalize(result?.name || '');
   const admin1 = normalize(result?.admin1 || '');
   const admin2 = normalize(result?.admin2 || '');
+  const target = normalize(municipality);
+  const targetBare = stripMunicipalitySuffix(target);
   let score = 0;
-  if (admin1 === normalize(prefecture)) score += 100;
-  if (resultName === municipality) score += 80;
-  if (stripMunicipalitySuffix(resultName) === stripMunicipalitySuffix(municipality)) score += 50;
-  if (admin2 === municipality || stripMunicipalitySuffix(admin2) === stripMunicipalitySuffix(municipality)) score += 35;
+
+  if (samePrefecture(admin1, prefecture)) score += 160;
+  if (resultName === target) score += 120;
+  if (stripMunicipalitySuffix(resultName) === targetBare) score += 90;
+  if (admin2 === target || stripMunicipalitySuffix(admin2) === targetBare) score += 55;
+  if (normalize(result?.feature_code || '').startsWith('PPL')) score += 10;
   return score;
 }
 
 async function geocodeMunicipality(match) {
-  const query = `${match.municipality}, ${match.prefecture}`;
-  const results = await openMeteoSearch(query, 40);
+  const bare = stripMunicipalitySuffix(match.municipality);
+  const prefBare = stripPrefSuffix(match.prefecture);
+
+  // Open-Meteoのnameは「住所全文」より単純な地名検索の方が安定するため、
+  // まず仙台/仙台市のような単純名を投げ、都道府県は結果側で照合する。
+  const results = await searchNames([
+    bare,
+    match.municipality,
+    `${bare} ${prefBare}`,
+    `${match.municipality} ${match.prefecture}`
+  ], 40);
+
   const ranked = results
-    .filter(result => normalize(result.admin1 || '') === normalize(match.prefecture))
     .map(result => ({ result, score: resultScore(result, match.municipality, match.prefecture) }))
+    .filter(row => row.score > 0)
     .sort((a, b) => b.score - a.score);
-  const best = ranked[0]?.result;
-  if (!best) return null;
+
+  let best = ranked.find(row => samePrefecture(row.result?.admin1, match.prefecture))?.result || ranked[0]?.result;
+
+  // 政令指定都市の親市が直接ヒットしない場合は、その市の区を使って中心付近を得る。
+  if (!best && /市$/u.test(match.municipality)) {
+    const catalog = await loadMunicipalityCatalog();
+    const children = (catalog?.[match.prefecture] || [])
+      .filter(name => normalize(name).startsWith(normalize(match.municipality)) && /区$/u.test(name))
+      .slice(0, 4);
+    if (children.length) {
+      const childResults = await searchNames(children.flatMap(name => [name, stripMunicipalitySuffix(name)]), 30);
+      best = childResults
+        .filter(result => samePrefecture(result?.admin1, match.prefecture))
+        .sort((a, b) => resultScore(b, match.municipality, match.prefecture) - resultScore(a, match.municipality, match.prefecture))[0] || null;
+    }
+  }
+
+  if (!best || !Number.isFinite(Number(best.latitude)) || !Number.isFinite(Number(best.longitude))) return null;
+
   return {
     name: match.municipality,
     displayName: `${match.municipality} / ${match.prefecture}`,
@@ -148,14 +218,34 @@ async function geocodeMunicipality(match) {
   };
 }
 
-async function geocodePrefecture(prefecture) {
+async function geocodePrefecture(prefecture, originalInput = '') {
   const capital = PREFECTURE_CAPITALS[prefecture];
-  const results = await openMeteoSearch(`${capital}, ${prefecture}`, 30);
-  const best = results.find(result => normalize(result.admin1 || '') === normalize(prefecture)) || results[0];
-  if (!best) return [];
+  const prefBare = stripPrefSuffix(prefecture);
+  const capitalBare = stripMunicipalitySuffix(capital);
+
+  const results = await searchNames([
+    normalize(originalInput),
+    prefBare,
+    capitalBare,
+    capital
+  ], 40);
+
+  const preferred = results
+    .filter(result => samePrefecture(result?.admin1, prefecture))
+    .sort((a, b) => {
+      const an = stripMunicipalitySuffix(a?.name || '');
+      const bn = stripMunicipalitySuffix(b?.name || '');
+      const ac = an === capitalBare ? 1 : 0;
+      const bc = bn === capitalBare ? 1 : 0;
+      return bc - ac;
+    })[0];
+
+  const best = preferred || results.find(result => stripMunicipalitySuffix(result?.name || '') === capitalBare) || results[0];
+  if (!best || !Number.isFinite(Number(best.latitude)) || !Number.isFinite(Number(best.longitude))) return [];
+
   return [{
     name: prefecture,
-    displayName: prefecture,
+    displayName: `${prefecture} / ${capital}`,
     lat: Number(best.latitude),
     lon: Number(best.longitude),
     admin1: prefecture,
@@ -167,15 +257,16 @@ export async function geocodeJapan(name) {
   const q = normalize(name);
   if (!q) return [];
 
-  // 1) 都道府県を先に完全判定。「香川」は必ず「香川県」になる。
+  // 1) 都道府県。「宮城」「宮城県」「東京」「東京都」を同一扱いにする。
   const prefecture = canonicalPrefecture(q);
-  if (prefecture) return geocodePrefecture(prefecture);
+  if (prefecture) return geocodePrefecture(prefecture, q);
 
-  // 2) 都道府県以外は、日本に実在する市区町村だけを候補にする。
+  // 2) 日本の市区町村一覧で実在確認してから候補化。
   const catalog = await loadMunicipalityCatalog();
   const matches = municipalityMatches(catalog, q);
   if (!matches.length) return [];
 
+  // 候補を同時に叩き過ぎない。通常は同名自治体数が少ないため8件までで十分。
   const settled = await Promise.allSettled(matches.slice(0, 8).map(geocodeMunicipality));
   const found = settled
     .filter(result => result.status === 'fulfilled' && result.value)
