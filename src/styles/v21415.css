@@ -1,0 +1,33 @@
+/* Personal Dashboard v2.14.15
+   Startup recovery + v2.14.13 edge/nav compatibility. */
+
+/* v2141.css gives the decorative edge a fixed 100dvh height.
+   v21413 moves its bottom edge to the top of the bottom nav.
+   Use top/bottom positioning instead of an over-constrained explicit height. */
+#edge-frame {
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+.pd-startup-error {
+  min-height: 55dvh;
+  display: grid;
+  place-items: center;
+  padding: max(18px, env(safe-area-inset-top)) 18px calc(90px + env(safe-area-inset-bottom));
+}
+
+.pd-startup-error .error-box {
+  width: min(100%, 560px);
+}
+
+.pd-startup-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.pd-startup-error-actions .soft-button {
+  min-height: 40px;
+  padding-inline: 14px;
+}
