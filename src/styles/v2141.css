@@ -1877,3 +1877,238 @@ body.reader-immersive .bottom-nav {
   .reader-ai-progress-bar { transition: none; }
   .reader-ai-progress-bar::after { animation: none; }
 }
+
+/* ========================================================================== 
+   Personal Dashboard v2.14.7 — Reader recommendation airy dense layout
+   10% header / 25% visual / 65% text+action, 24px horizontal rhythm
+   ========================================================================== */
+.reader-story-card {
+  --reader-story-pad-left: max(24px, calc(env(safe-area-inset-left) + 14px));
+  --reader-story-pad-right: max(24px, calc(env(safe-area-inset-right) + 14px));
+  grid-template-rows:
+    clamp(62px, 10dvh, 88px)
+    clamp(150px, 25dvh, 245px)
+    minmax(0, 1fr)
+    auto !important;
+  gap: clamp(10px, 1.35dvh, 14px) !important;
+  padding:
+    env(safe-area-inset-top)
+    var(--reader-story-pad-right)
+    max(14px, calc(env(safe-area-inset-bottom) + 10px))
+    var(--reader-story-pad-left) !important;
+  background:
+    radial-gradient(circle at 86% 5%, color-mix(in srgb, var(--reader-card-accent-local) 9%, transparent), transparent 25%),
+    linear-gradient(180deg, #0b0e13 0%, #07090d 100%) !important;
+}
+
+/* 1. Top ~10% */
+.reader-story-header {
+  min-height: 0;
+  align-self: stretch;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 12px;
+  padding: 7px 0 1px;
+}
+.reader-story-source {
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+}
+.reader-story-source-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  box-shadow: none;
+}
+.reader-story-source-copy { gap: 5px; }
+.reader-story-source-name {
+  font-size: 11.5px;
+  font-weight: 720;
+  color: rgba(255,255,255,.90);
+}
+.reader-story-meta-line { gap: 7px; }
+.reader-story-category-badge {
+  max-width: 57vw;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--reader-card-accent-local) 12%, rgba(255,255,255,.035));
+  font-size: 8.5px;
+}
+.reader-story-time {
+  font-size: 8.5px;
+  color: rgba(255,255,255,.40);
+}
+.reader-story-grid.reader-grid-fab {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  background: rgba(255,255,255,.045);
+}
+
+/* 2. Visual ~25% */
+.reader-story-visual {
+  border-radius: 22px;
+  box-shadow: none;
+  background: #10151c;
+}
+.reader-story-image {
+  object-fit: cover;
+  object-position: center;
+  filter: saturate(.94) contrast(1.02);
+}
+.reader-story-graphic {
+  padding: 20px;
+  background:
+    radial-gradient(circle at 18% 20%, color-mix(in srgb, var(--reader-card-accent-local) 38%, transparent), transparent 27%),
+    radial-gradient(circle at 80% 68%, color-mix(in srgb, var(--reader-card-accent-local) 16%, transparent), transparent 34%),
+    linear-gradient(145deg, color-mix(in srgb, var(--reader-card-accent-local) 8%, #18202a), #090c11 72%);
+}
+.reader-story-graphic-title {
+  max-width: 84%;
+  font-size: clamp(20px, 6vw, 30px);
+  line-height: 1.05;
+}
+
+/* 3. Text + summaries. Information-rich, visually quiet. */
+.reader-story-content {
+  min-height: 0;
+  align-content: start;
+  gap: clamp(12px, 1.7dvh, 17px);
+  overflow: hidden;
+  padding-top: 2px;
+}
+.reader-story-title.reader-swipe-title {
+  margin: 0;
+  font-size: 20px !important;
+  font-weight: 760;
+  line-height: 1.34;
+  letter-spacing: -.025em;
+  color: #fff;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.reader-story-title strong {
+  color: #fff;
+  font-weight: 850;
+}
+
+.reader-story-summary.reader-ai-summary {
+  display: grid;
+  gap: clamp(9px, 1.15dvh, 12px);
+  min-height: 0;
+  color: rgba(163,163,163,.98);
+}
+.reader-story-summary-row {
+  min-width: 0;
+  display: block;
+  padding: clamp(11px, 1.45dvh, 14px) 14px;
+  border: 1px solid rgba(255,255,255,.055);
+  border-radius: 15px;
+  background: rgba(30,41,59,.50);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+.reader-story-summary-bullet { display: none !important; }
+.reader-story-summary-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  font-size: clamp(12px, 3.1vw, 13.5px);
+  line-height: 1.65;
+  letter-spacing: .002em;
+  overflow-wrap: anywhere;
+}
+.reader-story-summary-label {
+  margin: 0;
+  padding: 2px 0;
+  color: rgba(255,255,255,.43);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .015em;
+  white-space: nowrap;
+}
+.reader-story-summary-text {
+  color: rgb(163 163 163);
+  font-weight: 470;
+}
+.reader-story-summary-text strong,
+.reader-story-summary-text b {
+  color: #fff !important;
+  font-weight: 780 !important;
+}
+
+/* Loading occupies the same visual language as the summary cards. */
+.reader-story-summary.is-loading,
+.reader-story-summary.is-error {
+  min-height: 78px;
+  padding: 14px;
+  border: 1px solid rgba(255,255,255,.055);
+  border-radius: 15px;
+  background: rgba(30,41,59,.42);
+}
+
+/* 4. Always-visible bottom action inside the full-screen card. */
+.reader-story-actions {
+  position: relative;
+  z-index: 6;
+  align-self: end;
+  padding-top: 1px;
+}
+.reader-story-open {
+  min-height: 48px;
+  padding: 11px 18px;
+  border-radius: 15px;
+  border-color: color-mix(in srgb, var(--reader-card-accent-local) 26%, rgba(255,255,255,.10));
+  background: color-mix(in srgb, var(--reader-card-accent-local) 12%, rgba(255,255,255,.045));
+  font-size: 12px;
+  font-weight: 740;
+  letter-spacing: .005em;
+}
+
+@media (max-height: 760px) {
+  .reader-story-card {
+    grid-template-rows:
+      clamp(56px, 9.5dvh, 70px)
+      clamp(138px, 23dvh, 180px)
+      minmax(0, 1fr)
+      auto !important;
+    gap: 8px !important;
+  }
+  .reader-story-content { gap: 8px; }
+  .reader-story-title.reader-swipe-title {
+    font-size: 18px !important;
+    line-height: 1.28;
+  }
+  .reader-story-summary.reader-ai-summary { gap: 6px; }
+  .reader-story-summary-row {
+    padding: 8px 11px;
+    border-radius: 12px;
+  }
+  .reader-story-summary-copy {
+    gap: 6px;
+    font-size: 11px;
+    line-height: 1.48;
+  }
+  .reader-story-summary-label { font-size: 8px; }
+  .reader-story-open {
+    min-height: 42px;
+    padding-block: 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 370px) {
+  .reader-story-card {
+    --reader-story-pad-left: max(20px, calc(env(safe-area-inset-left) + 12px));
+    --reader-story-pad-right: max(20px, calc(env(safe-area-inset-right) + 12px));
+  }
+  .reader-story-summary-copy {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
