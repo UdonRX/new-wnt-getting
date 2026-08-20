@@ -1,4 +1,4 @@
-const CACHE_NAME = 'personal-dashboard-v2-14-9';
+const CACHE_NAME = 'personal-dashboard-v2-14-10';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -8,6 +8,7 @@ const APP_SHELL = [
   '/src/styles/navigation.css',
   '/src/styles/screens.css',
   '/src/styles/v2141.css',
+  '/src/styles/v21410.css',
   '/src/main.js',
   '/src/shared/icons.js',
   '/shared/paper-creative-keywords.js',
