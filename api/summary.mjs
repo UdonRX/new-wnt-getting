@@ -29,20 +29,66 @@ function stripFence(value) {
   return String(value || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 }
 
+function stripMarkdown(value = '') {
+  return String(value || '').replace(/\*\*/g, '').trim();
+}
+
+function visibleLength(value = '') {
+  return Array.from(stripMarkdown(value)).length;
+}
+
+function clampMarkdown(value = '', maxVisible = 40) {
+  const source = clean(value, 2400).replace(/\*{3,}/g, '**');
+  let out = '';
+  let visible = 0;
+  let boldOpen = false;
+  for (let i = 0; i < source.length && visible < maxVisible;) {
+    if (source.startsWith('**', i)) {
+      out += '**';
+      boldOpen = !boldOpen;
+      i += 2;
+      continue;
+    }
+    const code = source.codePointAt(i);
+    const ch = String.fromCodePoint(code);
+    out += ch;
+    visible += 1;
+    i += ch.length;
+  }
+  if (boldOpen) out += '**';
+  return out.replace(/\*\*\s*\*\*/g, '').trim();
+}
+
+function clampPlain(value = '', maxVisible = 40) {
+  return Array.from(stripMarkdown(clean(value, 2400))).slice(0, maxVisible).join('').trim();
+}
+
+function emphasizeNumbers(value = '') {
+  return String(value || '').replace(/(?<!\*)([0-9０-９]+(?:[.,．，][0-9０-９]+)?(?:%|％|倍|件|人|年|円|ドル|万|億|兆|℃|度|nm|mm|cm|km|GB|TB|W|kW|MW|GW)?)(?!\*)/g, '**$1**');
+}
+
+function normalizeTag(value = '') {
+  const raw = stripMarkdown(clean(value, 80)).replace(/^#+/, '').replace(/[\s　]+/g, '');
+  return raw ? `#${raw}` : '';
+}
+
+function categoryTag(mode = '', category = '') {
+  const value = String(category || '').trim();
+  if (value) return normalizeTag(value);
+  if (mode === 'news') return '#最新ニュース';
+  if (mode === 'knowledge') return '#専門知識';
+  if (mode === 'papers') return '#研究';
+  return '#おすすめ';
+}
+
 function splitSentences(text = '') {
   const normalized = clean(text, MAX_AI_INPUT);
   if (!normalized) return [];
   return normalized
-    .split(/(?<=[。！？!?])\s+|(?:\n+)|(?<=。)(?=[^」』])/)
+    .split(/(?<=[。！？!?])\s+|(?:\n+)|(?<=。)(?=[^」』])/) 
     .map(v => v.trim())
-    .filter(v => v.length >= 12)
-    .slice(0, 24);
-}
-
-function fullSentence(value = '') {
-  // v2.14.2: 文字数で文章の途中を切って「…」を付けない。
-  // 要約に採用した1文は最後までそのまま表示する。
-  return clean(value, MAX_AI_INPUT);
+    .filter(v => v.length >= 8)
+    .slice(0, 30);
 }
 
 function looksMostlyEnglish(value = '') {
@@ -52,10 +98,18 @@ function looksMostlyEnglish(value = '') {
   return latin >= 24 && latin > ja * 1.4;
 }
 
-function localSummary({ title, description, reason = 'local', forceJapanese = false, contentSource = 'rss' }) {
+function localSummary({ title, description, reason = 'local', forceJapanese = false, contentSource = 'rss', mode = '', category = '', source = '' }) {
   if (forceJapanese && looksMostlyEnglish(`${title}\n${description}`)) {
+    const tags = [categoryTag(mode, category), source ? normalizeTag(source) : ''].filter(Boolean).slice(0, 3);
     return {
-      short: '日本語要約の生成に一時的に失敗しました。再取得するとAI翻訳をもう一度試します。',
+      headline: '日本語要約を再取得してください',
+      lines: [
+        { label: '結論/事実', text: '日本語要約の生成に一時的に失敗しました。' },
+        { label: '背景/特徴', text: '原文は英語のため、生文のまま表示しません。' },
+        { label: '影響/展望', text: '再取得するとAI翻訳をもう一度試します。' }
+      ],
+      tags,
+      short: '日本語要約の生成に一時的に失敗しました。',
       points: [],
       why: '',
       provider: 'local',
@@ -70,22 +124,23 @@ function localSummary({ title, description, reason = 'local', forceJapanese = fa
   }
 
   const sentences = splitSentences(description);
-  const fallbackTitle = clean(title, 500);
-  const short = fullSentence(sentences[0] || fallbackTitle || '要約できる本文がありません。');
-
-  const points = [];
-  for (const sentence of sentences.slice(1)) {
-    const point = fullSentence(sentence);
-    if (!point || points.includes(point) || point === short) continue;
-    points.push(point);
-    if (points.length >= 4) break;
-  }
-
-  if (!points.length && fallbackTitle && fallbackTitle !== short) points.push(fullSentence(fallbackTitle));
+  const originalTitle = clean(title, 500) || '記事のポイント';
+  const headline = clampPlain(originalTitle, 35) || '記事のポイント';
+  const conclusion = clampMarkdown(emphasizeNumbers(sentences[0] || originalTitle), 40) || '記事の中心となる内容を確認できます。';
+  const background = clampMarkdown(emphasizeNumbers(sentences[1] || '背景や特徴は原文で詳しく確認できます。'), 40);
+  const impact = clampMarkdown(emphasizeNumbers(sentences[2] || '今後の動きや影響に注目が必要です。'), 40);
+  const tags = [categoryTag(mode, category), source ? normalizeTag(source) : ''].filter(Boolean).slice(0, 3);
 
   return {
-    short,
-    points,
+    headline,
+    lines: [
+      { label: '結論/事実', text: conclusion },
+      { label: '背景/特徴', text: background },
+      { label: '影響/展望', text: impact }
+    ],
+    tags,
+    short: stripMarkdown(conclusion),
+    points: [background, impact].map(stripMarkdown).filter(Boolean),
     why: '',
     provider: 'local',
     model: '',
@@ -112,21 +167,17 @@ function sampledPdfText(extracted) {
     if (index >= 0 && index < pages.length) picked.add(index);
   };
 
-  // Abstract/冒頭を厚めに。
   for (let i = 0; i < Math.min(5, pages.length); i += 1) add(i);
 
-  // 結論・考察・結果らしきページ。
   pages.forEach((page, index) => {
     const text = pageText(page);
     if (/abstract|要旨|概要|results?|結果|discussion|考察|conclusions?|結論|summary|まとめ/i.test(text)) add(index);
   });
 
-  // 長い論文でも中間を均等サンプリング。
   if (pages.length > 10) {
     for (const ratio of [.28, .5, .72]) add(Math.floor((pages.length - 1) * ratio));
   }
 
-  // 終盤。
   for (let i = Math.max(0, pages.length - 4); i < pages.length; i += 1) add(i);
 
   let out = '';
@@ -155,19 +206,58 @@ function sampledArticleText(extracted) {
 const responseSchema = {
   type: 'object',
   properties: {
-    short: { type: 'string', description: '記事の核心を日本語で自然な1〜2文にまとめる。文の途中で省略記号を付けて切らない。' },
-    points: {
+    headline: {
+      type: 'string',
+      description: '35文字以内の日本語タイトル。結論や最もインパクトのある事実を先頭に置く。重要な数値や固有名詞は**太字**にしてよい。'
+    },
+    conclusion: {
+      type: 'string',
+      description: '40文字以内の1文。何が起きた・発表されたかを明確に。重要な数値や固有名詞は**太字**。'
+    },
+    background: {
+      type: 'string',
+      description: '40文字以内の1文。なぜ重要か、仕組みや理由を平易に説明。重要な数値や固有名詞は**太字**。'
+    },
+    impact: {
+      type: 'string',
+      description: '40文字以内の1文。今後の影響や展望を具体的に。重要な数値や固有名詞は**太字**。'
+    },
+    tags: {
       type: 'array',
-      maxItems: 4,
-      items: { type: 'string', description: '重要点を自然な完結した文で書く。文字数都合で文中を切らない。' }
+      maxItems: 3,
+      items: { type: 'string', description: '#から始まる短い日本語タグ。最大3つ。' }
     }
   },
-  required: ['short', 'points'],
+  required: ['headline', 'conclusion', 'background', 'impact', 'tags'],
   additionalProperties: false
 };
 
 function isQuotaError(err) {
   return Number(err?.statusCode) === 429 || /quota|rate limit|resource_exhausted|too many requests/i.test(String(err?.message || ''));
+}
+
+function normalizeAiSummary(parsed, { title, mode, category, source }) {
+  const headline = clampMarkdown(parsed?.headline || title || '記事のポイント', 35) || '記事のポイント';
+  const conclusion = clampMarkdown(parsed?.conclusion || '', 40) || '記事の中心となる事実を確認できます。';
+  const background = clampMarkdown(parsed?.background || '', 40) || '背景や仕組みを短く整理しています。';
+  const impact = clampMarkdown(parsed?.impact || '', 40) || '今後の影響や展開に注目が必要です。';
+  const rawTags = Array.isArray(parsed?.tags) ? parsed.tags : [];
+  const tags = [...new Set([
+    categoryTag(mode, category),
+    ...rawTags.map(normalizeTag).filter(Boolean)
+  ].filter(Boolean))].slice(0, 3);
+
+  return {
+    headline,
+    lines: [
+      { label: '結論/事実', text: conclusion },
+      { label: '背景/特徴', text: background },
+      { label: '影響/展望', text: impact }
+    ],
+    tags,
+    short: stripMarkdown(conclusion),
+    points: [background, impact].map(stripMarkdown)
+  };
 }
 
 export default async function handler(req, res) {
@@ -177,13 +267,13 @@ export default async function handler(req, res) {
   const body = bodyOf(req);
   const title = clean(body.title, 500);
   const source = clean(body.source, 180);
+  const category = clean(body.category, 80);
   const description = clean(body.description, MAX_RSS_INPUT);
   const url = String(body.url || body.link || '').trim().slice(0, 3000);
   const mode = String(body.mode || '').trim();
   const likelyPdfUrl = /\.pdf(?:$|[?#])/i.test(url);
   const preferFullText = body.preferFullText === true || mode === 'papers' || likelyPdfUrl;
   const forceJapanese = body.forceJapanese === true || looksMostlyEnglish(`${title}\n${description}`);
-  // 英語おすすめは端末側AI予算を超えていても、生の英語を出さないため翻訳を1回優先する。
   const allowAi = forceJapanese ? true : body.allowAi !== false;
 
   if (!title && !description && !url) return res.status(400).json({ error: '要約する情報がありません' });
@@ -211,7 +301,7 @@ export default async function handler(req, res) {
       }
     } catch (error) {
       extractError = String(error?.message || error);
-      console.warn('[summary-v2142] full-text fallback:', extractError, url);
+      console.warn('[summary-v2144] full-text fallback:', extractError, url);
     }
   }
 
@@ -221,31 +311,46 @@ export default async function handler(req, res) {
       description: inputText,
       reason: 'client-budget',
       forceJapanese,
-      contentSource
+      contentSource,
+      mode,
+      category,
+      source
     }));
   }
 
   const prompt = [
-    `タイトル: ${inputTitle || '不明'}`,
+    `元タイトル: ${inputTitle || '不明'}`,
     source ? `媒体: ${source}` : '',
+    category ? `カテゴリ: ${category}` : '',
     url ? `URL: ${url}` : '',
     `入力種別: ${contentSource === 'pdf' ? 'PDF本文の重要ページ抜粋' : contentSource === 'article' ? 'リンク先本文' : 'RSS本文・抄録'}`,
     '',
     '本文・抄録:',
     clean(inputText, MAX_AI_INPUT) || inputTitle,
     '',
-    '上の情報だけを根拠に、日本語で読みやすく要約してください。',
-    '原文が英語でも、shortとpointsは必ず自然な日本語へ翻訳してください。',
-    'shortは核心を自然な1〜2文で完結させてください。pointsは追加の重要点を最大4件。',
-    '文字数を合わせるために文の途中を「…」「...」で切ることは禁止です。必ず文末まで書いてください。',
-    '前置き、一般論、同じ内容の言い換え、推測は不要です。'
+    '上の情報だけを根拠に、おすすめフィード用の日本語要約をJSONで作成してください。',
+    '',
+    '【必須フォーマット】',
+    '1. headline: 最大35文字。結論や最もインパクトのある事実を先頭に置き、思わず手を止めたくなるタイトルへ打ち直す。',
+    '2. conclusion: 最大40文字・1文。何が起きたのか、何が発表されたのかを明確にする。',
+    '3. background: 最大40文字・1文。なぜ重要か、仕組みや理由を説明する。',
+    '4. impact: 最大40文字・1文。今後どうなるか、社会や技術への変化を書く。',
+    '5. tags: 内容を表すタグを最大3個。必ず # から始める。',
+    '',
+    '【文章ルール】',
+    '・原文が英語でも、すべて自然な日本語へ翻訳する。',
+    '・難解な専門用語は、日常的な例えや平易な言葉に噛み砕く。特に論文、製品・熱研究、独創研究では専門家向けの言い回しを避ける。',
+    '・重要な数値と重要な固有名詞は Markdown の **太字** で強調する。',
+    '・事実を足したり推測したりしない。本文にない将来予測を断定しない。',
+    '・文字数を合わせるために「…」「...」で途中省略しない。各文を短く言い換えて制限内に収める。',
+    '・同じ内容を3行で言い換えない。結論→背景→影響の役割を明確に分ける。'
   ].filter(Boolean).join('\n');
 
   try {
     const result = await generateGemini({
       prompt,
-      systemInstruction: '忙しい人が短時間で理解できる日本語要約。事実を増やさず、各文を必ず最後まで完結させる。文字数都合の省略記号による途中切断は禁止。',
-      maxOutputTokens: 520,
+      systemInstruction: 'モバイル向けニュース編集者。35文字タイトルと40文字以内の3行要約を、平易で正確な日本語にする。重要な数値・固有名詞は**太字**。省略記号で文を切らない。',
+      maxOutputTokens: 620,
       responseSchema,
       timeoutMs: contentSource === 'pdf' ? 22000 : 14000
     });
@@ -258,13 +363,17 @@ export default async function handler(req, res) {
         description: inputText,
         reason: 'invalid-ai-json',
         forceJapanese,
-        contentSource
+        contentSource,
+        mode,
+        category,
+        source
       }));
     }
 
+    const normalized = normalizeAiSummary(parsed, { title: inputTitle, mode, category, source });
+
     return res.status(200).json({
-      short: clean(parsed.short, 2400),
-      points: Array.isArray(parsed.points) ? parsed.points.slice(0, 4).map(v => clean(v, 2400)).filter(Boolean) : [],
+      ...normalized,
       why: '',
       provider: 'gemini',
       model: result.model,
@@ -276,16 +385,20 @@ export default async function handler(req, res) {
       pdfPageCount,
       pdfUrl,
       extractError,
-      resolvedTitle: inputTitle || title
+      resolvedTitle: inputTitle || title,
+      limits: { headline: 35, line: 40, tags: 3 }
     });
   } catch (err) {
-    console.warn('[summary-v2142] Gemini unavailable, using local summary:', err?.statusCode, err?.message);
+    console.warn('[summary-v2144] Gemini unavailable, using local summary:', err?.statusCode, err?.message);
     return res.status(200).json(localSummary({
       title: inputTitle,
       description: inputText,
       reason: isQuotaError(err) ? 'quota' : 'gemini-unavailable',
       forceJapanese,
-      contentSource
+      contentSource,
+      mode,
+      category,
+      source
     }));
   }
 }
