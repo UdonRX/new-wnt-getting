@@ -1,4 +1,4 @@
-import { mergeRssSources, rssXml } from '../lib/rss-merge.mjs';
+import { fetchRssSource, rssXml } from '../lib/rss-merge.mjs';
 
 const google = query =>
   `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`;
@@ -8,11 +8,9 @@ const google = query =>
  * 「無料で読める報道記事」を優先するため、会員制比率の高い媒体を標準ソースから外す。
  * Google News検索も媒体を絞り、個人ブログ・キュレーション・コラムを混ぜにくくする。
  *
- * RSSだけでは記事本文の完全な無料判定は100%不可能なので、
- * 1) 標準ソースの許可リスト
- * 2) タイトル/descriptionの会員・コラム語除外
- * 3) 明確な有料系ホストの除外
- * の3段階で軽量に絞る。
+ * v2.14.10
+ * 複数ソースを単純に全件時系列ソートすると、更新頻度が高い媒体が上位を占領する。
+ * そのため取得元ごとに最新順へ並べ、各取得元から1件ずつラウンドロビンでRSSへ入れる。
  */
 const CATEGORIES = {
   national: {
@@ -117,6 +115,91 @@ function isStraightFreeNews(item) {
   return Boolean(title.trim() && link.trim());
 }
 
+function itemTime(item) {
+  const ms = new Date(item?.pubDate || 0).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function itemKey(item) {
+  const link = String(item?.link || '').trim();
+  if (link) {
+    try {
+      const url = new URL(link);
+      url.hash = '';
+      return url.href.toLowerCase();
+    } catch {
+      return link.replace(/#.*$/, '').toLowerCase();
+    }
+  }
+  return String(item?.title || '').trim().toLowerCase();
+}
+
+function fairInterleaveSourceRows(rows, limit = 100) {
+  const buckets = rows
+    .map(row => {
+      const items = [...row.items]
+        .filter(isStraightFreeNews)
+        .sort((a, b) => itemTime(b) - itemTime(a));
+
+      return {
+        source: row.source,
+        sourceIndex: row.sourceIndex,
+        items,
+        cursor: 0,
+        latest: items.length ? itemTime(items[0]) : 0
+      };
+    })
+    .filter(bucket => bucket.items.length)
+    .sort((a, b) => b.latest - a.latest || a.sourceIndex - b.sourceIndex);
+
+  const result = [];
+  const seen = new Set();
+  let addedInRound = true;
+
+  while (result.length < limit && addedInRound) {
+    addedInRound = false;
+
+    for (const bucket of buckets) {
+      while (bucket.cursor < bucket.items.length) {
+        const item = bucket.items[bucket.cursor++];
+        const key = itemKey(item);
+        if (key && seen.has(key)) continue;
+
+        if (key) seen.add(key);
+        result.push(item);
+        addedInRound = true;
+        break;
+      }
+
+      if (result.length >= limit) break;
+    }
+  }
+
+  return result;
+}
+
+async function fetchBalancedSources(sources) {
+  const settled = await Promise.allSettled(
+    sources.map((source, sourceIndex) =>
+      fetchRssSource({ ...source, maxItems: Math.max(60, Number(source.maxItems || 0)) })
+        .then(items => ({ source, sourceIndex, items }))
+    )
+  );
+
+  const rows = [];
+  const errors = [];
+
+  settled.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      rows.push(result.value);
+      return;
+    }
+    errors.push(`${sources[index]?.name || 'source'}: ${result.reason?.message || 'failed'}`);
+  });
+
+  return { rows, errors };
+}
+
 export default async function handler(req, res) {
   const key = String(req.query?.category || '').trim();
   const config = CATEGORIES[key];
@@ -129,26 +212,44 @@ export default async function handler(req, res) {
       res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
       res.setHeader('X-Feed-Source-Errors', String(cached.errors.length));
       res.setHeader('X-News-Filtered-Count', String(cached.filteredCount || 0));
+      res.setHeader('X-News-Balanced-Sources', String(cached.sourceCount || 0));
       res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300');
       return res.status(200).send(cached.xml);
     }
 
-    const { items, errors } = await mergeRssSources(config.sources, { limit: 120 });
-    const filtered = items.filter(isStraightFreeNews).slice(0, 100);
-    if (!filtered.length) throw new Error(errors.join(' / ') || '条件に合う無料ニュースを取得できませんでした');
+    const { rows, errors } = await fetchBalancedSources(config.sources);
+    const rawCount = rows.reduce((sum, row) => sum + row.items.length, 0);
+    const allowedCount = rows.reduce(
+      (sum, row) => sum + row.items.filter(isStraightFreeNews).length,
+      0
+    );
+    const balanced = fairInterleaveSourceRows(rows, 100);
 
-    const filteredCount = Math.max(0, items.length - filtered.length);
+    if (!balanced.length) {
+      throw new Error(errors.join(' / ') || '条件に合う無料ニュースを取得できませんでした');
+    }
+
+    const filteredCount = Math.max(0, rawCount - allowedCount);
+    const sourceCount = rows.filter(row => row.items.some(isStraightFreeNews)).length;
     const xml = rssXml(
       config.title,
-      `${config.title}。報道機関の記事を中心に、コラム・個人記事・会員限定表記のある記事を除外`,
-      filtered
+      `${config.title}。登録取得元ごとの最新記事を均等に混ぜ、コラム・個人記事・会員限定表記のある記事を除外`,
+      balanced
     );
-    cache.set(key, { at: Date.now(), xml, errors, filteredCount });
+
+    cache.set(key, {
+      at: Date.now(),
+      xml,
+      errors,
+      filteredCount,
+      sourceCount
+    });
 
     if (errors.length) console.warn(`[news-feed:${key}] partial failures`, errors);
     res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
     res.setHeader('X-Feed-Source-Errors', String(errors.length));
     res.setHeader('X-News-Filtered-Count', String(filteredCount));
+    res.setHeader('X-News-Balanced-Sources', String(sourceCount));
     res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=300');
     return res.status(200).send(xml);
   } catch (err) {
