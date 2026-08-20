@@ -1,0 +1,169 @@
+/* Personal Dashboard v2.14.12
+   Twitter/X video UI: poster + play button first, resolve only after user tap. */
+
+.tweet-video-shell.tweet-video-resolver {
+  min-height: 0;
+  background: #000;
+}
+
+.tweet-video-launcher[hidden],
+.tweet-video-stage[hidden],
+.tweet-official-embed[hidden] {
+  display: none !important;
+}
+
+.tweet-video-launcher {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 190px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background:
+    radial-gradient(circle at 24% 14%, rgba(49,167,255,.14), transparent 40%),
+    #0a0c10;
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tweet-video-launcher-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tweet-video-launcher-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(0,0,0,.28), rgba(0,0,0,.05));
+  transition: background .16s ease;
+}
+
+.tweet-video-play-circle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255,255,255,.34);
+  border-radius: 999px;
+  background: rgba(8,10,14,.72);
+  box-shadow: 0 8px 28px rgba(0,0,0,.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition: transform .16s ease, background .16s ease, opacity .16s ease;
+}
+
+.tweet-video-play-triangle {
+  width: 0;
+  height: 0;
+  margin-left: 4px;
+  border-top: 9px solid transparent;
+  border-bottom: 9px solid transparent;
+  border-left: 15px solid currentColor;
+}
+
+.tweet-video-launcher:active .tweet-video-play-circle {
+  transform: translate(-50%, -50%) scale(.94);
+  background: rgba(8,10,14,.88);
+}
+
+.tweet-video-launcher.is-resolving {
+  cursor: progress;
+}
+
+.tweet-video-launcher.is-resolving .tweet-video-launcher-shade {
+  background: rgba(0,0,0,.30);
+}
+
+.tweet-video-launcher.is-resolving .tweet-video-play-triangle {
+  display: none;
+}
+
+.tweet-video-launcher.is-resolving .tweet-video-play-circle {
+  opacity: .94;
+}
+
+.tweet-video-launcher.is-resolving .tweet-video-play-circle::after {
+  content: '';
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(255,255,255,.34);
+  border-top-color: #fff;
+  border-radius: 999px;
+  animation: tweet-video-spin .72s linear infinite;
+}
+
+@keyframes tweet-video-spin {
+  to { transform: rotate(360deg); }
+}
+
+.tweet-video-stage {
+  position: relative;
+  width: 100%;
+}
+
+.tweet-official-embed {
+  padding: 8px;
+  background: #000;
+}
+
+/* X公式Embedを判定している間は、元のサムネイルを表示したまま画面外で生成する。 */
+.tweet-official-embed.tweet-official-embed-probing {
+  position: absolute !important;
+  left: -10000px !important;
+  top: 0 !important;
+  display: block !important;
+  width: min(550px, 100%) !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+.tweet-official-embed > * {
+  margin-inline: auto !important;
+  max-width: 100% !important;
+}
+
+.tweet-video-method-badge {
+  position: absolute;
+  z-index: 2;
+  top: 9px;
+  right: 9px;
+  padding: 4px 8px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 999px;
+  background: rgba(5,7,10,.66);
+  color: rgba(255,255,255,.74);
+  font-size: 10px;
+  font-weight: 700;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+/* v2.14.11までの失敗メッセージUIはv2.14.12では使わない。 */
+.tweet-video-status,
+.tweet-video-external-final {
+  display: none !important;
+}
+
+@media (max-width: 430px) {
+  .tweet-video-launcher {
+    min-height: 170px;
+  }
+
+  .tweet-video-play-circle {
+    width: 54px;
+    height: 54px;
+  }
+}
