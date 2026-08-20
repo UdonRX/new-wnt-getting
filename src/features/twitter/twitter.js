@@ -567,7 +567,8 @@ function canonicalPostUrl(item) {
 function proxyVideoUrl(mediaUrl, { probe = false } = {}) {
   const params = new URLSearchParams({ url: mediaUrl });
   if (probe) params.set('probe', '1');
-  return `/api/twitter-video-proxy?${params}`;
+  params.set('mode', 'twitter-video');
+  return `/api/rss?${params}`;
 }
 
 function xEmbedTheme() {
