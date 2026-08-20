@@ -1797,3 +1797,83 @@ body.reader-immersive .bottom-nav {
   .reader-story-open,
   .reader-story-grid.reader-grid-fab { transition: none !important; }
 }
+
+/* ========================================================================== 
+   Personal Dashboard v2.14.6 — Reader AI summary progress
+   ========================================================================== */
+.reader-story-summary.is-loading {
+  min-height: 66px;
+  display: grid;
+  align-content: center;
+}
+
+.reader-ai-progress {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+}
+
+.reader-ai-progress-top {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reader-ai-progress .reader-ai-loading-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255,255,255,.58);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: .005em;
+}
+
+.reader-ai-progress-value {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--reader-card-accent-local, var(--feature-color)) 68%, #fff);
+  font-size: 9.5px;
+  font-weight: 780;
+  font-variant-numeric: tabular-nums;
+}
+
+.reader-ai-progress-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+}
+
+.reader-ai-progress-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 8%;
+  border-radius: inherit;
+  background: var(--reader-card-accent-local, var(--feature-color));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--reader-card-accent-local, var(--feature-color)) 50%, transparent);
+  transition: width .42s cubic-bezier(.2,.72,.2,1);
+}
+
+.reader-ai-progress-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.72), transparent);
+  transform: translateX(-100%);
+  animation: readerAiProgressSweep 1.15s ease-in-out infinite;
+}
+
+@keyframes readerAiProgressSweep {
+  0% { transform: translateX(-110%); }
+  72%, 100% { transform: translateX(120%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-ai-progress-bar { transition: none; }
+  .reader-ai-progress-bar::after { animation: none; }
+}
