@@ -1,294 +1,113 @@
-import { state } from '../../app/store.js';
-import { fetchFeed, dedupeSort } from '../../shared/rss.js';
+import { state, update } from '../../app/store.js';
+import { el, openSheet } from '../../shared/dom.js';
+import { topbar, segmented, collectionManager, centerScrollItem } from '../../shared/components.js';
+import { loadReader, feedsFor } from './reader-data.js';
+import { chooseTop, requestAiRank } from './reader-rank.js';
+import { mountFocus } from './reader-focus.js';
+import { shortDate } from '../../shared/time.js';
+import { attachSwipe } from '../../shared/gestures.js';
 
-const CACHE_TTL = 6 * 60 * 60 * 1000;
+const READER_MODES = ['news','knowledge','papers'];
+let view='focus';
+let allItems=[];
+let focusHandle=null;
+let modeSwipeDetach=null;
 
-export function feedsFor(mode) {
-  if (mode === 'papers') return state.paperFeeds;
-  if (mode === 'knowledge') return state.knowledgeFeeds;
-  return state.newsFeeds;
+const paperTrack=()=>state.paperTrack==='creative'?'creative':'core';
+const creativeFamily=()=>['applied','general'].includes(state.creativePaperFamily)?state.creativePaperFamily:'all';
+const contextId=(mode,track='core')=>mode==='papers'?`papers:${track}`:mode;
+const readKey=(mode,track)=>`pdv2:read:${contextId(mode,track)}`;
+const selectedFeedKey=mode=>`pdv2:readerSelectedFeed:${mode}`;
+const getRead=(mode,track)=>new Set(JSON.parse(localStorage.getItem(readKey(mode,track))||'[]'));
+const saveRead=(mode,track,set)=>localStorage.setItem(readKey(mode,track),JSON.stringify([...set].slice(-1500)));
+const lastSeenKey=(mode,track,family='all')=>`pdv2:lastReaderSeen:${contextId(mode,track)}:${track==='creative'?family:'all'}`;
+const rankKey=(mode,track,family='all')=>`pdv2:rank:${contextId(mode,track)}:${track==='creative'?family:'all'}`;
+
+function modeLabel(mode){return mode==='papers'?'論文':mode==='knowledge'?'知識':'ニュース';}
+function focusLabel(mode,track='core',family='all'){
+  if(mode==='papers'){
+    if(track!=='creative')return'注目論文';
+    if(family==='general')return'一般独創ピックアップ';
+    if(family==='applied')return'応用発想ピックアップ';
+    return'独創研究ピックアップ';
+  }
+  return mode==='knowledge'?'いま読む5件':'いま押さえる5件';
 }
+function creativeFamiliesOf(item){const text=String(item?.description||'');const result=[];if(/独創区分:\s*[^\n]*応用発想/i.test(text))result.push('applied');if(/独創区分:\s*[^\n]*一般独創/i.test(text))result.push('general');if(!result.length)result.push('applied');return result;}
+function filterCreativeItems(items,family){return family==='all'?items:items.filter(item=>creativeFamiliesOf(item).includes(family));}
+function creativeRankMode(family){return family==='general'?'papers-creative-general':family==='applied'?'papers-creative-applied':'papers-creative-all';}
+function getSelectedFeed(mode){return localStorage.getItem(selectedFeedKey(mode))||'';}
+function setSelectedFeed(mode,name){localStorage.setItem(selectedFeedKey(mode),name||'');}
 
-export function readerCacheKey(mode, paperTrack = 'core') {
-  return mode === 'papers'
-    ? `pdv2:readerCache:papers:${paperTrack === 'creative' ? 'creative' : 'core'}`
-    : `pdv2:readerCache:${mode}`;
+function manageFeeds(mode,rerender){
+  const key=mode==='papers'?'paperFeeds':mode==='knowledge'?'knowledgeFeeds':'newsFeeds';
+  const sheet=openSheet(collectionManager({items:state[key],fields:[{key:'name',label:'タブ名',placeholder:'名称'},{key:'url',label:'RSS URL',placeholder:'https://... または /api/...'}],onSave:draft=>{update(key,draft);sheet.close();setSelectedFeed(mode,'');rerender(true);}}),{title:`${modeLabel(mode)}のタブ編集`});
 }
+function centerActiveChip(chips){const active=chips?.querySelector('.chip.active');if(active)centerScrollItem(chips,active,{behavior:'smooth'});}
+function buildFeedChips(mode,onChange){
+  if(mode==='papers')return null;const feeds=feedsFor(mode);if(feeds.length<=1)return null;const selected=getSelectedFeed(mode);const chips=el('div',{class:'chips reader-feed-chips'});
+  chips.append(el('button',{class:`chip ${!selected?'active':''}`,type:'button',text:'All',onclick:()=>{setSelectedFeed(mode,'');onChange();}}));
+  feeds.forEach(feed=>chips.append(el('button',{class:`chip ${selected===feed.name?'active':''}`,type:'button',text:feed.name,onclick:()=>{setSelectedFeed(mode,feed.name);onChange();}})));
+  centerActiveChip(chips);return chips;
+}
+function buildPaperTrackLevel(onChange){
+  const wrap=el('div',{class:'paper-track-level'});
+  wrap.append(segmented([{value:'core',label:'製品・熱研究'},{value:'creative',label:'独創研究'}],paperTrack(),onChange));
+  return wrap;
+}
+function buildCreativeFamilyTabs(onChange){
+  const family=creativeFamily();const row=el('div',{class:'paper-family-row chips'});
+  [{value:'all',label:'すべて'},{value:'applied',label:'応用発想'},{value:'general',label:'一般独創'}].forEach(item=>row.append(el('button',{class:`chip ${family===item.value?'active':''}`,type:'button',text:item.label,onclick:()=>onChange(item.value)})));
+  centerActiveChip(row);return row;
+}
+function renderList(host,mode,track,family,items,onOpen,onBack){
+  const read=getRead(mode,track);const lastSeen=Number(localStorage.getItem(lastSeenKey(mode,track,family))||0);const newCount=items.filter(i=>new Date(i.pubDate).getTime()>lastSeen).length;
+  const header=el('div',{class:'reader-list-toolbar'},[el('div',{},[el('strong',{text:newCount?`前回から ${newCount}件`:'全記事'}),el('small',{text:` ${items.length}件`})]),el('button',{class:'soft-button',type:'button',text:'おすすめ5件',onclick:onBack})]);
+  const search=el('input',{class:'reader-search',placeholder:'タイトル・媒体を検索'});const list=el('div',{class:'list'});
+  const draw=()=>{list.replaceChildren();const q=search.value.trim().toLowerCase();items.filter(i=>!q||`${i.title} ${i.titleJa||''} ${i.source}`.toLowerCase().includes(q)).forEach((item,index)=>{const unread=!read.has(item.id);const button=el('button',{class:'list-item',type:'button',onclick:()=>{read.add(item.id);saveRead(mode,track,read);onOpen(item,index);}});button.innerHTML=`<div class="list-item-title">${unread?'<span class="unread-dot"></span>':''}${item.titleJa||item.title}</div>${item.titleJa?`<div class="focus-original">${item.title}</div>`:''}<div class="list-meta"><span>${item.source||''}</span><span>${shortDate(item.pubDate)}</span></div>`;list.append(button);});};
+  search.addEventListener('input',draw);draw();host.replaceChildren(header,search,list);localStorage.setItem(lastSeenKey(mode,track,family),String(Date.now()));
+}
+function cachedAiRanking(mode,track,family='all'){try{const data=JSON.parse(localStorage.getItem(rankKey(mode,track,family))||'null');if(!data?.ranking?.length||Date.now()-Number(data.at||0)>6*60*60*1000)return[];return data.ranking;}catch{return[];}}
 
-export function readReaderCache(mode, paperTrack = 'core') {
-  try {
-    let data = JSON.parse(localStorage.getItem(readerCacheKey(mode, paperTrack)) || 'null');
-    if (!data && mode === 'papers' && paperTrack !== 'creative') {
-      data = JSON.parse(localStorage.getItem('pdv2:readerCache:papers') || 'null');
+export async function renderReader(root,{navigate,refresh=false}){
+  view='focus';allItems=[];focusHandle?.destroy?.();focusHandle=null;modeSwipeDetach?.();modeSwipeDetach=null;
+  const mode=state.readerMode||'news';const track=mode==='papers'?paperTrack():'core';const screen=el('section',{class:'screen reader-screen'});const rerender=(force=false)=>renderReader(root,{navigate,refresh:force});
+  screen.append(topbar('読む',{subtitle:mode==='papers'?(track==='creative'?'論文・独創研究':'論文・製品／熱研究'):'ニュース・知識・論文',actions:[{label:'＋',title:'追加/編集',onClick:()=>manageFeeds(mode,rerender)},{label:'↻',title:'更新',onClick:()=>rerender(true)},{label:'⚙︎',title:'設定',onClick:()=>navigate('settings')}]}));
+
+  const switchMode=value=>{if(!READER_MODES.includes(value)||value===mode)return;update('lastReaderMode',value);view='focus';renderReader(root,{navigate});};
+  const cycleMode=delta=>{const i=READER_MODES.indexOf(mode);const next=Math.max(0,Math.min(READER_MODES.length-1,i+delta));if(next!==i)switchMode(READER_MODES[next]);};
+  const modeNav=el('div',{class:'reader-mode-nav'});modeNav.append(segmented([{value:'news',label:'ニュース'},{value:'knowledge',label:'知識'},{value:'papers',label:'論文'}],mode,switchMode));screen.append(modeNav);modeSwipeDetach=attachSwipe(modeNav,{left:()=>cycleMode(1),right:()=>cycleMode(-1),threshold:40});
+
+  if(mode==='papers')screen.append(buildPaperTrackLevel(value=>{update('paperTrack',value);view='focus';renderReader(root,{navigate});}));
+
+  const sticky=el('div',{class:'reader-sticky-context'});const lowestTabsHost=el('div',{class:'reader-lowest-tabs-host'});const progressHost=el('div',{class:'reader-progress-host'});
+  if(mode!=='papers'){
+    const chips=buildFeedChips(mode,()=>{view='focus';renderReader(root,{navigate});});if(chips)lowestTabsHost.append(chips);
+  }else if(track==='creative')lowestTabsHost.append(buildCreativeFamilyTabs(value=>{update('creativePaperFamily',value);view='focus';renderReader(root,{navigate});}));
+  sticky.append(lowestTabsHost,progressHost);screen.append(sticky);
+
+  const host=el('div',{class:'reader-content-host'});screen.append(host);root.replaceChildren(screen);host.append(el('div',{class:'card',html:'<div class="loading">読み込み中...</div>'}));
+  if(mode==='papers')window.addEventListener('pdv2:paper-titles',()=>{try{const translated=JSON.parse(localStorage.getItem('pdv2:paperTitleJa')||'{}');allItems.forEach(item=>{if(translated[item.title])item.titleJa=translated[item.title];});if(allItems.length)renderContent();}catch{}},{once:true});
+
+  let chosen=[];
+  const cycleFeed=delta=>{const feeds=feedsFor(mode);if(feeds.length<=1)return;const names=['',...feeds.map(f=>f.name)];const current=getSelectedFeed(mode);const i=Math.max(0,names.indexOf(current));const next=Math.max(0,Math.min(names.length-1,i+delta));if(next===i)return;setSelectedFeed(mode,names[next]);view='focus';renderReader(root,{navigate});};
+  const cyclePaperTrack=delta=>{const tracks=['core','creative'];const i=tracks.indexOf(track);const next=Math.max(0,Math.min(tracks.length-1,i+delta));if(next===i)return;update('paperTrack',tracks[next]);view='focus';renderReader(root,{navigate});};
+  const cycleCreativeFamily=delta=>{const families=['all','applied','general'];const current=creativeFamily();const i=families.indexOf(current);const next=Math.max(0,Math.min(families.length-1,i+delta));if(next===i)return;update('creativePaperFamily',families[next]);view='focus';renderReader(root,{navigate});};
+  const horizontalOptions=mode==='papers'?(track==='creative'?{onPrevFeed:()=>cycleCreativeFamily(-1),onNextFeed:()=>cycleCreativeFamily(1),horizontalHint:'独創研究タブ'}:{onPrevFeed:()=>cyclePaperTrack(-1),onNextFeed:()=>cyclePaperTrack(1),horizontalHint:'論文タブ'}):{onPrevFeed:()=>cycleFeed(-1),onNextFeed:()=>cycleFeed(1),horizontalHint:'RSSタブ'};
+
+  const renderContent=()=>{
+    focusHandle?.destroy?.();focusHandle=null;progressHost.replaceChildren();
+    const family=mode==='papers'&&track==='creative'?creativeFamily():'all';const visibleItems=mode==='papers'&&track==='creative'?filterCreativeItems(allItems,family):allItems;const rankMode=mode==='papers'&&track==='creative'?creativeRankMode(family):mode;
+    if(!visibleItems.length){host.innerHTML=`<div class="empty">${track==='creative'&&family==='general'?'一般独創の候補を取得中です。更新すると再検索します。':'記事がありません'}</div>`;return;}
+    if(view==='list'){
+      renderList(host,mode,track,family,visibleItems,(item,index)=>{view='focus';chosen=visibleItems;host.replaceChildren();focusHandle=mountFocus(host,{items:chosen,initialIndex:index,label:mode==='papers'&&track==='creative'?(family==='general'?'一般独創一覧':family==='applied'?'応用発想一覧':'独創研究一覧'):'全記事',progressHost,onList:()=>{view='list';renderContent();},onIndexChange:(_,it)=>{const r=getRead(mode,track);r.add(it.id);saveRead(mode,track,r);},...horizontalOptions});},()=>{view='focus';renderContent();});
+      const detachListSwipe=attachSwipe(host,{left:horizontalOptions.onNextFeed,right:horizontalOptions.onPrevFeed,threshold:72});focusHandle={destroy:detachListSwipe};return;
     }
-    if (!data?.items?.length) return null;
-    return {
-      ...data,
-      items: data.items.map(item => ({ ...item, pubDate: new Date(item.pubDate) })),
-      fresh: Date.now() - Number(data.at || 0) < CACHE_TTL
-    };
-  } catch {
-    return null;
-  }
-}
+    const read=getRead(mode,track);chosen=chooseTop(visibleItems,rankMode,read,5,state.settings.rankWithAi?cachedAiRanking(mode,track,family):[]);host.replaceChildren();focusHandle=mountFocus(host,{items:chosen,label:focusLabel(mode,track,family),progressHost,onList:()=>{view='list';renderContent();},onIndexChange:(_,it)=>{read.add(it.id);saveRead(mode,track,read);},...horizontalOptions});
+  };
 
-function writeCache(mode, items, paperTrack = 'core') {
-  localStorage.setItem(readerCacheKey(mode, paperTrack), JSON.stringify({ at: Date.now(), items }));
-}
-
-async function translatePaperTitles(items) {
-  const english = items
-    .filter(item => /[A-Za-z]{8}/.test(item.title) && !/[ぁ-んァ-ヶ一-龠]{3}/.test(item.title))
-    .slice(0, 80);
-  if (!english.length) return items;
-
-  const local = JSON.parse(localStorage.getItem('pdv2:paperTitleJa') || '{}');
-  english.forEach(item => { if (local[item.title]) item.titleJa = local[item.title]; });
-  const missing = english.filter(item => !item.titleJa).slice(0, 40);
-  if (!missing.length) return items;
-
-  fetch('/api/paper-titles', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ titles: missing.map(item => item.title) })
-  })
-    .then(response => response.ok ? response.json() : null)
-    .then(data => {
-      const rows = Array.isArray(data?.translations) ? data.translations : [];
-      rows.forEach(row => {
-        const original = String(row?.original || '').trim();
-        const ja = String(row?.ja || '').trim();
-        if (original && ja) local[original] = ja;
-      });
-      const keys = Object.keys(local);
-      if (keys.length > 1200) keys.slice(0, keys.length - 1200).forEach(key => delete local[key]);
-      localStorage.setItem('pdv2:paperTitleJa', JSON.stringify(local));
-      window.dispatchEvent(new CustomEvent('pdv2:paper-titles'));
-    })
-    .catch(() => {});
-
-  return items;
-}
-
-// ニュースは報道記事だけを残す。コラム/寄稿/レビュー/PR/明示的有料記事/個人ブログを除外。
-const NEWS_EDITORIAL_RE = /コラム|オピニオン|論説|社説|寄稿|エッセイ|評論|レビュー|ランキング|まとめ|PR|広告|Sponsored/i;
-const NEWS_PAYWALL_RE = /会員限定|有料記事|有料会員|会員登録|購読者限定|続きを読むには|subscriber(?:s)? only|members? only|premium article/i;
-const NEWS_PERSONAL_RE = /個人ブログ|note\.com|アメブロ|はてなブログ|medium\.com|substack\.com/i;
-const NEWS_BLOCKED_HOST_RE = /(?:^|\.)(?:nikkei\.com|toyokeizai\.net)$/i;
-
-function newsHost(link = '') {
-  try { return new URL(String(link || '')).hostname.replace(/^www\./, '').toLowerCase(); }
-  catch { return ''; }
-}
-
-function isStraightNewsItem(item) {
-  const hay = [item?.title, item?.description, item?.source, item?.feedName, item?.link]
-    .filter(Boolean)
-    .join('\n');
-  if (NEWS_EDITORIAL_RE.test(hay)) return false;
-  if (NEWS_PAYWALL_RE.test(hay)) return false;
-  if (NEWS_PERSONAL_RE.test(hay)) return false;
-  if (NEWS_BLOCKED_HOST_RE.test(newsHost(item?.link))) return false;
-  return Boolean(String(item?.title || '').trim());
-}
-
-function filterModeItems(items, mode) {
-  return mode === 'news' ? items.filter(isStraightNewsItem) : items;
-}
-
-function itemTime(item) {
-  const ms = new Date(item?.pubDate || 0).getTime();
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function itemKey(item) {
-  return String(item?.link || item?.id || item?.title || '').trim().toLowerCase();
-}
-
-/*
- * v2.14.10
- * 「All」でニュースを表示する時は、全フィードを一度まとめて時系列ソートしない。
- *
- * 1. 登録フィードごとに新しい順へ並べる
- * 2. そのフィードの最新更新日時が新しい順にフィードを並べる
- * 3. 各フィードから1件ずつラウンドロビンで取り出す
- *
- * これにより更新本数の多いフィードだけが一覧上位を占領するのを防ぎつつ、
- * 各取得先の「その時点で新しい記事」を均等に混ぜる。
- */
-function fairNewsOrder(items, feeds, limit = 350) {
-  const feedOrder = new Map(
-    (Array.isArray(feeds) ? feeds : []).map((feed, index) => [String(feed?.name || ''), index])
-  );
-  const grouped = new Map();
-
-  for (const item of filterModeItems(items, 'news')) {
-    const name = String(item?.feedName || item?.source || 'その他');
-    if (!grouped.has(name)) grouped.set(name, []);
-    grouped.get(name).push(item);
-  }
-
-  const buckets = [...grouped.entries()]
-    .map(([name, rows]) => {
-      const sorted = dedupeSort(rows, limit);
-      return {
-        name,
-        rows: sorted,
-        cursor: 0,
-        latest: sorted.length ? itemTime(sorted[0]) : 0,
-        order: feedOrder.has(name) ? feedOrder.get(name) : Number.MAX_SAFE_INTEGER
-      };
-    })
-    .filter(bucket => bucket.rows.length)
-    .sort((a, b) => b.latest - a.latest || a.order - b.order || a.name.localeCompare(b.name, 'ja'));
-
-  const out = [];
-  const seen = new Set();
-  let addedInRound = true;
-
-  while (out.length < limit && addedInRound) {
-    addedInRound = false;
-
-    for (const bucket of buckets) {
-      while (bucket.cursor < bucket.rows.length) {
-        const item = bucket.rows[bucket.cursor++];
-        const key = itemKey(item);
-        if (key && seen.has(key)) continue;
-
-        if (key) seen.add(key);
-        out.push(item);
-        addedInRound = true;
-        break;
-      }
-
-      if (out.length >= limit) break;
-    }
-  }
-
-  return out;
-}
-
-function arrangeModeItems(items, mode, feeds, limit) {
-  if (mode === 'news' && (feeds?.length || 0) > 1) {
-    return fairNewsOrder(items, feeds, limit);
-  }
-  return filterModeItems(dedupeSort(items, limit), mode);
-}
-
-export async function loadReader(mode, {
-  force = false,
-  onProgress,
-  selectedFeed = '',
-  paperTrack = 'core',
-  fastOnly = false,
-  preferCache = false
-} = {}) {
-  const normalizedTrack = paperTrack === 'creative' ? 'creative' : 'core';
-  const allFeeds = feedsFor(mode);
-  const feeds = selectedFeed && mode !== 'papers'
-    ? allFeeds.filter(feed => feed.name === selectedFeed)
-    : allFeeds;
-  const cached = !force ? readReaderCache(mode, normalizedTrack) : null;
-
-  let visibleCached = [];
-  if (cached?.items?.length) {
-    const visibleCachedRaw = selectedFeed && mode !== 'papers'
-      ? cached.items.filter(item => item.feedName === selectedFeed)
-      : cached.items;
-
-    visibleCached = arrangeModeItems(
-      visibleCachedRaw,
-      mode,
-      feeds,
-      mode === 'papers' ? 300 : 350
-    );
-
-    if (visibleCached.length) {
-      onProgress?.(visibleCached, { cached: true, paperTrack: normalizedTrack });
-    }
-
-    // おすすめの事前ロードでは、キャッシュがあれば外部API待ちを避ける。
-    if (preferCache && visibleCached.length) {
-      return { items: visibleCached, failures: [], cached: true, paperTrack: normalizedTrack };
-    }
-  }
-
-  const collected = [];
-  const failures = [];
-
-  if (mode === 'papers') {
-    const base = normalizedTrack === 'creative' ? '/api/creative-papers-feed' : '/api/papers-feed';
-    const label = normalizedTrack === 'creative' ? '独創研究' : '製品・熱研究';
-
-    try {
-      const fast = await fetchFeed({ name: label, url: `${base}?mode=fast` });
-      collected.push(...fast);
-      onProgress?.(dedupeSort(collected), { stage: 'fast', paperTrack: normalizedTrack });
-    } catch (err) {
-      failures.push(err);
-    }
-
-    if (!fastOnly) {
-      try {
-        const deep = await fetchFeed({ name: label, url: `${base}?mode=deep` });
-        collected.push(...deep);
-      } catch (err) {
-        failures.push(err);
-      }
-    }
-  } else {
-    const queue = feeds.map(feed => ({ feed }));
-    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
-      while (queue.length) {
-        const { feed } = queue.shift();
-        try {
-          collected.push(...await fetchFeed(feed));
-          onProgress?.(
-            arrangeModeItems(collected, mode, feeds, 350),
-            { feed: feed.name }
-          );
-        } catch (err) {
-          failures.push({ feed: feed.name, error: err });
-        }
-      }
-    });
-    await Promise.all(workers);
-  }
-
-  let items = arrangeModeItems(
-    collected,
-    mode,
-    feeds,
-    mode === 'papers' ? 300 : 350
-  );
-
-  if (mode === 'papers') items = await translatePaperTitles(items);
-
-  if (items.length) {
-    if (!selectedFeed || mode === 'papers') writeCache(mode, items, normalizedTrack);
-    return { items, failures, paperTrack: normalizedTrack };
-  }
-
-  if (cached?.items?.length) {
-    const fallbackRaw = selectedFeed && mode !== 'papers'
-      ? cached.items.filter(item => item.feedName === selectedFeed)
-      : cached.items;
-    const fallback = arrangeModeItems(
-      fallbackRaw,
-      mode,
-      feeds,
-      mode === 'papers' ? 300 : 350
-    );
-    if (fallback.length) {
-      return { items: fallback, failures, stale: true, paperTrack: normalizedTrack };
-    }
-  }
-
-  throw failures[0]?.error || failures[0] || new Error('記事を取得できませんでした');
-}
-
-export function filterByFeed(items, feed, mode) {
-  if (!feed) return items;
-  if (String(feed.url).startsWith('/api/news-feed')) return items;
-  return items.filter(item => item.feedName === feed.name || item.source === feed.name);
+  try{
+    const selectedFeed=getSelectedFeed(mode);const result=await loadReader(mode,{force:refresh,selectedFeed,paperTrack:track,onProgress:items=>{if(!allItems.length&&items.length){allItems=items;renderContent();}}});allItems=result.items;renderContent();
+    if(state.settings.rankWithAi&&allItems.length){const family=mode==='papers'&&track==='creative'?creativeFamily():'all';const visible=mode==='papers'&&track==='creative'?filterCreativeItems(allItems,family):allItems;const rankMode=mode==='papers'&&track==='creative'?creativeRankMode(family):mode;requestAiRank(visible,rankMode).then(data=>{if(data?.ranking?.length)localStorage.setItem(rankKey(mode,track,family),JSON.stringify({at:Date.now(),ranking:data.ranking}));}).catch(()=>{});}
+  }catch(err){progressHost.replaceChildren();host.replaceChildren(el('div',{class:'error-box',text:err.message}));}
 }
