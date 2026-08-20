@@ -7,19 +7,15 @@ import { openImageViewer } from './image-viewer.js';
 import { iconSvg } from '../../shared/icons.js';
 
 let selected = Number(localStorage.getItem('pdv2:twitterIndex') || 0);
-let retryTimer = null;
 let renderGeneration = 0;
-const WARM_TTL = 5 * 60 * 1000;
+
+const AUTO_REFRESH_MS = 15 * 60 * 1000;
 const WARM_PREFIX = 'pdv2:twitterWarm:';
 const MAX_WARM_XML = 420_000;
-
-function stopRetry() {
-  if (retryTimer) {
-    clearTimeout(retryTimer);
-    retryTimer = null;
-  }
-}
-window.addEventListener('pdv2:before-navigate', stopRetry);
+const warmJobs = new Map();
+let warmActive = 0;
+const warmWaiters = [];
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function feedUrl(feed) {
   if (feed.url) return feed.url;
@@ -36,14 +32,26 @@ function warmKey(feed) {
   return `${WARM_PREFIX}${feed.id || feed.url || feed.name}`;
 }
 
-function readWarm(feed) {
+function readWarmRecord(feed) {
   try {
     const cached = JSON.parse(localStorage.getItem(warmKey(feed)) || 'null');
-    if (!cached?.xml || Date.now() - Number(cached.at || 0) > WARM_TTL) return '';
-    return cached.xml;
+    if (!cached?.xml) return null;
+    return { at: Number(cached.at || 0), xml: cached.xml };
   } catch {
-    return '';
+    return null;
   }
+}
+
+function readWarm(feed) {
+  const cached = readWarmRecord(feed);
+  if (!cached?.xml) return '';
+  if (Date.now() - cached.at >= AUTO_REFRESH_MS) return '';
+  return cached.xml;
+}
+
+function autoRefreshDue(feed) {
+  const cached = readWarmRecord(feed);
+  return !cached?.xml || Date.now() - cached.at >= AUTO_REFRESH_MS;
 }
 
 function saveWarm(feed, xml) {
@@ -61,48 +69,59 @@ async function fetchXml(feed, { timeout = 4500 } = {}) {
   return xml;
 }
 
-async function load(feed, { force = false } = {}) {
-  if (!force) {
-    const warm = readWarm(feed);
-    if (warm) return parseFeed(warm, feed.name);
+async function withWarmSlot(worker) {
+  if (warmActive >= 2) await new Promise(resolve => warmWaiters.push(resolve));
+  warmActive += 1;
+  try {
+    return await worker();
+  } finally {
+    warmActive = Math.max(0, warmActive - 1);
+    warmWaiters.shift()?.();
   }
-  const xml = await fetchXml(feed, { timeout: 5000 });
-  saveWarm(feed, xml);
-  return parseFeed(xml, feed.name);
 }
 
-/*
- * アプリ起動時に呼ぶバックグラウンドウォームアップ。
- * Render/RSSHubのコールドスタート待ちもここで先に消化し、取得できたXMLをlocalStorageへ保存する。
- */
+async function warmFeedUntilSuccess(feed, { force = false } = {}) {
+  if (!force && !autoRefreshDue(feed)) {
+    return { feed: feed.name, cached: true, skipped: true };
+  }
+
+  while (true) {
+    try {
+      const xml = await withWarmSlot(() => fetchXml(feed, { timeout: 12000 }));
+      saveWarm(feed, xml);
+      return { feed: feed.name, ok: true };
+    } catch (error) {
+      console.warn('[twitter-warm-retry]', feed.name, error?.message || error);
+      await sleep(5000);
+    }
+  }
+}
+
+function warmJobFor(feed, options = {}) {
+  const key = warmKey(feed);
+  const existing = warmJobs.get(key);
+  if (existing) return existing;
+
+  const job = warmFeedUntilSuccess(feed, options).finally(() => {
+    if (warmJobs.get(key) === job) warmJobs.delete(key);
+  });
+  warmJobs.set(key, job);
+  return job;
+}
+
 export async function warmTwitterFeeds({ force = false } = {}) {
-  const feeds = Array.isArray(state.twitterFeeds) ? state.twitterFeeds.filter(feed => feed?.id || feed?.url) : [];
+  const feeds = Array.isArray(state.twitterFeeds)
+    ? state.twitterFeeds.filter(feed => feed?.id || feed?.url)
+    : [];
   if (!feeds.length) return [];
 
-  const queue = feeds.slice(0, 8);
-  const results = [];
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < queue.length) {
-      const feed = queue[cursor++];
-      try {
-        if (!force && readWarm(feed)) {
-          results.push({ feed: feed.name, cached: true });
-          continue;
-        }
-        // 画面表示時より長めに待ち、Renderが寝ていても起床完了まで待てるようにする。
-        const xml = await fetchXml(feed, { timeout: 12000 });
-        saveWarm(feed, xml);
-        results.push({ feed: feed.name, ok: true });
-      } catch (error) {
-        results.push({ feed: feed.name, ok: false, error: String(error?.message || error) });
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(2, queue.length) }, worker));
-  return results;
-}
+  const targets = force
+    ? feeds.slice(0, 8)
+    : feeds.slice(0, 8).filter(autoRefreshDue);
 
+  if (!targets.length) return [];
+  return Promise.all(targets.map(feed => warmJobFor(feed, { force })));
+}
 
 function attachPullToRefresh(screen, indicator, onRefresh) {
   let startY = null;
@@ -141,11 +160,7 @@ function attachPullToRefresh(screen, indicator, onRefresh) {
       reset();
       return;
     }
-    if (raw <= 0) {
-      reset();
-      return;
-    }
-    if (scrollTop() > 1) {
+    if (raw <= 0 || scrollTop() > 1) {
       reset();
       return;
     }
@@ -157,8 +172,6 @@ function attachPullToRefresh(screen, indicator, onRefresh) {
     indicator.style.setProperty('--pull', `${visual}px`);
     const label = indicator.querySelector('.twitter-pull-label');
     if (label) label.textContent = raw >= trigger ? '指を離して更新' : '下に引いて更新';
-
-    // Safariのページ全体のゴム引っ張りより、アプリ側の更新UIを優先する。
     if (raw > 8 && event.cancelable) event.preventDefault();
   };
 
@@ -281,12 +294,14 @@ function tweetAuthor(item, clean) {
 function tweetCard(item) {
   const clean = cleanDescription(item.description);
   if (isRetweet(item, clean)) return null;
+
   const card = el('article', { class: 'tweet-card' });
   const author = tweetAuthor(item, clean);
   card.append(el('div', { class: 'tweet-author-row' }, [
     el('div', { class: 'tweet-author-avatar', text: String(author).replace(/^@/, '').slice(0, 1).toUpperCase() || 'X' }),
     el('strong', { class: 'tweet-author-name', text: author })
   ]));
+
   const rawTitle = String(item?.title || '').trim();
   const titleIsPlaceholder = /^(?:無題|untitled|no\s*title|\(no\s*title\))$/i.test(rawTitle);
   const displayText = clean.text || (!clean.images.length && !titleIsPlaceholder ? rawTitle : '');
@@ -313,7 +328,9 @@ function tweetCard(item) {
   const extra = [...new Set(clean.links)].filter(url => !clean.text.includes(url));
   if (extra.length) {
     const links = el('div', { class: 'tweet-external-links' });
-    extra.forEach(url => links.append(el('a', { class: 'tweet-external-link', href: url, target: '_blank', rel: 'noopener noreferrer', text: url })));
+    extra.forEach(url => links.append(el('a', {
+      class: 'tweet-external-link', href: url, target: '_blank', rel: 'noopener noreferrer', text: url
+    })));
     card.append(links);
   }
 
@@ -325,7 +342,6 @@ function tweetCard(item) {
 }
 
 export async function renderTwitter(root, { navigate, refresh = false }) {
-  stopRetry();
   const generation = ++renderGeneration;
   if (selected >= state.twitterFeeds.length) selected = 0;
   const feed = state.twitterFeeds[selected];
@@ -367,6 +383,7 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   const host = el('div', { class: 'twitter-feed-host' });
   screen.append(pullIndicator, host);
   root.replaceChildren(screen);
+
   const active = chips.querySelector('.chip.active');
   if (active) centerScrollItem(chips, active, { behavior: 'auto' });
 
@@ -378,7 +395,9 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   const draw = items => {
     if (generation !== renderGeneration) return;
     const cards = (items || []).map(tweetCard).filter(Boolean);
-    host.replaceChildren(...(cards.length ? cards : [el('div', { class: 'empty', text: '表示できる投稿がありません' })]));
+    host.replaceChildren(...(cards.length
+      ? cards
+      : [el('div', { class: 'empty', text: '表示できる投稿がありません' })]));
     requestAnimationFrame(() => window.scrollTo({
       top: Number(localStorage.getItem(`pdv2:twitterScroll:${selected}`) || 0),
       behavior: 'auto'
@@ -386,42 +405,34 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   };
 
   try {
-    const warm = !refresh ? readWarm(feed) : '';
-    if (warm) {
-      draw(parseFeed(warm, feed.name));
-      // キャッシュを即表示しつつ、裏で新しいRSSへ更新。
-      fetchXml(feed, { timeout: 7000 }).then(xml => {
-        saveWarm(feed, xml);
-        if (generation === renderGeneration) draw(parseFeed(xml, feed.name));
+    const cached = !refresh ? readWarmRecord(feed) : null;
+
+    if (cached?.xml) {
+      draw(parseFeed(cached.xml, feed.name));
+
+      if (!autoRefreshDue(feed)) return;
+
+      warmJobFor(feed, { force: false }).then(() => {
+        if (generation !== renderGeneration) return;
+        const fresh = readWarmRecord(feed);
+        if (fresh?.xml) draw(parseFeed(fresh.xml, feed.name));
       }).catch(() => {});
       return;
     }
 
     host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [
-      el('strong', { text: 'SNSを読み込み中…' }),
-      el('span', { text: '起動時のバックグラウンド取得が未完了の場合だけ待ちます' })
+      el('strong', { text: refresh ? 'SNSを更新しています…' : 'SNSを読み込み中…' }),
+      el('span', { text: '取得できない場合は5秒空けて再確認します' })
     ]));
-    const items = await load(feed, { force: refresh });
-    if (items.length) {
-      draw(items);
-      return;
-    }
-    throw new Error('RSSが空です');
+
+    await warmJobFor(feed, { force: refresh });
+    if (generation !== renderGeneration) return;
+
+    const fresh = readWarmRecord(feed);
+    if (!fresh?.xml) throw new Error('RSSが空です');
+    draw(parseFeed(fresh.xml, feed.name));
   } catch (err) {
     if (generation !== renderGeneration) return;
-    host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [
-      el('strong', { text: 'SNSフィードを再確認しています' }),
-      el('span', { text: `${err.message} / 5秒後に1回だけ再試行します` })
-    ]));
-    retryTimer = setTimeout(async () => {
-      if (generation !== renderGeneration) return;
-      try {
-        const xml = await fetchXml(feed, { timeout: 12000 });
-        saveWarm(feed, xml);
-        draw(parseFeed(xml, feed.name));
-      } catch (error) {
-        if (generation === renderGeneration) host.replaceChildren(el('div', { class: 'error-box', text: error.message }));
-      }
-    }, 5000);
+    host.replaceChildren(el('div', { class: 'error-box', text: err.message }));
   }
 }
