@@ -42,7 +42,7 @@ async function loadArticle(title) {
 }
 
 /*
- * v2.14.1
+ * v2.14.2
  * Wikipedia reader pagination is based on the REAL rendered viewport instead of
  * a guessed character count. Every page starts exactly where the previous page
  * ended, so no character can be dropped or duplicated at a page boundary.
@@ -79,7 +79,7 @@ function chooseNaturalBreak(chars, start, maximumEnd) {
 
   // Natural punctuation is preferred only near the measured edge. We never
   // delete the skipped characters: the next page starts at the exact cut index.
-  const minEnd = start + Math.floor(span * .74);
+  const minEnd = start + Math.floor(span * .94);
   for (let i = maximumEnd; i > minEnd; i -= 1) {
     const ch = chars[i - 1];
     if (ch === '\n' || /[。！？!?；;]/.test(ch)) return i;
