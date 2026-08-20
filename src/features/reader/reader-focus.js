@@ -1,11 +1,10 @@
 import { el, openSheet, showToast } from '../../shared/dom.js';
 import { shortDate } from '../../shared/time.js';
-import { iconSvg } from '../../shared/icons.js';
 
 const summaryCache = new Map();
 const summaryPromises = new Map();
-const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v2142';
-const AI_DAILY_LIMIT = 12;
+const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v2143';
+const AI_DAILY_LIMIT = 16;
 
 function aiTodayKey() {
   const d = new Date();
@@ -27,7 +26,7 @@ function takeAiBudget() {
 
 function stripHtml(value = '') {
   const d = document.createElement('div');
-  d.innerHTML = value;
+  d.innerHTML = String(value || '');
   return (d.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
@@ -43,7 +42,7 @@ function summaryModeOf(item, fallback = '') {
 }
 
 function summaryKey(item, mode = '') {
-  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2142`;
+  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2143`;
 }
 
 function errorMessage(data, status) {
@@ -59,32 +58,32 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
   if (!force && summaryCache.has(key)) return summaryCache.get(key);
   if (!force && summaryPromises.has(key)) return summaryPromises.get(key);
 
-  const description = stripHtml(item.description).slice(0, 14000);
-  const truncatedTitle = /(?:…|\.\.\.)[^。！？!?]{0,12}$/.test(String(item.title || '').trim());
-  const forceJapanese = looksMostlyEnglish(`${item.title || ''}\n${description}`);
-  // 論文PDFと英語翻訳は必ずAI。通常の日本語ニュース/知識は従来同様に日次予算内だけAI。
-  const allowAi = activeMode === 'papers' || forceJapanese || takeAiBudget();
+  const description = stripHtml(item?.description).slice(0, 14000);
+  const truncatedTitle = /(?:…|\.\.\.)[^。！？!?]{0,12}$/.test(String(item?.title || '').trim());
+  const forceJapanese = looksMostlyEnglish(`${item?.title || ''}\n${description}`);
+  // v2.14.3の縦スワイプでは、表示された記事はカテゴリを問わずAI短縮要約を作る。
+  // 先読みは現在位置の前後だけに限定し、無駄なAPI呼び出しはIntersectionObserver側で抑える。
+  const allowAi = true;
+
   const request = fetch('/api/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      url: item.link,
-      title: item.title,
+      url: item?.link,
+      title: item?.title,
       description,
-      source: item.source,
+      source: item?.source,
       mode: activeMode,
-      // 論文だけはリンク先本文を取りに行き、PDFならPDF本文を優先する。
       preferFullText: activeMode === 'papers' || activeMode === 'news' || truncatedTitle,
-      // おすすめに英語記事が混ざっても要約だけは必ず日本語にする。
       forceJapanese,
       allowAi,
       fast: activeMode !== 'papers'
     })
-  }).then(async res => {
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(errorMessage(data, res.status));
+  }).then(async response => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(errorMessage(data, response.status));
     summaryCache.set(key, data);
-    while (summaryCache.size > 48) summaryCache.delete(summaryCache.keys().next().value);
+    while (summaryCache.size > 72) summaryCache.delete(summaryCache.keys().next().value);
     return data;
   }).finally(() => {
     if (summaryPromises.get(key) === request) summaryPromises.delete(key);
@@ -94,69 +93,134 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
   return request;
 }
 
-function prefetchSummary(item, { mode = '' } = {}) {
-  if (!item) return;
-  const key = summaryKey(item, mode);
-  if (!key || summaryCache.has(key) || summaryPromises.has(key)) return;
-  fetchSummary(item, { mode }).catch(() => {});
-}
-
 function cachedSummary(item, mode = '') {
   return summaryCache.get(summaryKey(item, mode));
 }
 
-function chatSheet(item, summary) {
+function prefetchSummary(item, mode = '') {
+  if (!item) return;
+  const key = summaryKey(item, mode);
+  if (summaryCache.has(key) || summaryPromises.has(key)) return;
+  fetchSummary(item, { mode }).catch(() => {});
+}
+
+
+function focusItemKey(item) {
+  return String(item?.id || item?.link || item?.url || `${item?.source || ''}|${item?.title || ''}`);
+}
+
+function itemDateLabel(item) {
+  const description = String(item?.description || '');
+  const yearOnly = description.match(/(?:公開年|出版年):\s*(\d{4})/)?.[1];
+  if (/日付精度:\s*不明/.test(description)) return '日付不明';
+  if (/日付精度:\s*年/.test(description) && yearOnly) return `${yearOnly}年`;
+  return shortDate(item?.pubDate);
+}
+
+function itemLabel(item, fallback = 'おすすめ') {
+  if (item?._recommendationLabel) return item._recommendationLabel;
+  if (item?._readerMode === 'news') return 'ニュース';
+  if (item?._readerMode === 'knowledge') return '知識';
+  if (item?._readerMode === 'papers') {
+    if (item?._paperTrack === 'core') return '製品・熱研究';
+    if (item?._creativeFamily === 'general') return '一般独創';
+    if (item?._creativeFamily === 'applied') return '応用発想';
+    return '独創研究';
+  }
+  return fallback;
+}
+
+function gridIconSvg() {
+  return `
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">
+      <rect x="3" y="3" width="7" height="7" rx="2"></rect>
+      <rect x="14" y="3" width="7" height="7" rx="2"></rect>
+      <rect x="3" y="14" width="7" height="7" rx="2"></rect>
+      <rect x="14" y="14" width="7" height="7" rx="2"></rect>
+    </svg>`;
+}
+
+function renderSummarySheet(item, summary, mode) {
+  const wrap = el('div', { class: 'reader-detail-sheet' });
+  const heading = el('div', { class: 'reader-detail-heading' }, [
+    el('span', { class: 'reader-feed-badge', text: itemLabel(item) }),
+    el('h3', { text: summary?.resolvedTitle || item?.titleJa || item?.title || '記事' }),
+    el('p', { text: `${item?.source || item?.feedName || ''}${itemDateLabel(item) ? ` ・ ${itemDateLabel(item)}` : ''}` })
+  ]);
+  wrap.append(heading);
+
+  if (summary?.short) {
+    wrap.append(el('section', { class: 'reader-detail-section' }, [
+      el('strong', { text: 'ひとことで' }),
+      el('p', { text: summary.short })
+    ]));
+  }
+
+  const points = Array.isArray(summary?.points) ? summary.points : [];
+  if (points.length) {
+    const list = el('ul', { class: 'reader-detail-points' });
+    points.forEach(point => list.append(el('li', { text: point })));
+    wrap.append(el('section', { class: 'reader-detail-section' }, [
+      el('strong', { text: '要点' }),
+      list
+    ]));
+  }
+
+  const actions = el('div', { class: 'reader-detail-actions' });
+  actions.append(el('a', {
+    class: 'soft-button',
+    href: item?.link || '#',
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    text: '原文を開く'
+  }));
+  actions.append(el('button', {
+    class: 'soft-button',
+    type: 'button',
+    text: 'AIに質問',
+    onclick: () => chatSheet(item, summary, mode)
+  }));
+  wrap.append(actions);
+  openSheet(wrap, { title: '記事の詳細' });
+}
+
+function chatSheet(item, summary, mode) {
   const wrap = el('div');
   const history = [];
   const log = el('div', { class: 'chat-log' });
   const field = el('div', { class: 'field' });
   field.append(el('label', { text: 'この記事について質問' }));
-
-  const input = el('textarea', {
-    rows: '3',
-    placeholder: '例：この研究を製品開発へ応用すると？'
-  });
+  const input = el('textarea', { rows: '3', placeholder: '例：重要なポイントをもう少し詳しく' });
   field.append(input);
-
-  const send = el('button', {
-    class: 'primary-button full-button',
-    type: 'button',
-    text: '送信'
-  });
+  const send = el('button', { class: 'primary-button full-button', type: 'button', text: '送信' });
 
   send.onclick = async () => {
     const q = input.value.trim();
     if (!q) return;
-
     input.value = '';
     log.append(el('div', { class: 'chat-user', text: q }));
     send.disabled = true;
-
     try {
-      const res = await fetch('/api/chat', {
+      const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          url: item.link,
-          title: item.title,
-          description: stripHtml(item.description),
+          url: item?.link,
+          title: item?.title,
+          description: stripHtml(item?.description),
           question: q,
           history,
-          summary: summary?.points || []
+          summary: summary?.points || [],
+          mode: summaryModeOf(item, mode)
         })
       });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(errorMessage(data, res.status));
-
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(errorMessage(data, response.status));
       const answer = data.answer || data.text || '';
       log.append(el('div', { class: 'chat-ai', text: answer }));
-      history.push(
-        { role: 'user', content: q },
-        { role: 'assistant', content: answer }
-      );
-    } catch (err) {
-      log.append(el('div', { class: 'error-box', text: err.message }));
+      history.push({ role: 'user', content: q }, { role: 'assistant', content: answer });
+    } catch (error) {
+      log.append(el('div', { class: 'error-box', text: error.message }));
     } finally {
       send.disabled = false;
     }
@@ -166,245 +230,124 @@ function chatSheet(item, summary) {
   openSheet(wrap, { title: 'AIに質問' });
 }
 
-function renderProgress(progressHost, { label, index, total, onList }) {
-  if (!progressHost) return;
+function setCardSummary(card, item, mode, summary) {
+  if (!card?.isConnected) return;
+  const summaryText = card.querySelector('[data-reader-summary]');
+  const detailButton = card.querySelector('[data-reader-detail]');
+  const title = card.querySelector('[data-reader-title]');
+  if (summaryText) {
+    summaryText.textContent = summary?.short || '要約を取得できませんでした。';
+    summaryText.classList.remove('is-loading');
+  }
+  if (title && !item?.titleJa && summary?.resolvedTitle && summary.resolvedTitle !== item.title) {
+    item.title = summary.resolvedTitle;
+    title.textContent = summary.resolvedTitle;
+  }
+  if (detailButton) detailButton.onclick = () => renderSummarySheet(item, summary, mode);
+}
 
-  const progress = el('div', { class: 'focus-progress focus-progress-sticky' });
-  const title = el('strong', { text: label });
-  const track = el('div', { class: 'progress-track' }, [
-    el('div', {
-      class: 'progress-fill',
-      style: `width:${total ? ((index + 1) / total) * 100 : 0}%`
-    })
+function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
+  const mode = summaryModeOf(item, summaryMode);
+  const card = el('section', {
+    class: 'reader-swipe-card',
+    'data-index': String(index),
+    'data-key': focusItemKey(item) || String(index)
+  });
+  if (sharedKey && sharedKey === focusItemKey(item)) {
+    card.style.viewTransitionName = 'reader-shared-card';
+  }
+
+  const media = el('div', { class: 'reader-swipe-media' });
+  if (item?.image) {
+    const image = el('img', {
+      class: 'reader-swipe-image',
+      src: item.image,
+      alt: '',
+      loading: Math.abs(index) <= 1 ? 'eager' : 'lazy',
+      decoding: 'async'
+    });
+    image.addEventListener('error', () => media.classList.add('image-failed'), { once: true });
+    media.append(image);
+  }
+  media.append(el('div', { class: 'reader-swipe-fallback', text: itemLabel(item, label) }));
+  media.append(el('div', { class: 'reader-swipe-shade' }));
+
+  const top = el('div', { class: 'reader-swipe-top' });
+  const meta = el('div', { class: 'reader-swipe-meta' }, [
+    el('span', { class: 'reader-feed-badge', text: itemLabel(item, label) }),
+    el('span', { class: 'reader-feed-source', text: item?.source || item?.feedName || '' }),
+    el('span', { class: 'reader-feed-time', text: itemDateLabel(item) })
   ]);
-  const count = el('span', {
-    class: 'focus-progress-count',
-    text: `${index + 1} / ${total}`
-  });
-  const list = el('button', {
-    class: 'focus-list-button',
+  const grid = el('button', {
+    class: 'reader-grid-fab',
     type: 'button',
-    title: '記事一覧',
-    'aria-label': '記事一覧',
-    html: iconSvg('list', { size: 17 }),
-    onclick: onList
+    title: 'Bento一覧',
+    'aria-label': 'Bento一覧',
+    html: gridIconSvg(),
+    onclick: () => onList?.({ index, item, card })
   });
+  top.append(meta, grid);
 
-  progress.append(title, track, count, list);
-  progressHost.replaceChildren(progress);
+  const copy = el('div', { class: 'reader-swipe-copy' });
+  const title = el('h2', {
+    class: 'reader-swipe-title',
+    'data-reader-title': '1',
+    text: item?.titleJa || item?.title || '無題'
+  });
+  const summary = cachedSummary(item, mode);
+  const summaryText = el('p', {
+    class: `reader-swipe-summary${summary ? '' : ' is-loading'}`,
+    'data-reader-summary': '1',
+    text: summary?.short || 'AI要約を準備しています…'
+  });
+  const actions = el('div', { class: 'reader-swipe-actions' });
+  const detail = el('button', {
+    class: 'reader-feed-action',
+    type: 'button',
+    'data-reader-detail': '1',
+    text: '要点'
+  });
+  if (summary) detail.onclick = () => renderSummarySheet(item, summary, mode);
+  const original = el('a', {
+    class: 'reader-feed-action',
+    href: item?.link || '#',
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    text: '原文'
+  });
+  actions.append(detail, original);
+  copy.append(title, summaryText, actions);
+
+  const position = el('div', { class: 'reader-swipe-position', text: `${index + 1}` });
+  card.append(media, top, copy, position);
+  return card;
 }
 
-function createSummaryLoader() {
-  const box = el('div', { class: 'summary-loading-box' });
-  const label = el('div', { class: 'summary-loading-label', text: 'AI要約を作成中…' });
-  const track = el('div', { class: 'summary-loading-track' });
-  const fill = el('div', { class: 'summary-loading-fill' });
-  const percent = el('span', { class: 'summary-loading-percent', text: '8%' });
-  track.append(fill);
-  box.append(label, track, percent);
-
-  const startedAt = performance.now();
-  let raf = 0;
-  let stopped = false;
-  const tick = now => {
-    if (stopped || !box.isConnected) return;
-    const sec = Math.max(0, (now - startedAt) / 1000);
-    // 通信の実進捗は取れないため95%までは疑似進捗。色は現在タブ色をCSSで使う。
-    const value = Math.min(95, 8 + 87 * (1 - Math.exp(-sec / 3.2)));
-    fill.style.width = `${value}%`;
-    percent.textContent = `${Math.round(value)}%`;
-    raf = requestAnimationFrame(tick);
-  };
-  raf = requestAnimationFrame(tick);
-
-  return {
-    node: box,
-    finish() {
-      stopped = true;
-      if (raf) cancelAnimationFrame(raf);
-      fill.style.width = '100%';
-      percent.textContent = '100%';
-    },
-    stop() {
-      stopped = true;
-      if (raf) cancelAnimationFrame(raf);
-    }
-  };
-}
-
-function paperDateLabel(item) {
-  const description = String(item?.description || '');
-  const yearOnly = description.match(/(?:公開年|出版年):\s*(\d{4})/);
-  if (/日付精度:\s*不明/.test(description)) return '日付不明';
-  if (/日付精度:\s*年/.test(description) && yearOnly) return `${yearOnly[1]}年`;
-  return shortDate(item?.pubDate);
-}
-
-function renderSummary(summaryHost, summary) {
-  summaryHost.replaceChildren();
-
-  if (summary.short) {
-    summaryHost.append(el('div', { class: 'summary-block summary-block-compact' }, [
-      el('h3', { text: 'ひとことで' }),
-      el('div', { class: 'summary-short', text: summary.short })
-    ]));
-  }
-
-  const points = Array.isArray(summary.points) ? summary.points : [];
-  if (points.length) {
-    const ul = el('ul', { class: 'summary-points-compact' });
-    points.forEach(point => ul.append(el('li', { text: point })));
-    summaryHost.append(el('div', { class: 'summary-block summary-block-compact' }, [
-      el('h3', { text: '要点' }),
-      ul
-    ]));
-  }
-
-  const sourceText = summary.contentSource === 'pdf'
-    ? `PDF本文から要約${summary.pdfPageCount ? `（${summary.pdfPageCount}ページ）` : ''}`
-    : summary.contentSource === 'article'
-      ? 'リンク先本文から要約'
-      : summary.fastPath === 'rss-abstract-fast'
-        ? 'RSS本文・抄録から高速要約'
-        : 'AI要約';
-  summaryHost.append(el('div', { class: 'source-note', text: sourceText }));
-}
-
-function isDocumentScroller(scroller) {
-  return scroller === document.scrollingElement ||
-    scroller === document.documentElement ||
-    scroller === document.body;
-}
-
-function getScroller(node) {
-  let current = node?.parentElement;
-
-  while (current && current !== document.body && current !== document.documentElement) {
-    const style = getComputedStyle(current);
-    const overflowY = style.overflowY || '';
-    if (/(auto|scroll)/.test(overflowY) && current.scrollHeight > current.clientHeight + 4) {
-      return current;
-    }
-    current = current.parentElement;
-  }
-
-  return document.scrollingElement || document.documentElement;
-}
-
-function getScrollMetrics(node) {
-  const scroller = getScroller(node);
-
-  if (isDocumentScroller(scroller)) {
-    const top = Math.max(0, window.scrollY || scroller.scrollTop || 0);
-    const viewport = window.innerHeight || document.documentElement.clientHeight || 0;
-    const max = Math.max(0, scroller.scrollHeight - viewport);
-    return { scroller, top, max, document: true };
-  }
-
-  return {
-    scroller,
-    top: Math.max(0, scroller.scrollTop),
-    max: Math.max(0, scroller.scrollHeight - scroller.clientHeight),
-    document: false
-  };
-}
-
-function atTop(node, tolerance = 10) {
-  return getScrollMetrics(node).top <= tolerance;
-}
-
-function atBottom(node, tolerance = 18) {
-  const { top, max } = getScrollMetrics(node);
-  return max <= tolerance || top >= max - tolerance;
-}
-
-function interactiveTarget(target) {
-  return Boolean(target?.closest?.('a,button,input,textarea,select,[contenteditable="true"]'));
-}
-
-function attachFocusGesture(card, { up, down, left, right }) {
+function installHorizontalSwipe(container, { onPrevFeed, onNextFeed }) {
   let start = null;
-
-  const onTouchStart = event => {
-    if (event.touches.length !== 1) {
-      start = null;
-      return;
-    }
-
-    const touch = event.touches[0];
-    start = {
-      x: touch.clientX,
-      y: touch.clientY,
-      top: atTop(card),
-      bottom: atBottom(card),
-      interactive: interactiveTarget(event.target)
-    };
+  const down = event => {
+    if (event.touches?.length !== 1) return;
+    const t = event.touches[0];
+    start = { x: t.clientX, y: t.clientY, target: event.target };
   };
-
-  const onTouchEnd = event => {
-    if (!start || !event.changedTouches?.length) {
-      start = null;
-      return;
-    }
-
-    const touch = event.changedTouches[0];
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-    const ax = Math.abs(dx);
-    const ay = Math.abs(dy);
-    const started = start;
+  const up = event => {
+    if (!start || !event.changedTouches?.length) return;
+    const t = event.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    const target = start.target;
     start = null;
-
-    if (started.interactive) return;
-
-    if (ax >= 58 && ax > ay * 1.2) {
-      if (dx < 0) left?.();
-      else right?.();
-      return;
-    }
-
-    if (ay < 72 || ay <= ax * 1.25) return;
-
-    if (dy < 0 && started.bottom && atBottom(card)) {
-      up?.();
-      return;
-    }
-
-    if (dy > 0 && started.top && atTop(card)) down?.();
+    if (target?.closest?.('a,button,input,textarea,select')) return;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+    if (dx < 0) onNextFeed?.();
+    else onPrevFeed?.();
   };
-
-  const onTouchCancel = () => { start = null; };
-
-  card.addEventListener('touchstart', onTouchStart, { passive: true });
-  card.addEventListener('touchend', onTouchEnd, { passive: true });
-  card.addEventListener('touchcancel', onTouchCancel, { passive: true });
-
+  container.addEventListener('touchstart', down, { passive: true });
+  container.addEventListener('touchend', up, { passive: true });
   return () => {
-    card.removeEventListener('touchstart', onTouchStart);
-    card.removeEventListener('touchend', onTouchEnd);
-    card.removeEventListener('touchcancel', onTouchCancel);
+    container.removeEventListener('touchstart', down);
+    container.removeEventListener('touchend', up);
   };
-}
-
-function scrollCardToStart(card) {
-  requestAnimationFrame(() => {
-    if (!card?.isConnected) return;
-
-    const sticky = document.querySelector('.reader-sticky-context');
-    const offset = (sticky?.getBoundingClientRect().height || 0) + 8;
-    const metrics = getScrollMetrics(card);
-
-    if (metrics.document) {
-      const top = Math.max(0, (window.scrollY || 0) + card.getBoundingClientRect().top - offset);
-      window.scrollTo({ top, behavior: 'auto' });
-      return;
-    }
-
-    const scrollerRect = metrics.scroller.getBoundingClientRect();
-    const cardRect = card.getBoundingClientRect();
-    const top = metrics.scroller.scrollTop + (cardRect.top - scrollerRect.top) - offset;
-    metrics.scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
-  });
 }
 
 export function mountFocus(host, {
@@ -417,186 +360,122 @@ export function mountFocus(host, {
   onIndexChange,
   onPrevFeed,
   onNextFeed,
-  horizontalHint = 'RSSタブ',
-  progressHost = null,
-  summaryMode = ''
+  summaryMode = '',
+  sharedKey = ''
 }) {
-  let index = Math.max(0, Math.min(initialIndex, items.length - 1));
-  let detach = () => {};
+  const rows = Array.isArray(items) ? items : [];
+  let index = Math.max(0, Math.min(Number(initialIndex) || 0, Math.max(0, rows.length - 1)));
   let destroyed = false;
+  let observer = null;
+  let activeObserver = null;
 
-  const render = ({ scrollToTop = false } = {}) => {
-    const item = items[index];
+  if (!rows.length) {
+    host.replaceChildren(el('div', { class: 'empty', text: '記事がありません' }));
+    return { destroy() {}, go() {} };
+  }
 
-    if (!item) {
-      host.innerHTML = '<div class="empty">記事がありません</div>';
-      progressHost?.replaceChildren();
-      return;
-    }
+  const feed = el('div', { class: 'reader-swipe-feed', tabindex: '0' });
+  const cards = rows.map((item, i) => buildFeedCard(item, i, {
+    label,
+    onList,
+    summaryMode,
+    sharedKey: sharedKey || focusItemKey(rows[index])
+  }));
+  cards.forEach(card => feed.append(card));
+  host.replaceChildren(feed);
 
-    renderProgress(progressHost, {
-      label,
-      index,
-      total: items.length,
-      onList
-    });
-
-    const card = el('article', { class: 'card focus-card reader-focus-scroll-safe' });
-    const body = el('div');
-
-    const focusTitle = el('h2', {
-      class: 'focus-title',
-      text: item.titleJa || item.title
-    });
-    body.append(
-      el('div', {
-        class: 'focus-source',
-        text: `${item._recommendationLabel ? `${item._recommendationLabel} ・ ` : ''}${item.source || ''} ・ ${paperDateLabel(item)}`
-      }),
-      focusTitle
-    );
-
-    if (item.titleJa) body.append(el('div', { class: 'focus-original', text: item.title }));
-
-    const summaryHost = el('div', { class: 'summary-area' });
-    const cached = cachedSummary(item, summaryMode);
-    let loader = null;
-
-    if (cached) renderSummary(summaryHost, cached);
-    else {
-      loader = createSummaryLoader();
-      summaryHost.append(loader.node);
-    }
-
-    body.append(summaryHost);
-
-    const actions = el('div', { class: 'focus-actions' });
-    actions.append(
-      el('button', {
-        class: 'soft-button',
-        type: 'button',
-        text: '≡ 一覧',
-        onclick: onList
-      }),
-      el('button', {
-        class: 'soft-button',
-        type: 'button',
-        text: 'AIに質問',
-        onclick: () => chatSheet(item, cachedSummary(item, summaryMode))
-      }),
-      el('a', {
-        class: 'soft-button',
-        href: item.link || '#',
-        target: '_blank',
-        rel: 'noopener noreferrer',
-        text: '原文'
-      })
-    );
-
-    const nextText = index >= items.length - 1 && onEnd ? '記事一覧' : '次の記事';
-    const prevText = index <= 0 ? '最初の記事' : '前の記事';
-
-    card.append(
-      body,
-      actions,
-      el('div', {
-        class: 'swipe-hint reader-boundary-hint',
-        text: `末尾でもう一度 ↑ ${nextText}　先頭で ↓ ${prevText}　←→ ${horizontalHint}`
-      })
-    );
-
-    host.replaceChildren(card);
-    detach();
-    detach = attachFocusGesture(card, {
-      up: () => move(1),
-      down: () => {
-        if (index === 0 && typeof onStart === 'function') onStart();
-        else move(-1);
-      },
-      left: onNextFeed,
-      right: onPrevFeed
-    });
-
-    onIndexChange?.(index, item);
-    if (scrollToTop) scrollCardToStart(card);
-
-    if (!cached) {
-      fetchSummary(item, { mode: summaryMode })
-        .then(summary => {
-          loader?.finish();
-          if (destroyed || items[index] !== item || !summaryHost.isConnected) return;
-          renderSummary(summaryHost, summary);
-          if (!item.titleJa && summary?.resolvedTitle && summary.resolvedTitle !== item.title) {
-            focusTitle.textContent = summary.resolvedTitle;
-            item.title = summary.resolvedTitle;
-          }
-          prefetchSummary(items[index + 1], { mode: summaryMode });
-        })
-        .catch(err => {
-          loader?.stop();
-          if (destroyed || !summaryHost.isConnected) return;
-
-          summaryHost.replaceChildren(el('div', { class: 'error-box' }, [
-            el('div', { text: err.message }),
-            el('button', {
-              class: 'soft-button',
-              type: 'button',
-              text: '要約を再取得',
-              onclick: async () => {
-                try {
-                  const retryLoader = createSummaryLoader();
-                  summaryHost.replaceChildren(retryLoader.node);
-                  const retrySummary = await fetchSummary(item, { force: true, mode: summaryMode });
-                  retryLoader.finish();
-                  renderSummary(summaryHost, retrySummary);
-                  if (!item.titleJa && retrySummary?.resolvedTitle && retrySummary.resolvedTitle !== item.title) {
-                    focusTitle.textContent = retrySummary.resolvedTitle;
-                    item.title = retrySummary.resolvedTitle;
-                  }
-                } catch (retryError) {
-                  summaryHost.replaceChildren(el('div', {
-                    class: 'error-box',
-                    text: retryError.message
-                  }));
-                }
-              }
-            })
-          ]));
-        });
-    }
+  const setActive = next => {
+    const safe = Math.max(0, Math.min(next, rows.length - 1));
+    if (safe === index && feed.dataset.ready === '1') return;
+    index = safe;
+    feed.dataset.ready = '1';
+    cards.forEach((card, i) => card.classList.toggle('is-active', i === index));
+    onIndexChange?.(index, rows[index]);
+    prefetchSummary(rows[index], summaryMode);
+    prefetchSummary(rows[index + 1], summaryMode);
+    prefetchSummary(rows[index - 1], summaryMode);
   };
 
-  const move = delta => {
-    const next = index + delta;
-
-    if (next < 0) {
-      showToast('最初の記事です');
-      return;
-    }
-
-    if (next >= items.length) {
-      if (typeof onEnd === 'function') {
-        onEnd();
+  observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting || entry.intersectionRatio < 0.18) return;
+      const card = entry.target;
+      const i = Number(card.dataset.index || 0);
+      const item = rows[i];
+      const mode = summaryModeOf(item, summaryMode);
+      const cached = cachedSummary(item, mode);
+      if (cached) {
+        setCardSummary(card, item, mode, cached);
         return;
       }
-      showToast(`${label}はここまで ✓`);
-      return;
+      fetchSummary(item, { mode })
+        .then(summary => {
+          if (!destroyed) setCardSummary(card, item, mode, summary);
+        })
+        .catch(error => {
+          if (destroyed || !card.isConnected) return;
+          const node = card.querySelector('[data-reader-summary]');
+          if (node) {
+            node.textContent = '要約を取得できませんでした。タップして再試行できます。';
+            node.classList.remove('is-loading');
+            node.onclick = () => {
+              node.textContent = 'AI要約を再取得しています…';
+              node.classList.add('is-loading');
+              fetchSummary(item, { force: true, mode })
+                .then(summary => setCardSummary(card, item, mode, summary))
+                .catch(err => showToast(err.message || '要約を取得できませんでした'));
+            };
+          }
+        });
+    });
+  }, { root: feed, rootMargin: '95% 0px 95% 0px', threshold: [0.18] });
+  cards.forEach(card => observer.observe(card));
+
+  activeObserver = new IntersectionObserver(entries => {
+    const visible = entries
+      .filter(entry => entry.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+    if (!visible || visible.intersectionRatio < 0.56) return;
+    setActive(Number(visible.target.dataset.index || 0));
+  }, { root: feed, threshold: [0.56, 0.72, 0.9] });
+  cards.forEach(card => activeObserver.observe(card));
+
+  const detachHorizontal = installHorizontalSwipe(feed, { onPrevFeed, onNextFeed });
+
+  requestAnimationFrame(() => {
+    cards[index]?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    setActive(index);
+  });
+
+  const boundaryTouch = () => {
+    const max = Math.max(0, feed.scrollHeight - feed.clientHeight);
+    if (feed.scrollTop <= 1 && index === 0 && typeof onStart === 'function') {
+      // Keep the callback available for older flows, but do not fire on normal arrival.
     }
-
-    index = next;
-    render({ scrollToTop: true });
+    if (feed.scrollTop >= max - 1 && index === rows.length - 1 && typeof onEnd === 'function') {
+      // Same as above: native snap stops naturally on the last item.
+    }
   };
-
-  render();
+  feed.addEventListener('scrollend', boundaryTouch, { passive: true });
 
   return {
     destroy() {
       destroyed = true;
-      detach();
+      observer?.disconnect();
+      activeObserver?.disconnect();
+      detachHorizontal();
+      feed.removeEventListener('scrollend', boundaryTouch);
     },
     go(nextIndex) {
-      index = Math.max(0, Math.min(Number(nextIndex) || 0, items.length - 1));
-      render({ scrollToTop: true });
+      index = Math.max(0, Math.min(Number(nextIndex) || 0, rows.length - 1));
+      cards[index]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      setActive(index);
+    },
+    getIndex() {
+      return index;
+    },
+    getItem() {
+      return rows[index];
     }
   };
 }
