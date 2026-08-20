@@ -42,56 +42,11 @@ async function loadArticle(title) {
 }
 
 /*
- * v2.13.1
- * ページ境界で文字を単純切断しない。
- * まず文単位へ分け、1文だけが長すぎる時に限って読点などで分割する。
- * trim()でページ境界の文字を落とさないよう、本文は最後まで同じ順序で連結する。
+ * v2.14.1
+ * Wikipedia reader pagination is based on the REAL rendered viewport instead of
+ * a guessed character count. Every page starts exactly where the previous page
+ * ended, so no character can be dropped or duplicated at a page boundary.
  */
-function sentenceUnits(text) {
-  const value = String(text || '');
-  if (!value) return [];
-
-  try {
-    if (typeof Intl?.Segmenter === 'function') {
-      const segmenter = new Intl.Segmenter('ja', { granularity: 'sentence' });
-      const rows = [...segmenter.segment(value)].map(row => row.segment).filter(Boolean);
-      if (rows.length) return rows;
-    }
-  } catch {}
-
-  const rows = value.match(/[^。！？!?\n]+[。！？!?]?[ \t]*|\n+/g);
-  return rows?.length ? rows : [value];
-}
-
-function splitLongUnit(text, limit) {
-  const value = String(text || '');
-  if (value.length <= limit) return [value];
-
-  const out = [];
-  let offset = 0;
-  while (offset < value.length) {
-    const remaining = value.length - offset;
-    if (remaining <= limit) {
-      out.push(value.slice(offset));
-      break;
-    }
-
-    const windowText = value.slice(offset, offset + limit + 1);
-    const minCut = Math.floor(limit * .62);
-    let cut = -1;
-
-    for (const mark of ['。', '！', '？', '!', '?', '；', ';', '、', '，', ',', ' ']) {
-      const at = windowText.lastIndexOf(mark, limit);
-      if (at >= minCut) cut = Math.max(cut, at + 1);
-    }
-    if (cut < minCut) cut = limit;
-
-    out.push(value.slice(offset, offset + cut));
-    offset += cut;
-  }
-  return out;
-}
-
 function blockText(block) {
   if (!block) return '';
   if (block.type === 'heading') return `◆ ${block.text}\n\n`;
@@ -99,46 +54,78 @@ function blockText(block) {
   return `${block.text}\n\n`;
 }
 
-function paginate(blocks, s) {
-  const base = s.writing === 'vertical' ? 610 : 860;
-  const target = Math.max(260, Math.min(1050,
-    Math.round(base * Math.pow(19 / Number(s.fontSize || 19), 1.45) * (1.85 / Number(s.lineHeight || 1.85)))
-  ));
+function articleText(blocks) {
+  const text = (blocks || []).map(blockText).join('');
+  return text || '本文を表示できませんでした。';
+}
 
-  const units = [];
-  for (const block of blocks || []) {
-    const text = blockText(block);
-    for (const sentence of sentenceUnits(text)) {
-      units.push(...splitLongUnit(sentence, Math.max(180, target - 70)));
-    }
+function waitLayoutFrames() {
+  return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+}
+
+function renderReaderText(node, text, vertical) {
+  appendReadableVerticalText(node, text, vertical);
+}
+
+function measurementFits(node) {
+  const tolerance = 1.5;
+  return node.scrollHeight <= node.clientHeight + tolerance &&
+    node.scrollWidth <= node.clientWidth + tolerance;
+}
+
+function chooseNaturalBreak(chars, start, maximumEnd) {
+  const span = maximumEnd - start;
+  if (span < 20) return maximumEnd;
+
+  // Natural punctuation is preferred only near the measured edge. We never
+  // delete the skipped characters: the next page starts at the exact cut index.
+  const minEnd = start + Math.floor(span * .74);
+  for (let i = maximumEnd; i > minEnd; i -= 1) {
+    const ch = chars[i - 1];
+    if (ch === '\n' || /[。！？!?；;]/.test(ch)) return i;
   }
+  for (let i = maximumEnd; i > minEnd; i -= 1) {
+    const ch = chars[i - 1];
+    if (/[、，,・）】」』〉》\s]/.test(ch)) return i;
+  }
+  return maximumEnd;
+}
+
+function paginateMeasured(text, measureNode, vertical) {
+  const chars = Array.from(String(text || ''));
+  if (!chars.length) return ['本文を表示できませんでした。'];
 
   const pages = [];
-  let page = '';
+  let start = 0;
 
-  for (const unit of units) {
-    // 文が入るなら同じページに載せる。入らない時は文の手前で改ページする。
-    if (page && page.length + unit.length > target) {
-      pages.push(page);
-      page = '';
-    }
+  while (start < chars.length) {
+    let low = start + 1;
+    let high = chars.length;
+    let best = start;
 
-    // 1 unit 自体がtargetより大きいケースも文字を落とさず処理。
-    if (unit.length > target) {
-      const pieces = splitLongUnit(unit, target);
-      for (const piece of pieces) {
-        if (page && page.length + piece.length > target) {
-          pages.push(page);
-          page = '';
-        }
-        page += piece;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      renderReaderText(measureNode, chars.slice(start, middle).join(''), vertical);
+      if (measurementFits(measureNode)) {
+        best = middle;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
       }
-    } else {
-      page += unit;
     }
+
+    // Extremely large fonts can theoretically make even one glyph overflow.
+    // Advancing by one character avoids an infinite loop while preserving text.
+    if (best <= start) best = Math.min(chars.length, start + 1);
+
+    let end = best < chars.length ? chooseNaturalBreak(chars, start, best) : best;
+    if (end <= start) end = best;
+
+    pages.push(chars.slice(start, end).join(''));
+    start = end;
   }
 
-  if (page) pages.push(page);
+  measureNode.replaceChildren();
   return pages.length ? pages : ['本文を表示できませんでした。'];
 }
 
@@ -191,26 +178,31 @@ function showReader(root, articleMeta, article, backToList) {
   articleGeneration += 1;
   const generation = articleGeneration;
   document.documentElement.classList.add('wiki-reading');
+
   let s = settings();
-  let pages = paginate(article.blocks, s);
+  let pages = ['本文を画面に合わせています…'];
   let pageIndex = 0;
   let animating = false;
   let hideTimer = null;
+  let resizeTimer = null;
+  let paginationSerial = 0;
+  let disposed = false;
 
   const shell = el('section', { class: `wiki-reader wiki-theme-${s.theme}` });
   const controls = el('div', { class: 'wiki-reader-controls' });
-  const close = el('button', { class: 'wiki-reader-control', type: 'button', text: '✕', 'aria-label': '記事一覧へ戻る', onclick: backToList });
-  const listButton = el('button', { class: 'wiki-reader-control wiki-list-button', type: 'button', text: '10選', onclick: backToList });
+  const close = el('button', { class: 'wiki-reader-control', type: 'button', text: '✕', 'aria-label': '記事一覧へ戻る' });
+  const listButton = el('button', { class: 'wiki-reader-control wiki-list-button', type: 'button', text: '10選' });
   const title = el('div', { class: 'wiki-reader-title', text: articleMeta.title });
   const aa = el('button', { class: 'wiki-reader-control', type: 'button', text: 'Aa', onclick: () => settingsSheet({ ...s }, next => applySettings(next)) });
   controls.append(close, listButton, title, aa);
 
   const stage = el('div', { class: 'wiki-reader-stage' });
   const page = el('article', { class: 'wiki-page' });
+  const measurePage = el('article', { class: 'wiki-page wiki-page-measure', 'aria-hidden': 'true' });
   const edgeLeft = el('button', { class: 'wiki-edge wiki-edge-left', type: 'button', 'aria-label': '次のページ' });
   const edgeRight = el('button', { class: 'wiki-edge wiki-edge-right', type: 'button', 'aria-label': '前のページ' });
   const centerTap = el('button', { class: 'wiki-center-tap', type: 'button', 'aria-label': '操作ボタンを表示' });
-  stage.append(page, edgeLeft, edgeRight, centerTap);
+  stage.append(page, measurePage, edgeLeft, edgeRight, centerTap);
 
   const progress = el('div', { class: 'wiki-reader-progress' });
   const progressFill = el('div', { class: 'wiki-reader-progress-fill' });
@@ -227,25 +219,54 @@ function showReader(root, articleMeta, article, backToList) {
     hideTimer = setTimeout(() => controls.classList.add('hidden'), 2600);
   };
 
+  const configurePage = (node, vertical, entryClass = '') => {
+    node.className = `wiki-page ${vertical ? 'vertical' : 'horizontal'}${node === measurePage ? ' wiki-page-measure' : ''}${entryClass ? ` ${entryClass}` : ''}`;
+    node.style.setProperty('--wiki-font-size', `${s.fontSize}px`);
+    node.style.setProperty('--wiki-line-height', String(s.lineHeight));
+  };
+
   const paint = (entryClass = '') => {
-    if (generation !== articleGeneration) return;
+    if (disposed || generation !== articleGeneration) return;
     shell.className = `wiki-reader wiki-theme-${s.theme}`;
     const vertical = s.writing === 'vertical';
-    page.className = `wiki-page ${vertical ? 'vertical' : 'horizontal'} ${entryClass}`.trim();
-    page.style.setProperty('--wiki-font-size', `${s.fontSize}px`);
-    page.style.setProperty('--wiki-line-height', String(s.lineHeight));
-    appendReadableVerticalText(page, pages[pageIndex] || '', vertical);
-    progressFill.style.width = `${((pageIndex + 1) / pages.length) * 100}%`;
-    progressText.textContent = `${pageIndex + 1} / ${pages.length}`;
+    configurePage(page, vertical, entryClass);
+    renderReaderText(page, pages[pageIndex] || '', vertical);
+    const count = Math.max(1, pages.length);
+    progressFill.style.width = `${((pageIndex + 1) / count) * 100}%`;
+    progressText.textContent = `${pageIndex + 1} / ${count}`;
+  };
+
+  const repaginate = async ({ ratio = null } = {}) => {
+    if (disposed || generation !== articleGeneration) return;
+    const serial = ++paginationSerial;
+    const vertical = s.writing === 'vertical';
+    const keepRatio = ratio == null
+      ? (pages.length > 1 ? pageIndex / (pages.length - 1) : 0)
+      : ratio;
+
+    shell.className = `wiki-reader wiki-theme-${s.theme}`;
+    configurePage(measurePage, vertical);
+    await waitLayoutFrames();
+
+    // The measurement page has exactly the same bounds, font size, line height,
+    // writing mode and number styling as the visible page.
+    const nextPages = paginateMeasured(articleText(article.blocks), measurePage, vertical);
+    if (disposed || serial !== paginationSerial || generation !== articleGeneration) return;
+
+    pages = nextPages;
+    pageIndex = Math.max(0, Math.min(
+      pages.length - 1,
+      Math.round(keepRatio * Math.max(0, pages.length - 1))
+    ));
+    paint();
   };
 
   const applySettings = next => {
     const ratio = pages.length > 1 ? pageIndex / (pages.length - 1) : 0;
     s = { ...s, ...next };
     saveJson(SETTINGS_KEY, s);
-    pages = paginate(article.blocks, s);
-    pageIndex = Math.max(0, Math.min(pages.length - 1, Math.round(ratio * Math.max(0, pages.length - 1))));
     paint();
+    repaginate({ ratio }).catch(() => {});
     scheduleHide();
   };
 
@@ -257,6 +278,7 @@ function showReader(root, articleMeta, article, backToList) {
     animating = true;
     page.classList.add(delta > 0 ? 'wiki-page-leave-next' : 'wiki-page-leave-prev');
     setTimeout(() => {
+      if (disposed) return;
       pageIndex = next;
       paint(delta > 0 ? 'wiki-page-enter-next' : 'wiki-page-enter-prev');
       setTimeout(() => {
@@ -273,6 +295,34 @@ function showReader(root, articleMeta, article, backToList) {
   edgeRight.onclick = () => go(horizontalNextFlow() ? 1 : -1);
   centerTap.onclick = () => controls.classList.contains('hidden') ? scheduleHide() : controls.classList.add('hidden');
 
+  const scheduleRepaginate = () => {
+    if (disposed) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => repaginate().catch(() => {}), 140);
+  };
+
+  const cleanupReader = () => {
+    if (disposed) return;
+    disposed = true;
+    clearTimeout(hideTimer);
+    clearTimeout(resizeTimer);
+    paginationSerial += 1;
+    window.removeEventListener('resize', scheduleRepaginate);
+    window.visualViewport?.removeEventListener('resize', scheduleRepaginate);
+    window.removeEventListener('pdv2:before-navigate', cleanupReader);
+  };
+
+  const leaveReader = () => {
+    cleanupReader();
+    backToList();
+  };
+
+  close.onclick = leaveReader;
+  listButton.onclick = leaveReader;
+  window.addEventListener('resize', scheduleRepaginate, { passive: true });
+  window.visualViewport?.addEventListener('resize', scheduleRepaginate, { passive: true });
+  window.addEventListener('pdv2:before-navigate', cleanupReader);
+
   let sx = 0, sy = 0;
   let edgeBackCandidate = false;
 
@@ -280,7 +330,6 @@ function showReader(root, articleMeta, article, backToList) {
     if (event.touches?.length !== 1) return;
     sx = event.touches[0].clientX;
     sy = event.touches[0].clientY;
-    // iPhoneの「画面左端から戻る」に近い判定。通常のページめくりと競合させない。
     edgeBackCandidate = sx <= Math.max(24, Number(window.visualViewport?.offsetLeft || 0) + 24);
   }, { passive: true });
 
@@ -293,7 +342,7 @@ function showReader(root, articleMeta, article, backToList) {
 
     if (edgeBackCandidate && dx >= 72 && horizontalGesture) {
       edgeBackCandidate = false;
-      backToList();
+      leaveReader();
       return;
     }
     edgeBackCandidate = false;
@@ -307,6 +356,10 @@ function showReader(root, articleMeta, article, backToList) {
 
   paint();
   scheduleHide();
+  repaginate({ ratio: 0 }).catch(error => {
+    console.error('[wikipedia] pagination failed', error);
+    if (!disposed) showToast('本文レイアウトを調整できませんでした');
+  });
 }
 
 export async function renderWikipedia(root, { navigate, refresh = false, initialFilter = 'today' } = {}) {
