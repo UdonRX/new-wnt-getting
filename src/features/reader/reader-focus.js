@@ -193,13 +193,12 @@ function renderSummaryBlock(node, summary) {
   const lines = summaryLines(summary);
   lines.forEach(line => {
     const row = el('div', { class: 'reader-story-summary-row' });
-    const bullet = el('span', { class: 'reader-story-summary-bullet', text: '•' });
     const copy = el('div', { class: 'reader-story-summary-copy' });
     const label = el('span', { class: 'reader-story-summary-label', text: line.label || '' });
     const text = el('span', { class: 'reader-story-summary-text' });
     setRichText(text, line.text || '—');
     copy.append(label, text);
-    row.append(bullet, copy);
+    row.append(copy);
     node.append(row);
   });
 }
@@ -392,7 +391,7 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
     href: item?.link || '#',
     target: '_blank',
     rel: 'noopener noreferrer',
-    html: `<span>元記事を読む</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"></path><path d="M8 7h9v9"></path></svg>`
+    html: `<span>元記事を読む&nbsp;↗</span>`
   });
   const actions = el('footer', { class: 'reader-story-actions' }, [original]);
 
