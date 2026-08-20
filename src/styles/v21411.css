@@ -1,0 +1,135 @@
+/* Personal Dashboard v2.14.11
+   Twitter/X video resolver: no-referrer -> Vercel proxy -> official X embed -> X app. */
+
+.tweet-video-shell.tweet-video-resolver {
+  min-height: 190px;
+  background: rgba(7, 9, 12, .96);
+}
+
+.tweet-video-stage[hidden],
+.tweet-video-status[hidden],
+.tweet-official-embed[hidden] {
+  display: none !important;
+}
+
+.tweet-video-stage {
+  position: relative;
+  width: 100%;
+}
+
+.tweet-video-status {
+  position: relative;
+  display: grid;
+  min-height: 190px;
+  overflow: hidden;
+  place-items: end stretch;
+  background:
+    radial-gradient(circle at 22% 10%, rgba(49,167,255,.15), transparent 38%),
+    rgba(10,12,16,.96);
+}
+
+.tweet-video-status-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .34;
+  filter: saturate(.82) brightness(.66);
+}
+
+.tweet-video-status::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(7,8,11,.95), rgba(7,8,11,.14) 72%);
+  pointer-events: none;
+}
+
+.tweet-video-status-content {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 6px;
+  padding: 18px 16px 16px;
+}
+
+.tweet-video-status-title {
+  color: var(--text, #fff);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.tweet-video-status-detail {
+  color: var(--text-sub, rgba(255,255,255,.68));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tweet-video-status-progress {
+  width: 44px;
+  height: 3px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,.13);
+  margin-top: 3px;
+}
+
+.tweet-video-status-progress::before {
+  content: '';
+  display: block;
+  width: 45%;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  animation: tweet-video-resolve 1s ease-in-out infinite alternate;
+}
+
+@keyframes tweet-video-resolve {
+  from { transform: translateX(0); opacity: .45; }
+  to { transform: translateX(120%); opacity: 1; }
+}
+
+.tweet-official-embed {
+  padding: 8px;
+  background: #000;
+}
+
+.tweet-official-embed > * {
+  margin-inline: auto !important;
+  max-width: 100% !important;
+}
+
+.tweet-video-external-final .tweet-video-fallback-body strong {
+  font-size: 15px;
+}
+
+.tweet-video-external-final .tweet-video-external-button.primary {
+  min-height: 42px;
+  padding-inline: 15px;
+}
+
+.tweet-video-method-badge {
+  position: absolute;
+  z-index: 2;
+  top: 9px;
+  right: 9px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(5,7,10,.66);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: rgba(255,255,255,.74);
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+@media (max-width: 430px) {
+  .tweet-video-shell.tweet-video-resolver,
+  .tweet-video-status {
+    min-height: 170px;
+  }
+}
