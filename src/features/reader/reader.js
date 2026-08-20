@@ -17,6 +17,7 @@ let modeSwipeDetach = null;
 let recommendationIndex = 0;
 let articleIndex = 0;
 let openedArticle = null;
+let activeTopic = '';
 let readerSessionStarted = false;
 
 window.addEventListener('pdv2:before-navigate', event => {
@@ -24,6 +25,7 @@ window.addEventListener('pdv2:before-navigate', event => {
   if (target !== 'reader' || state.screen !== 'reader') {
     readerSessionStarted = false;
     openedArticle = null;
+    activeTopic = '';
   }
 });
 
@@ -158,6 +160,7 @@ function manageFeeds(mode, rerender) {
       setSelectedFeed(mode, '');
       view = 'list';
       openedArticle = null;
+      activeTopic = '';
       articleIndex = 0;
       rerender(true);
     }
@@ -233,7 +236,198 @@ function itemDateLabel(item) {
   return shortDate(item.pubDate);
 }
 
+const TOPIC_GROUPS = [
+  ['AI', /\bAI\b|人工知能|生成AI|ChatGPT|OpenAI|Gemini|LLM/i],
+  ['半導体', /半導体|チップ|SiC|GaN|TSMC|NVIDIA|Intel|AMD/i],
+  ['政治', /政治|国会|政府|首相|内閣|政党|法案|選挙/i],
+  ['経済', /経済|景気|GDP|物価|インフレ|金利|日銀|為替|円相場|株価|市場/i],
+  ['企業', /企業|決算|買収|提携|新製品|事業|工場|投資|経営/i],
+  ['テクノロジー', /テクノロジ|技術|ソフトウェア|アプリ|スマホ|ロボット|量子/i],
+  ['自動車', /自動車|EV|電気自動車|トヨタ|ホンダ|日産|Tesla|テスラ/i],
+  ['災害・気象', /地震|津波|台風|豪雨|大雨|災害|気象|猛暑|大雪/i],
+  ['海外', /米国|アメリカ|中国|台湾|欧州|EU|韓国|ロシア|ウクライナ|中東/i],
+  ['社会', /事件|事故|逮捕|裁判|警察|社会|教育|医療|人口/i],
+  ['科学', /研究|科学|宇宙|実験|発見|論文|生物|物理|化学/i],
+  ['エネルギー', /エネルギー|電力|原発|太陽光|再生可能|蓄電池|水素/i]
+];
+
+const TOPIC_STOP_WORDS = new Set([
+  'ニュース','発表','今回','今後','関係','対応','開始','最新','日本','国内','海外','情報','記事','明らか','について',
+  'Reuters','BBC','Google','ニュース報道','更新','新た','可能性','問題','政府','企業'
+].map(v => v.toLowerCase()));
+
+function readerPlainText(value = '') {
+  const node = document.createElement('div');
+  node.innerHTML = String(value || '');
+  return (node.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function topicText(item) {
+  return `${item?.titleJa || ''} ${item?.title || ''} ${item?.description || ''}`;
+}
+
+function itemMatchesTopic(item, topic) {
+  if (!topic) return true;
+  const group = TOPIC_GROUPS.find(([label]) => label === topic);
+  if (group) return group[1].test(topicText(item));
+  return topicText(item).toLocaleLowerCase('ja').includes(String(topic).toLocaleLowerCase('ja'));
+}
+
+function extractTopics(items) {
+  const rows = Array.isArray(items) ? items : [];
+  const scored = [];
+
+  TOPIC_GROUPS.forEach(([label, pattern]) => {
+    const count = rows.reduce((sum, item) => sum + (pattern.test(topicText(item)) ? 1 : 0), 0);
+    if (count) scored.push({ label, count, priority: 2 });
+  });
+
+  const tokens = new Map();
+  rows.slice(0, 80).forEach(item => {
+    const title = readerPlainText(item.titleJa || item.title || '');
+    const matches = title.match(/[\p{Script=Katakana}ー]{3,}|[一-龠々]{2,6}|[A-Za-z][A-Za-z0-9.+-]{2,}/gu) || [];
+    [...new Set(matches)].forEach(raw => {
+      const label = raw.replace(/^[・:：\-]+|[・:：\-]+$/g, '');
+      const key = label.toLowerCase();
+      if (label.length < 2 || label.length > 18 || TOPIC_STOP_WORDS.has(key) || /^\d+$/.test(label)) return;
+      tokens.set(label, (tokens.get(label) || 0) + 1);
+    });
+  });
+
+  [...tokens.entries()]
+    .filter(([, count]) => count >= 2)
+    .forEach(([label, count]) => {
+      if (!scored.some(row => row.label.toLowerCase() === label.toLowerCase())) scored.push({ label, count, priority: 1 });
+    });
+
+  return scored
+    .sort((a, b) => (b.count * b.priority) - (a.count * a.priority) || b.count - a.count)
+    .slice(0, 14)
+    .map(row => row.label);
+}
+
+function newsImage(item, className = '') {
+  const media = el('div', { class: `reader-bento-media ${className}`.trim() });
+  if (item?.image) {
+    const image = el('img', {
+      class: 'reader-bento-image',
+      src: item.image,
+      alt: '',
+      loading: 'lazy',
+      decoding: 'async'
+    });
+    image.addEventListener('error', () => media.classList.add('image-failed'), { once: true });
+    media.append(image);
+  }
+  media.append(el('span', {
+    class: 'reader-bento-placeholder',
+    text: String(item?.source || item?.feedName || 'NEWS').trim().slice(0, 12) || 'NEWS'
+  }));
+  return media;
+}
+
+function newsBentoCard(item, { hero = false, unread = false, onOpen } = {}) {
+  const button = el('button', {
+    class: `reader-bento-card${hero ? ' reader-bento-hero' : ''}${unread ? ' is-unread' : ''}`,
+    type: 'button',
+    onclick: () => onOpen?.(item)
+  });
+  button.append(newsImage(item, hero ? 'reader-bento-media-hero' : ''));
+
+  const copy = el('div', { class: 'reader-bento-copy' });
+  const meta = el('div', { class: 'reader-bento-meta' });
+  if (unread) meta.append(el('span', { class: 'reader-bento-new', text: 'NEW' }));
+  meta.append(
+    el('span', { text: item.source || item.feedName || '' }),
+    el('span', { text: itemDateLabel(item) })
+  );
+  copy.append(meta, el(hero ? 'h2' : 'h3', {
+    class: 'reader-bento-title',
+    text: item.titleJa || item.title
+  }));
+  button.append(copy);
+  return button;
+}
+
+function renderNewsBento(host, mode, track, family, items, onOpen) {
+  const read = getRead(mode, track);
+  const lastSeen = Number(localStorage.getItem(lastSeenKey(mode, track, family)) || 0);
+  const newCount = items.filter(item => itemPubMs(item) > lastSeen).length;
+  const topics = extractTopics(items);
+
+  const header = el('div', { class: 'reader-bento-header' }, [
+    el('div', {}, [
+      el('strong', { text: 'ニュースを眺める' }),
+      el('p', { text: newCount ? `前回から ${newCount}件の新着` : `${items.length}件の記事` })
+    ])
+  ]);
+
+  const search = el('input', {
+    class: 'reader-search reader-bento-search',
+    placeholder: 'キーワード・媒体を検索'
+  });
+  const topicCloud = el('div', { class: 'reader-topic-cloud', 'aria-label': '注目トピック' });
+  const grid = el('div', { class: 'reader-bento-grid' });
+
+  const open = item => {
+    read.add(item.id);
+    saveRead(mode, track, read);
+    activeTopic = '';
+    onOpen(item);
+  };
+
+  topics.forEach(topic => {
+    const count = items.filter(item => itemMatchesTopic(item, topic)).length;
+    topicCloud.append(el('button', {
+      class: 'reader-topic-bubble',
+      type: 'button',
+      text: `${topic} ${count}`,
+      onclick: () => {
+        const filtered = items.filter(item => itemMatchesTopic(item, topic));
+        if (!filtered.length) return;
+        activeTopic = topic;
+        const first = filtered[0];
+        read.add(first.id);
+        saveRead(mode, track, read);
+        onOpen(first);
+      }
+    }));
+  });
+
+  const draw = () => {
+    grid.replaceChildren();
+    const q = search.value.trim().toLocaleLowerCase('ja');
+    const visible = items.filter(item => {
+      if (!q) return true;
+      return `${item.title} ${item.titleJa || ''} ${item.source || ''} ${item.description || ''}`
+        .toLocaleLowerCase('ja').includes(q);
+    });
+
+    if (!visible.length) {
+      grid.append(el('div', { class: 'empty reader-bento-empty', text: '検索結果がありません' }));
+      return;
+    }
+
+    const hero = visible[0];
+    grid.append(newsBentoCard(hero, { hero: true, unread: !read.has(hero.id), onOpen: open }));
+    visible.slice(1).forEach(item => grid.append(newsBentoCard(item, {
+      unread: !read.has(item.id),
+      onOpen: open
+    })));
+  };
+
+  search.addEventListener('input', draw);
+  draw();
+  host.replaceChildren(header, search, topics.length ? topicCloud : el('div'), grid);
+  localStorage.setItem(lastSeenKey(mode, track, family), String(Date.now()));
+}
+
 function renderList(host, mode, track, family, items, onOpen) {
+  if (mode === 'news') {
+    renderNewsBento(host, mode, track, family, items, onOpen);
+    return;
+  }
+
   const read = getRead(mode, track);
   const lastSeen = Number(localStorage.getItem(lastSeenKey(mode, track, family)) || 0);
   const newCount = items.filter(item => itemPubMs(item) > lastSeen).length;
@@ -264,11 +458,14 @@ function renderList(host, mode, track, family, items, onOpen) {
           onOpen(item);
         }
       });
-      button.innerHTML = `
-        <div class="list-item-title">${unread ? '<span class="unread-dot"></span>' : ''}${item.titleJa || item.title}</div>
-        ${item.titleJa ? `<div class="focus-original">${item.title}</div>` : ''}
-        <div class="list-meta"><span>${item.source || ''}</span><span>${itemDateLabel(item)}</span></div>
-      `;
+      const title = el('div', { class: 'list-item-title', text: item.titleJa || item.title });
+      if (unread) title.prepend(el('span', { class: 'unread-dot' }));
+      button.append(title);
+      if (item.titleJa) button.append(el('div', { class: 'focus-original', text: item.title }));
+      button.append(el('div', { class: 'list-meta' }, [
+        el('span', { text: item.source || '' }),
+        el('span', { text: itemDateLabel(item) })
+      ]));
       list.append(button);
     });
 
@@ -496,6 +693,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
     update('lastReaderMode', value);
     view = 'list';
     openedArticle = null;
+    activeTopic = '';
     articleIndex = 0;
     renderReader(root, { navigate });
   };
@@ -525,6 +723,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
       update('paperTrack', value);
       view = 'list';
       openedArticle = null;
+      activeTopic = '';
       articleIndex = 0;
       renderReader(root, { navigate });
     }));
@@ -538,6 +737,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
     const chips = buildFeedChips(mode, () => {
       view = 'list';
       openedArticle = null;
+      activeTopic = '';
       articleIndex = 0;
       renderReader(root, { navigate });
     });
@@ -547,6 +747,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
       update('creativePaperFamily', value);
       view = 'list';
       openedArticle = null;
+      activeTopic = '';
       articleIndex = 0;
       renderReader(root, { navigate });
     }));
@@ -584,6 +785,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
     if (nextMode === 'papers' && family) update('creativePaperFamily', family);
     view = 'list';
     openedArticle = null;
+    activeTopic = '';
     articleIndex = 0;
     renderReader(root, { navigate });
   };
@@ -603,6 +805,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
       setSelectedFeed(mode, names[nextIndex]);
       view = 'list';
       openedArticle = null;
+      activeTopic = '';
       articleIndex = 0;
       renderReader(root, { navigate });
       return;
@@ -636,6 +839,7 @@ export async function renderReader(root, { navigate, refresh = false }) {
       update('creativePaperFamily', families[next]);
       view = 'list';
       openedArticle = null;
+      activeTopic = '';
       articleIndex = 0;
       renderReader(root, { navigate });
       return;
@@ -704,9 +908,12 @@ export async function renderReader(root, { navigate, refresh = false }) {
     }
 
     const family = mode === 'papers' && track === 'creative' ? creativeFamily() : 'all';
-    const visibleItems = mode === 'papers' && track === 'creative'
+    const baseVisibleItems = mode === 'papers' && track === 'creative'
       ? filterCreativeItems(allItems, family)
       : allItems;
+    const visibleItems = mode === 'news' && view === 'article' && activeTopic
+      ? baseVisibleItems.filter(item => itemMatchesTopic(item, activeTopic))
+      : baseVisibleItems;
 
     if (!visibleItems.length) {
       host.innerHTML = `<div class="empty">${track === 'creative' && family === 'general'
@@ -754,17 +961,19 @@ export async function renderReader(root, { navigate, refresh = false }) {
       focusHandle = mountFocus(host, {
         items: articleItems,
         initialIndex: selectedIndex,
-        label: '記事',
+        label: activeTopic ? `#${activeTopic}` : '記事',
         progressHost: null,
         summaryMode: mode,
         onStart: () => {
           openedArticle = null;
+          activeTopic = '';
           view = 'list';
           renderContent();
           scrollContentToTop(host);
         },
         onList: () => {
           openedArticle = null;
+          activeTopic = '';
           view = 'list';
           renderContent();
           scrollContentToTop(host);
