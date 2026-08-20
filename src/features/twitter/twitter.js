@@ -239,22 +239,65 @@ function isTwitterUrl(url = '') {
   }
 }
 
+function normalizeTweetImageUrl(value = '') {
+  try {
+    const url = new URL(String(value || '').trim(), location.href);
+    if (!/^https?:$/.test(url.protocol)) return '';
+
+    // pbs.twimg.com はRSS側で small/thumb が返ることがあるため、表示時だけ高解像度へ。
+    if (url.hostname === 'pbs.twimg.com' && url.pathname.includes('/media/')) {
+      if (url.searchParams.has('name')) url.searchParams.set('name', 'large');
+    }
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
 function cleanDescription(html) {
   const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
   doc.querySelectorAll('script,style,iframe,video').forEach(node => node.remove());
+
   const images = [...doc.querySelectorAll('img')]
-    .map(image => image.src)
-    .filter(src => /twimg\.com|pbs\.twimg/.test(src))
-    .slice(0, 4);
+    .flatMap(image => [
+      image.getAttribute('src'),
+      image.getAttribute('data-src'),
+      image.getAttribute('data-original'),
+      image.getAttribute('data-lazy-src')
+    ])
+    .map(normalizeTweetImageUrl)
+    .filter(Boolean)
+    .filter(src => /twimg\.com|pbs\.twimg|twitter\.com/i.test(src));
+
   const links = [...doc.querySelectorAll('a[href]')]
     .map(anchor => anchor.href)
     .filter(href => /^https?:/i.test(href) && !isTwitterUrl(href));
+
   doc.querySelectorAll('img').forEach(node => node.remove());
   return {
     text: (doc.body.textContent || '').replace(/\s+/g, ' ').trim(),
-    images,
+    images: [...new Set(images)].slice(0, 4),
     links: [...new Set(links)]
   };
+}
+
+function tweetImages(item, clean) {
+  const candidates = [
+    ...(Array.isArray(item?.images) ? item.images : []),
+    item?.image,
+    ...(Array.isArray(clean?.images) ? clean.images : [])
+  ];
+
+  const seen = new Set();
+  const images = [];
+  for (const candidate of candidates) {
+    const url = normalizeTweetImageUrl(candidate);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    images.push(url);
+    if (images.length >= 4) break;
+  }
+  return images;
 }
 
 function isRetweet(item, clean) {
@@ -292,7 +335,9 @@ function tweetAuthor(item, clean) {
 }
 
 function tweetCard(item) {
-  const clean = cleanDescription(item.description);
+  // v2.14.8: 本文あり投稿でもRSSの元HTML/Media要素から画像を必ず統合する。
+  const clean = cleanDescription(item.rawDescription || item.description);
+  const images = tweetImages(item, clean);
   if (isRetweet(item, clean)) return null;
 
   const card = el('article', { class: 'tweet-card' });
@@ -304,22 +349,22 @@ function tweetCard(item) {
 
   const rawTitle = String(item?.title || '').trim();
   const titleIsPlaceholder = /^(?:無題|untitled|no\s*title|\(no\s*title\))$/i.test(rawTitle);
-  const displayText = clean.text || (!clean.images.length && !titleIsPlaceholder ? rawTitle : '');
+  const displayText = clean.text || (!images.length && !titleIsPlaceholder ? rawTitle : '');
 
   if (displayText) {
     const text = el('div', { class: 'tweet-text' });
     appendLinkified(text, displayText);
     card.append(text);
-  } else if (clean.images.length) {
+  } else if (images.length) {
     card.classList.add('tweet-card-photo-only');
   }
 
-  if (clean.images.length) {
-    const grid = el('div', { class: `tweet-images count-${Math.min(4, clean.images.length)}` });
-    clean.images.forEach((src, index) => {
+  if (images.length) {
+    const grid = el('div', { class: `tweet-images count-${Math.min(4, images.length)}` });
+    images.forEach((src, index) => {
       const button = el('button', { class: 'tweet-image-button', type: 'button', 'aria-label': '画像を拡大' });
       button.append(el('img', { src, alt: '投稿画像', loading: 'lazy', decoding: 'async' }));
-      button.onclick = () => openImageViewer(clean.images, index);
+      button.onclick = () => openImageViewer(images, index);
       grid.append(button);
     });
     card.append(grid);
