@@ -7,6 +7,7 @@ let activeHost = null;
 let activePanel = null;
 let shortsOverlay = null;
 let endedTimer = null;
+let endedMonitor = null;
 let generation = 0;
 
 const autoNext = () => localStorage.getItem('pdv2:youtubeAutoNext') !== '0';
@@ -44,20 +45,39 @@ function ensureApi() {
   return apiPromise;
 }
 
+function orientationButtonHtml(landscape) {
+  const label = landscape ? '縦表示' : '横表示';
+  const icon = landscape
+    ? '<rect x="8.3" y="3.5" width="7.4" height="17" rx="2"/><path d="M5.5 8.2 3.2 10.5l2.3 2.3M18.5 15.8l2.3-2.3-2.3-2.3"/>'
+    : '<rect x="3.5" y="7.2" width="17" height="9.6" rx="2"/><path d="m9 4.5 2.2-2.2 2.2 2.2M15 19.5l-2.2 2.2-2.2-2.2"/>';
+  return `<svg class="youtube-orientation-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span>`;
+}
+
 function setLandscape(panel, on) {
   if (!panel) return;
-  panel.classList.toggle('twitch-css-landscape', Boolean(on));
-  panel.classList.toggle('youtube-css-landscape', Boolean(on));
-  document.documentElement.classList.toggle('media-player-open', Boolean(on));
+  const enabled = Boolean(on);
+  panel.classList.toggle('twitch-css-landscape', enabled);
+  panel.classList.toggle('youtube-css-landscape', enabled);
+  document.documentElement.classList.toggle('media-player-open', enabled);
   const button = panel.querySelector('.youtube-orientation-btn');
-  if (button) button.textContent = on ? '↕ 縦画面' : '↔ 横画面';
+  if (button) {
+    button.innerHTML = orientationButtonHtml(enabled);
+    button.setAttribute('aria-label', enabled ? '縦表示に戻す' : '横表示にする');
+    button.title = enabled ? '縦表示に戻す' : '横表示にする';
+  }
+}
+
+function stopEndWatch() {
+  if (endedTimer) clearTimeout(endedTimer);
+  if (endedMonitor) clearInterval(endedMonitor);
+  endedTimer = null;
+  endedMonitor = null;
 }
 
 export function cleanupYouTubePlayer() {
   generation += 1;
   clearPlayingTitle();
-  if (endedTimer) clearTimeout(endedTimer);
-  endedTimer = null;
+  stopEndWatch();
   try { player?.pauseVideo?.(); } catch {}
   try { player?.destroy?.(); } catch {}
   player = null;
@@ -73,11 +93,9 @@ export function cleanupYouTubePlayer() {
 window.addEventListener('pdv2:before-navigate', cleanupYouTubePlayer);
 
 function toggleLandscape(panel) {
-  const on = !panel.classList.contains('twitch-css-landscape');
+  const on = !panel.classList.contains('youtube-css-landscape');
   setLandscape(panel, on);
-  showToast(on
-    ? '動画を90°回転しました。端末を横向きにして見られます。'
-    : '通常表示に戻しました');
+  showToast(on ? '横表示に切り替えました' : '縦表示に戻しました');
 }
 
 function clampIndex(index, queue) {
@@ -90,6 +108,7 @@ function mountShortsPlayer({ queue, index = 0 } = {}) {
 
   const myGeneration = generation;
   let current = clampIndex(index, queue);
+  let advancing = false;
 
   const overlayRoot = document.getElementById('overlay-root') || document.body;
   const overlay = el('section', {
@@ -116,7 +135,7 @@ function mountShortsPlayer({ queue, index = 0 } = {}) {
   top.append(close, meta, el('span', { class: 'youtube-shorts-top-spacer', 'aria-hidden': 'true' }));
 
   const stage = el('div', { class: 'youtube-shorts-stage' });
-  const holderId = `yt-v2141-shorts-${Date.now()}`;
+  const holderId = `yt-v2142-shorts-${Date.now()}`;
   stage.append(el('div', { id: holderId, class: 'youtube-shorts-embed' }));
 
   const bottom = el('footer', { class: 'youtube-shorts-bottom' });
@@ -153,6 +172,7 @@ function mountShortsPlayer({ queue, index = 0 } = {}) {
     }
 
     current = nextIndex;
+    advancing = false;
     updateUi();
     const item = queue[current];
     if (player?.loadVideoById) {
@@ -162,6 +182,16 @@ function mountShortsPlayer({ queue, index = 0 } = {}) {
       } catch {}
     }
     return true;
+  };
+
+  const advance = () => {
+    if (advancing || current >= queue.length - 1) return;
+    advancing = true;
+    if (endedTimer) clearTimeout(endedTimer);
+    endedTimer = setTimeout(() => {
+      endedTimer = null;
+      if (!loadIndex(current + 1)) advancing = false;
+    }, 120);
   };
 
   prev.onclick = () => loadIndex(current - 1);
@@ -184,15 +214,16 @@ function mountShortsPlayer({ queue, index = 0 } = {}) {
       events: {
         onReady: event => {
           try { event.target.playVideo(); } catch {}
+          endedMonitor = setInterval(() => {
+            if (myGeneration !== generation || !overlay.isConnected) return;
+            try {
+              if (player?.getPlayerState?.() === YT.PlayerState.ENDED) advance();
+            } catch {}
+          }, 650);
         },
         onStateChange: event => {
-          if (event.data !== YT.PlayerState.ENDED) return;
-          if (endedTimer) clearTimeout(endedTimer);
-          endedTimer = setTimeout(() => {
-            // Shorts are always continuous. This deliberately ignores the
-            // regular YouTube "continuous playback" preference.
-            loadIndex(current + 1);
-          }, 180);
+          if (event.data === YT.PlayerState.PLAYING) advancing = false;
+          if (event.data === YT.PlayerState.ENDED) advance();
         }
       }
     });
@@ -209,108 +240,140 @@ function mountInlinePlayer({ host, queue, index = 0 } = {}) {
   if (!host || !Array.isArray(queue) || !queue.length) return null;
 
   activeHost = host;
-  let current = clampIndex(index, queue);
   const myGeneration = generation;
+  let current = clampIndex(index, queue);
+  let advancing = false;
+  let ready = false;
 
-  const render = async () => {
-    if (myGeneration !== generation || !activeHost?.isConnected) return;
-    if (activePanel) setLandscape(activePanel, false);
-    clearPlayingTitle();
-    try { player?.destroy?.(); } catch {}
-    player = null;
+  const panel = el('section', { class: 'twitch-inline-player youtube-inline-player' });
+  activePanel = panel;
 
-    const item = queue[current];
-    const panel = el('section', { class: 'twitch-inline-player youtube-inline-player' });
-    activePanel = panel;
+  const head = el('div', { class: 'twitch-inline-head' });
+  const headText = el('div');
+  const kicker = el('div', { class: 'twitch-inline-kicker' });
+  const channel = el('strong');
+  headText.append(kicker, channel);
+  head.append(
+    headText,
+    el('button', {
+      class: 'icon-button twitch-close',
+      type: 'button',
+      'aria-label': 'プレイヤーを閉じる',
+      text: '✕',
+      onclick: cleanupYouTubePlayer
+    })
+  );
 
-    const head = el('div', { class: 'twitch-inline-head' });
-    head.append(
-      el('div', {}, [
-        el('div', { class: 'twitch-inline-kicker', text: item.kind === 'live' ? 'LIVE' : '動画' }),
-        el('strong', { text: item.channelName || 'YouTube' })
-      ]),
-      el('button', {
-        class: 'icon-button media-portrait-return-btn',
-        type: 'button',
-        'aria-label': '縦画面へ戻す',
-        text: '↕ 縦画面',
-        onclick: () => setLandscape(panel, false)
-      }),
-      el('button', {
-        class: 'icon-button twitch-close',
-        type: 'button',
-        'aria-label': 'プレイヤーを閉じる',
-        text: '✕',
-        onclick: cleanupYouTubePlayer
-      })
-    );
+  const stage = el('div', { class: 'twitch-inline-stage youtube-inline-stage' });
+  const holderId = `yt-v2142-player-${Date.now()}`;
+  stage.append(el('div', { id: holderId, class: 'youtube-inline-embed' }));
 
-    const stage = el('div', { class: 'twitch-inline-stage youtube-inline-stage' });
-    const holderId = `yt-v2141-player-${Date.now()}-${current}`;
-    stage.append(el('div', { id: holderId, class: 'youtube-inline-embed' }));
+  const info = el('div', { class: 'twitch-inline-info youtube-inline-info' });
+  const titleNode = el('div', { class: 'player-title' });
+  const controls = el('div', { class: 'twitch-inline-controls' });
 
-    const info = el('div', { class: 'twitch-inline-info youtube-inline-info' });
-    info.append(el('div', { class: 'player-title', text: item.title || 'YouTube' }));
-
-    const controls = el('div', { class: 'twitch-inline-controls' });
-    const prev = el('button', {
-      class: 'player-soft', type: 'button', text: '‹ 前へ', disabled: current <= 0,
-      onclick: () => { if (current > 0) { current -= 1; render(); } }
-    });
-    const next = el('button', {
-      class: 'player-soft', type: 'button', text: '次へ ›', disabled: current >= queue.length - 1,
-      onclick: () => { if (current < queue.length - 1) { current += 1; render(); } }
-    });
-    const landscape = el('button', {
-      class: 'player-soft youtube-orientation-btn', type: 'button', text: '↔ 横画面',
-      onclick: () => toggleLandscape(panel)
-    });
-    const external = el('a', {
-      class: 'player-soft', target: '_blank', rel: 'noopener noreferrer',
-      href: `https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId || '')}`,
-      text: 'YouTubeで開く ↗'
-    });
-    const auto = el('button', {
-      class: 'player-soft youtube-auto-next-btn', type: 'button',
-      text: `連続再生 ${autoNext() ? 'ON' : 'OFF'}`,
-      onclick: event => {
-        localStorage.setItem('pdv2:youtubeAutoNext', autoNext() ? '0' : '1');
-        event.currentTarget.textContent = `連続再生 ${autoNext() ? 'ON' : 'OFF'}`;
-      }
-    });
-
-    controls.append(prev, next, landscape, external, auto);
-    info.append(controls);
-    panel.append(head, stage, info);
-    activeHost.replaceChildren(panel);
-
-    watchPlayingTitle(stage, item.title || 'YouTube');
-    requestAnimationFrame(() => activeHost?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-
-    try {
-      const YT = await ensureApi();
-      if (myGeneration !== generation || !panel.isConnected) return;
-
-      player = new YT.Player(holderId, {
-        videoId: item.videoId,
-        playerVars: { autoplay: 1, playsinline: 1, rel: 0, cc_load_policy: 0 },
-        events: {
-          onReady: event => { try { event.target.playVideo(); } catch {} },
-          onStateChange: event => {
-            if (event.data === YT.PlayerState.ENDED && autoNext() && current < queue.length - 1) {
-              endedTimer = setTimeout(() => { current += 1; render(); }, 250);
-            }
-          }
-        }
-      });
-    } catch (error) {
-      if (panel.isConnected) {
-        info.append(el('div', { class: 'error-box', text: `YouTubeプレイヤーを読み込めませんでした: ${error.message}` }));
-      }
+  const prev = el('button', { class: 'player-soft', type: 'button', text: '‹ 前へ' });
+  const next = el('button', { class: 'player-soft', type: 'button', text: '次へ ›' });
+  const landscape = el('button', {
+    class: 'player-soft youtube-orientation-btn',
+    type: 'button',
+    html: orientationButtonHtml(false),
+    'aria-label': '横表示にする',
+    title: '横表示にする',
+    onclick: () => toggleLandscape(panel)
+  });
+  const external = el('a', {
+    class: 'player-soft',
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    text: 'YouTubeで開く ↗'
+  });
+  const auto = el('button', {
+    class: 'player-soft youtube-auto-next-btn',
+    type: 'button',
+    onclick: event => {
+      localStorage.setItem('pdv2:youtubeAutoNext', autoNext() ? '0' : '1');
+      event.currentTarget.textContent = `連続再生 ${autoNext() ? 'ON' : 'OFF'}`;
     }
+  });
+
+  controls.append(prev, next, landscape, external, auto);
+  info.append(titleNode, controls);
+  panel.append(head, stage, info);
+  activeHost.replaceChildren(panel);
+
+  const updateUi = () => {
+    const item = queue[current] || {};
+    kicker.textContent = item.kind === 'live' ? 'LIVE' : '動画';
+    channel.textContent = item.channelName || 'YouTube';
+    titleNode.textContent = item.title || 'YouTube';
+    external.href = `https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId || '')}`;
+    prev.disabled = current <= 0;
+    next.disabled = current >= queue.length - 1;
+    auto.textContent = `連続再生 ${autoNext() ? 'ON' : 'OFF'}`;
+    clearPlayingTitle();
+    watchPlayingTitle(stage, item.title || 'YouTube');
   };
 
-  render();
+  const loadIndex = (nextIndex, { autoplay = true } = {}) => {
+    if (nextIndex < 0 || nextIndex >= queue.length) return false;
+    current = nextIndex;
+    advancing = false;
+    updateUi();
+    const item = queue[current];
+    if (ready && player?.loadVideoById) {
+      try {
+        player.loadVideoById({ videoId: item.videoId, startSeconds: 0 });
+        if (autoplay) player.playVideo?.();
+      } catch {}
+    }
+    return true;
+  };
+
+  const advanceFromEnd = () => {
+    if (!autoNext() || advancing || current >= queue.length - 1) return;
+    advancing = true;
+    if (endedTimer) clearTimeout(endedTimer);
+    endedTimer = setTimeout(() => {
+      endedTimer = null;
+      if (!loadIndex(current + 1, { autoplay: true })) advancing = false;
+    }, 100);
+  };
+
+  prev.onclick = () => loadIndex(current - 1, { autoplay: true });
+  next.onclick = () => loadIndex(current + 1, { autoplay: true });
+  updateUi();
+  requestAnimationFrame(() => activeHost?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+
+  ensureApi().then(YT => {
+    if (myGeneration !== generation || !panel.isConnected) return;
+    const item = queue[current];
+    player = new YT.Player(holderId, {
+      videoId: item.videoId,
+      playerVars: { autoplay: 1, playsinline: 1, rel: 0, cc_load_policy: 0 },
+      events: {
+        onReady: event => {
+          ready = true;
+          try { event.target.playVideo(); } catch {}
+          endedMonitor = setInterval(() => {
+            if (myGeneration !== generation || !panel.isConnected || !autoNext()) return;
+            try {
+              if (player?.getPlayerState?.() === YT.PlayerState.ENDED) advanceFromEnd();
+            } catch {}
+          }, 650);
+        },
+        onStateChange: event => {
+          if (event.data === YT.PlayerState.PLAYING) advancing = false;
+          if (event.data === YT.PlayerState.ENDED) advanceFromEnd();
+        }
+      }
+    });
+  }).catch(error => {
+    if (panel.isConnected) {
+      info.append(el('div', { class: 'error-box', text: `YouTubeプレイヤーを読み込めませんでした: ${error.message}` }));
+    }
+  });
+
   return { close: cleanupYouTubePlayer };
 }
 
@@ -319,7 +382,6 @@ export function mountYouTubePlayer({ host, queue, index = 0, shorts = false } = 
   return mountInlinePlayer({ host, queue, index });
 }
 
-// Existing-code compatibility.
 export function openYouTubePlayer(items, startIndex = 0, { shorts = false, host } = {}) {
   if (shorts) return mountShortsPlayer({ queue: items, index: startIndex });
   if (!host) return null;
