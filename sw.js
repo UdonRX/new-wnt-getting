@@ -1,4 +1,4 @@
-const CACHE_NAME = 'personal-dashboard-v2-13';
+const CACHE_NAME = 'personal-dashboard-v2-14';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -8,13 +8,18 @@ const APP_SHELL = [
   '/src/styles/navigation.css',
   '/src/styles/screens.css',
   '/src/main.js',
+  '/src/shared/icons.js',
   '/shared/paper-creative-keywords.js',
   '/icons/icon-192.png',
   '/icons/icon-512.png'
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', event => {
@@ -32,7 +37,9 @@ self.addEventListener('fetch', event => {
 
   // API/外部通信は常にネットワーク。古いRSSやAI要約をService Workerに残さない。
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
-    event.respondWith(fetch(request).catch(() => new Response('', { status:503, statusText:'Service Unavailable' })));
+    event.respondWith(
+      fetch(request).catch(() => new Response('', { status: 503, statusText: 'Service Unavailable' }))
+    );
     return;
   }
 
@@ -46,6 +53,9 @@ self.addEventListener('fetch', event => {
         }
         return response;
       })
-      .catch(async () => (await caches.match(request)) || (request.mode === 'navigate' ? caches.match('/index.html') : Response.error()))
+      .catch(async () =>
+        (await caches.match(request)) ||
+        (request.mode === 'navigate' ? caches.match('/index.html') : Response.error())
+      )
   );
 });
