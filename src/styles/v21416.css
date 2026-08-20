@@ -1,0 +1,56 @@
+/* Personal Dashboard v2.14.16
+ * SNS / Reader の module import 待ちを空画面にしないための状態表示。
+ */
+
+.pd-feature-loading,
+.pd-feature-error {
+  min-height: min(52vh, 420px);
+}
+
+.pd-feature-loading {
+  display: grid;
+  place-items: center;
+  padding-top: 18px;
+}
+
+.pd-feature-loading-card {
+  width: min(88%, 420px);
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.pd-feature-loading-title {
+  font-size: 14px;
+  color: var(--text-muted, rgba(255,255,255,.68));
+  letter-spacing: .02em;
+}
+
+.pd-feature-loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid color-mix(in srgb, var(--feature-color) 24%, transparent);
+  border-top-color: var(--feature-color);
+  border-radius: 50%;
+  animation: pdv21416-spin .8s linear infinite;
+}
+
+.pd-feature-error-actions,
+.pd-startup-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+@keyframes pdv21416-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pd-feature-loading-spinner { animation: none; }
+}
