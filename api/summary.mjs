@@ -39,10 +39,10 @@ function splitSentences(text = '') {
     .slice(0, 24);
 }
 
-function trimSentence(value, max = 92) {
-  const text = clean(value, max + 24);
-  if (text.length <= max) return text;
-  return `${text.slice(0, Math.max(1, max - 1)).replace(/[、,;；:\s]+$/g, '')}…`;
+function fullSentence(value = '') {
+  // v2.14.2: 文字数で文章の途中を切って「…」を付けない。
+  // 要約に採用した1文は最後までそのまま表示する。
+  return clean(value, MAX_AI_INPUT);
 }
 
 function looksMostlyEnglish(value = '') {
@@ -64,23 +64,24 @@ function localSummary({ title, description, reason = 'local', forceJapanese = fa
       extractedLength: String(description || '').length,
       aiInputLength: 0,
       fastPath: 'japanese-safe-fallback',
-      fallbackReason: reason
+      fallbackReason: reason,
+      resolvedTitle: clean(title, 1000)
     };
   }
 
   const sentences = splitSentences(description);
-  const fallbackTitle = clean(title, 110);
-  const short = trimSentence(sentences[0] || fallbackTitle || '要約できる本文がありません。', 96);
+  const fallbackTitle = clean(title, 500);
+  const short = fullSentence(sentences[0] || fallbackTitle || '要約できる本文がありません。');
 
   const points = [];
   for (const sentence of sentences.slice(1)) {
-    const point = trimSentence(sentence, 74);
+    const point = fullSentence(sentence);
     if (!point || points.includes(point) || point === short) continue;
     points.push(point);
-    if (points.length >= 2) break;
+    if (points.length >= 4) break;
   }
 
-  if (!points.length && fallbackTitle && fallbackTitle !== short) points.push(trimSentence(fallbackTitle, 74));
+  if (!points.length && fallbackTitle && fallbackTitle !== short) points.push(fullSentence(fallbackTitle));
 
   return {
     short,
@@ -92,7 +93,8 @@ function localSummary({ title, description, reason = 'local', forceJapanese = fa
     extractedLength: String(description || '').length,
     aiInputLength: 0,
     fastPath: 'local-fast',
-    fallbackReason: reason
+    fallbackReason: reason,
+    resolvedTitle: clean(title, 1000)
   };
 }
 
@@ -153,11 +155,11 @@ function sampledArticleText(extracted) {
 const responseSchema = {
   type: 'object',
   properties: {
-    short: { type: 'string', description: '記事の核心を日本語で45〜85文字。1文中心。' },
+    short: { type: 'string', description: '記事の核心を日本語で自然な1〜2文にまとめる。文の途中で省略記号を付けて切らない。' },
     points: {
       type: 'array',
-      maxItems: 2,
-      items: { type: 'string', description: '重要点を1項目30〜65文字程度。' }
+      maxItems: 4,
+      items: { type: 'string', description: '重要点を自然な完結した文で書く。文字数都合で文中を切らない。' }
     }
   },
   required: ['short', 'points'],
@@ -209,7 +211,7 @@ export default async function handler(req, res) {
       }
     } catch (error) {
       extractError = String(error?.message || error);
-      console.warn('[summary-v2131] full-text fallback:', extractError, url);
+      console.warn('[summary-v2142] full-text fallback:', extractError, url);
     }
   }
 
@@ -232,17 +234,18 @@ export default async function handler(req, res) {
     '本文・抄録:',
     clean(inputText, MAX_AI_INPUT) || inputTitle,
     '',
-    '上の情報だけを根拠に、日本語でかなり短く要約してください。',
+    '上の情報だけを根拠に、日本語で読みやすく要約してください。',
     '原文が英語でも、shortとpointsは必ず自然な日本語へ翻訳してください。',
-    'shortは核心だけを45〜85文字。pointsは追加で重要な点を最大2件。',
+    'shortは核心を自然な1〜2文で完結させてください。pointsは追加の重要点を最大4件。',
+    '文字数を合わせるために文の途中を「…」「...」で切ることは禁止です。必ず文末まで書いてください。',
     '前置き、一般論、同じ内容の言い換え、推測は不要です。'
   ].filter(Boolean).join('\n');
 
   try {
     const result = await generateGemini({
       prompt,
-      systemInstruction: '忙しい人が数十秒で読める超短縮要約。必ず日本語。事実を増やさず、端的にする。',
-      maxOutputTokens: 220,
+      systemInstruction: '忙しい人が短時間で理解できる日本語要約。事実を増やさず、各文を必ず最後まで完結させる。文字数都合の省略記号による途中切断は禁止。',
+      maxOutputTokens: 520,
       responseSchema,
       timeoutMs: contentSource === 'pdf' ? 22000 : 14000
     });
@@ -260,8 +263,8 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({
-      short: clean(parsed.short, 140),
-      points: Array.isArray(parsed.points) ? parsed.points.slice(0, 2).map(v => clean(v, 100)).filter(Boolean) : [],
+      short: clean(parsed.short, 2400),
+      points: Array.isArray(parsed.points) ? parsed.points.slice(0, 4).map(v => clean(v, 2400)).filter(Boolean) : [],
       why: '',
       provider: 'gemini',
       model: result.model,
@@ -272,10 +275,11 @@ export default async function handler(req, res) {
       fallbackReason: '',
       pdfPageCount,
       pdfUrl,
-      extractError
+      extractError,
+      resolvedTitle: inputTitle || title
     });
   } catch (err) {
-    console.warn('[summary-v2131] Gemini unavailable, using local summary:', err?.statusCode, err?.message);
+    console.warn('[summary-v2142] Gemini unavailable, using local summary:', err?.statusCode, err?.message);
     return res.status(200).json(localSummary({
       title: inputTitle,
       description: inputText,
