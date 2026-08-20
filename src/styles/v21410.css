@@ -1,0 +1,147 @@
+/* Personal Dashboard v2.14.10
+   Twitter/X video card additions.
+   Loaded after v2141.css so the existing visual system stays intact. */
+
+.tweet-video-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.tweet-video-shell {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #000;
+  border: 1px solid rgba(255,255,255,.10);
+}
+
+.tweet-video-shell + .tweet-images {
+  margin-top: 10px;
+}
+
+.tweet-video {
+  display: block;
+  width: 100%;
+  max-height: min(68dvh, 620px);
+  min-height: 180px;
+  background: #000;
+  object-fit: contain;
+}
+
+.tweet-video-fallback[hidden] {
+  display: none !important;
+}
+
+.tweet-video-fallback {
+  position: relative;
+  display: grid;
+  min-height: 190px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 24% 12%, rgba(49,167,255,.18), transparent 38%),
+    rgba(10,12,16,.94);
+}
+
+.tweet-video-fallback-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .34;
+  filter: saturate(.82) brightness(.68);
+}
+
+.tweet-video-fallback::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(7,8,11,.92), rgba(7,8,11,.18) 70%);
+  pointer-events: none;
+}
+
+.tweet-video-fallback-body,
+.tweet-video-fallback-actions {
+  position: relative;
+  z-index: 1;
+}
+
+.tweet-video-fallback-body {
+  align-self: end;
+  display: grid;
+  gap: 5px;
+  padding: 18px 16px 10px;
+}
+
+.tweet-video-fallback-body strong {
+  color: var(--text, #fff);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.tweet-video-fallback-body span {
+  color: var(--text-sub, rgba(255,255,255,.68));
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tweet-video-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 16px;
+}
+
+.tweet-video-external-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255,255,255,.13);
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tweet-video-external-button.primary {
+  border-color: color-mix(in srgb, var(--feature-color, #31a7ff) 55%, transparent);
+  background: color-mix(in srgb, var(--feature-color, #31a7ff) 22%, rgba(255,255,255,.05));
+}
+
+.tweet-video-external-button:active {
+  transform: scale(.98);
+  opacity: .82;
+}
+
+.tweet-card-media-only .tweet-video-stack,
+.tweet-card-media-only > .tweet-video-shell {
+  margin-top: 4px;
+}
+
+@media (max-width: 430px) {
+  .tweet-video {
+    max-height: 62dvh;
+    min-height: 160px;
+  }
+
+  .tweet-video-fallback {
+    min-height: 170px;
+  }
+
+  .tweet-video-fallback-actions {
+    gap: 6px;
+  }
+
+  .tweet-video-external-button {
+    min-height: 36px;
+    padding-inline: 10px;
+    font-size: 11px;
+  }
+}
