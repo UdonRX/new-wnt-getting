@@ -4,7 +4,7 @@ import { iconSvg } from '../../shared/icons.js';
 
 const summaryCache = new Map();
 const summaryPromises = new Map();
-const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v2131';
+const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v2142';
 const AI_DAILY_LIMIT = 12;
 
 function aiTodayKey() {
@@ -43,7 +43,7 @@ function summaryModeOf(item, fallback = '') {
 }
 
 function summaryKey(item, mode = '') {
-  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2131`;
+  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2142`;
 }
 
 function errorMessage(data, status) {
@@ -59,7 +59,8 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
   if (!force && summaryCache.has(key)) return summaryCache.get(key);
   if (!force && summaryPromises.has(key)) return summaryPromises.get(key);
 
-  const description = stripHtml(item.description).slice(0, 7000);
+  const description = stripHtml(item.description).slice(0, 14000);
+  const truncatedTitle = /(?:…|\.\.\.)[^。！？!?]{0,12}$/.test(String(item.title || '').trim());
   const forceJapanese = looksMostlyEnglish(`${item.title || ''}\n${description}`);
   // 論文PDFと英語翻訳は必ずAI。通常の日本語ニュース/知識は従来同様に日次予算内だけAI。
   const allowAi = activeMode === 'papers' || forceJapanese || takeAiBudget();
@@ -73,7 +74,7 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
       source: item.source,
       mode: activeMode,
       // 論文だけはリンク先本文を取りに行き、PDFならPDF本文を優先する。
-      preferFullText: activeMode === 'papers',
+      preferFullText: activeMode === 'papers' || activeMode === 'news' || truncatedTitle,
       // おすすめに英語記事が混ざっても要約だけは必ず日本語にする。
       forceJapanese,
       allowAi,
@@ -249,7 +250,7 @@ function renderSummary(summaryHost, summary) {
     ]));
   }
 
-  const points = Array.isArray(summary.points) ? summary.points.slice(0, 3) : [];
+  const points = Array.isArray(summary.points) ? summary.points : [];
   if (points.length) {
     const ul = el('ul', { class: 'summary-points-compact' });
     points.forEach(point => ul.append(el('li', { text: point })));
@@ -443,15 +444,16 @@ export function mountFocus(host, {
     const card = el('article', { class: 'card focus-card reader-focus-scroll-safe' });
     const body = el('div');
 
+    const focusTitle = el('h2', {
+      class: 'focus-title',
+      text: item.titleJa || item.title
+    });
     body.append(
       el('div', {
         class: 'focus-source',
         text: `${item._recommendationLabel ? `${item._recommendationLabel} ・ ` : ''}${item.source || ''} ・ ${paperDateLabel(item)}`
       }),
-      el('h2', {
-        class: 'focus-title',
-        text: item.titleJa || item.title
-      })
+      focusTitle
     );
 
     if (item.titleJa) body.append(el('div', { class: 'focus-original', text: item.title }));
@@ -524,6 +526,10 @@ export function mountFocus(host, {
           loader?.finish();
           if (destroyed || items[index] !== item || !summaryHost.isConnected) return;
           renderSummary(summaryHost, summary);
+          if (!item.titleJa && summary?.resolvedTitle && summary.resolvedTitle !== item.title) {
+            focusTitle.textContent = summary.resolvedTitle;
+            item.title = summary.resolvedTitle;
+          }
           prefetchSummary(items[index + 1], { mode: summaryMode });
         })
         .catch(err => {
@@ -543,6 +549,10 @@ export function mountFocus(host, {
                   const retrySummary = await fetchSummary(item, { force: true, mode: summaryMode });
                   retryLoader.finish();
                   renderSummary(summaryHost, retrySummary);
+                  if (!item.titleJa && retrySummary?.resolvedTitle && retrySummary.resolvedTitle !== item.title) {
+                    focusTitle.textContent = retrySummary.resolvedTitle;
+                    item.title = retrySummary.resolvedTitle;
+                  }
                 } catch (retryError) {
                   summaryHost.replaceChildren(el('div', {
                     class: 'error-box',
