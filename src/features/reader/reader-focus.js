@@ -156,23 +156,45 @@ function renderSummaryBlock(node, summary) {
 
   const lines = summaryLines(summary);
   lines.forEach(line => {
-    const row = el('div', { class: 'reader-ai-line' });
-    const bullet = el('span', { class: 'reader-ai-bullet', text: '•' });
-    const copy = el('span', { class: 'reader-ai-line-copy' });
-    copy.append(el('span', { class: 'reader-ai-label', text: `【${line.label}】` }));
-    const text = el('span', { class: 'reader-ai-text' });
+    const row = el('div', { class: 'reader-story-summary-row' });
+    const bullet = el('span', { class: 'reader-story-summary-bullet', text: '•' });
+    const copy = el('div', { class: 'reader-story-summary-copy' });
+    const label = el('span', { class: 'reader-story-summary-label', text: line.label || '' });
+    const text = el('span', { class: 'reader-story-summary-text' });
     setRichText(text, line.text || '—');
-    copy.append(text);
+    copy.append(label, text);
     row.append(bullet, copy);
     node.append(row);
   });
+}
 
-  const tags = Array.isArray(summary?.tags) ? summary.tags.filter(Boolean).slice(0, 3) : [];
-  if (tags.length) {
-    const tagRow = el('div', { class: 'reader-ai-tags' });
-    tags.forEach(tag => tagRow.append(el('span', { class: 'reader-ai-tag', text: String(tag).startsWith('#') ? tag : `#${tag}` })));
-    node.append(tagRow);
+function sourceNameOf(item) {
+  return String(item?.source || item?.feedName || 'RSS').trim() || 'RSS';
+}
+
+function categoryHeaderLabel(item, fallback = 'おすすめ') {
+  if (item?._readerMode === 'news') return 'ニュース';
+  if (item?._readerMode === 'knowledge') return '知識';
+  if (item?._readerMode === 'papers') {
+    if (item?._paperTrack === 'core') return '論文:製品・熱研究';
+    if (item?._creativeFamily === 'general') return '論文:一般独創';
+    if (item?._creativeFamily === 'applied') return '論文:応用発想';
+    return '論文:独創研究';
   }
+  return itemLabel(item, fallback);
+}
+
+function faviconUrlOf(item) {
+  try {
+    const url = new URL(String(item?.link || item?.url || ''));
+    return `${url.origin}/favicon.ico`;
+  } catch {
+    return '';
+  }
+}
+
+function sourceInitialOf(item) {
+  return Array.from(sourceNameOf(item).replace(/^www\./i, ''))[0] || 'R';
 }
 
 function setCardSummary(card, item, mode, summary) {
@@ -190,7 +212,7 @@ function setCardSummary(card, item, mode, summary) {
 function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   const mode = summaryModeOf(item, summaryMode);
   const card = el('section', {
-    class: 'reader-swipe-card',
+    class: 'reader-swipe-card reader-story-card',
     'data-index': String(index),
     'data-key': focusItemKey(item) || String(index)
   });
@@ -198,47 +220,76 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
     card.style.viewTransitionName = 'reader-shared-card';
   }
 
-  const media = el('div', { class: 'reader-swipe-media' });
-  if (item?.image) {
-    const image = el('img', {
-      class: 'reader-swipe-image',
-      src: item.image,
+  const sourceName = sourceNameOf(item);
+  const sourceMark = el('span', { class: 'reader-story-source-mark', text: sourceInitialOf(item) });
+  const favicon = faviconUrlOf(item);
+  if (favicon) {
+    const logo = el('img', {
+      class: 'reader-story-source-logo',
+      src: favicon,
       alt: '',
-      loading: Math.abs(index) <= 1 ? 'eager' : 'lazy',
-      decoding: 'async'
+      loading: 'lazy',
+      decoding: 'async',
+      referrerpolicy: 'no-referrer'
     });
-    image.addEventListener('error', () => media.classList.add('image-failed'), { once: true });
-    media.append(image);
+    logo.addEventListener('load', () => sourceMark.classList.add('has-logo'), { once: true });
+    logo.addEventListener('error', () => logo.remove(), { once: true });
+    sourceMark.append(logo);
   }
-  media.append(el('div', { class: 'reader-swipe-fallback', text: itemLabel(item, label) }));
-  media.append(el('div', { class: 'reader-swipe-shade' }));
 
-  const top = el('div', { class: 'reader-swipe-top' });
-  const meta = el('div', { class: 'reader-swipe-meta' }, [
-    el('span', { class: 'reader-feed-badge', text: itemLabel(item, label) }),
-    el('span', { class: 'reader-feed-source', text: item?.source || item?.feedName || '' }),
-    el('span', { class: 'reader-feed-time', text: itemDateLabel(item) })
+  const sourceCopy = el('div', { class: 'reader-story-source-copy' }, [
+    el('strong', { class: 'reader-story-source-name', text: sourceName }),
+    el('div', { class: 'reader-story-meta-line' }, [
+      el('span', { class: 'reader-story-category-badge', text: categoryHeaderLabel(item, label) }),
+      el('span', { class: 'reader-story-time', text: itemDateLabel(item) })
+    ])
   ]);
+
   const grid = el('button', {
-    class: 'reader-grid-fab',
+    class: 'reader-grid-fab reader-story-grid',
     type: 'button',
-    title: 'Bento一覧',
-    'aria-label': 'Bento一覧',
+    title: '記事一覧',
+    'aria-label': '記事一覧へ',
     html: gridIconSvg(),
     onclick: () => onList?.({ index, item, card })
   });
-  top.append(meta, grid);
 
-  const copy = el('div', { class: 'reader-swipe-copy' });
+  const header = el('header', { class: 'reader-story-header' }, [
+    el('div', { class: 'reader-story-source' }, [sourceMark, sourceCopy]),
+    grid
+  ]);
+
+  const visual = el('figure', { class: 'reader-story-visual' });
+  if (item?.image) {
+    const image = el('img', {
+      class: 'reader-story-image',
+      src: item.image,
+      alt: '',
+      loading: Math.abs(index) <= 1 ? 'eager' : 'lazy',
+      decoding: 'async',
+      referrerpolicy: 'no-referrer'
+    });
+    image.addEventListener('error', () => visual.classList.add('image-failed'), { once: true });
+    visual.append(image);
+  } else {
+    visual.classList.add('image-failed');
+  }
+
+  visual.append(el('div', { class: 'reader-story-graphic' }, [
+    el('span', { class: 'reader-story-graphic-kicker', text: categoryHeaderLabel(item, label) }),
+    el('strong', { class: 'reader-story-graphic-title', text: itemLabel(item, label) }),
+    el('span', { class: 'reader-story-graphic-source', text: sourceName })
+  ]));
+
   const summary = cachedSummary(item, mode);
   const title = el('h2', {
-    class: 'reader-swipe-title',
+    class: 'reader-swipe-title reader-story-title',
     'data-reader-title': '1'
   });
   setRichText(title, summary?.headline || item?.titleJa || item?.title || '無題');
 
   const summaryBox = el('div', {
-    class: `reader-ai-summary${summary ? '' : ' is-loading'}`,
+    class: `reader-ai-summary reader-story-summary${summary ? '' : ' is-loading'}`,
     'data-reader-summary': '1'
   });
   if (summary) {
@@ -247,19 +298,18 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
     summaryBox.append(el('span', { class: 'reader-ai-loading-text', text: 'AI要約を準備しています…' }));
   }
 
-  const actions = el('div', { class: 'reader-swipe-actions reader-swipe-actions-minimal' });
+  const content = el('main', { class: 'reader-story-content' }, [title, summaryBox]);
+
   const original = el('a', {
-    class: 'reader-feed-action',
+    class: 'reader-story-open',
     href: item?.link || '#',
     target: '_blank',
     rel: 'noopener noreferrer',
-    text: '原文'
+    html: `<span>元記事を読む</span><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"></path><path d="M8 7h9v9"></path></svg>`
   });
-  actions.append(original);
-  copy.append(title, summaryBox, actions);
+  const actions = el('footer', { class: 'reader-story-actions' }, [original]);
 
-  const position = el('div', { class: 'reader-swipe-position', text: `${index + 1}` });
-  card.append(media, top, copy, position);
+  card.append(header, visual, content, actions);
   return card;
 }
 
