@@ -285,9 +285,113 @@ function tweetImageIdentity(value = '') {
   }
 }
 
+function normalizeTweetVideoUrl(value = '') {
+  try {
+    const url = new URL(String(value || '').trim(), location.href);
+    if (!/^https?:$/.test(url.protocol)) return '';
+
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase();
+    const isTwitterVideoHost =
+      host === 'video.twimg.com' ||
+      (host.endsWith('.twimg.com') && host !== 'pbs.twimg.com');
+
+    if (!isTwitterVideoHost) return '';
+    if (!/\.(?:mp4|m3u8|webm|mov)$/i.test(path) && !/\/(?:vid|pl|tweet_video)\//i.test(path)) return '';
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
+function tweetVideoIdentity(value = '') {
+  const normalized = normalizeTweetVideoUrl(value);
+  if (!normalized) return '';
+
+  try {
+    const url = new URL(normalized);
+    const path = decodeURIComponent(url.pathname);
+
+    const idMatch = path.match(/\/(?:ext_tw_video|amplify_video)\/(\d+)\//i);
+    if (idMatch?.[1]) return `twitter-video:${idMatch[1]}`;
+
+    const tweetVideo = path.match(/\/tweet_video\/([^/?#.]+)/i);
+    if (tweetVideo?.[1]) {
+      return `twitter-video:${tweetVideo[1].replace(/\.(?:mp4|m3u8|webm|mov)$/i, '').toLowerCase()}`;
+    }
+
+    return `twitter-video:${path
+      .replace(/\/vid\/(?:[^/]+\/)?\d+x\d+\//i, '/vid/')
+      .replace(/\.(?:mp4|m3u8|webm|mov)$/i, '')
+      .toLowerCase()}`;
+  } catch {
+    return normalized.toLowerCase();
+  }
+}
+
+function videoVariantScore(value = '') {
+  const normalized = normalizeTweetVideoUrl(value);
+  if (!normalized) return -1;
+
+  try {
+    const url = new URL(normalized);
+    const path = url.pathname;
+    const resolution = path.match(/\/vid\/(?:[^/]+\/)?(\d+)x(\d+)\//i);
+    const area = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
+
+    // MP4を第一候補。iPhone/SafariはHLSも直接再生できるが、
+    // MP4の方が他ブラウザでもそのまま扱いやすい。
+    if (/\.mp4$/i.test(path)) return 1_000_000_000 + area;
+    if (/\.m3u8$/i.test(path)) return 500_000_000 + area;
+    if (/\.webm$/i.test(path)) return 300_000_000 + area;
+    return 100_000_000 + area;
+  } catch {
+    return 0;
+  }
+}
+
+function normalizeTweetVideoPosterUrl(value = '') {
+  try {
+    const url = new URL(String(value || '').trim(), location.href);
+    if (!/^https?:$/.test(url.protocol)) return '';
+
+    const host = url.hostname.toLowerCase();
+    if (!(host === 'pbs.twimg.com' || host.endsWith('.twimg.com'))) return '';
+
+    const path = url.pathname;
+    if (!/^\/(?:ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\//i.test(path)) return '';
+
+    if (url.searchParams.has('name')) url.searchParams.set('name', 'large');
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
 function cleanDescription(html) {
   const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
-  doc.querySelectorAll('script,style,iframe,video').forEach(node => node.remove());
+
+  const videos = [
+    ...[...doc.querySelectorAll('video[src]')].map(node => node.getAttribute('src')),
+    ...[...doc.querySelectorAll('video source[src], source[src]')].map(node => node.getAttribute('src')),
+    ...[...doc.querySelectorAll('a[href]')].map(node => node.getAttribute('href'))
+  ]
+    .map(normalizeTweetVideoUrl)
+    .filter(Boolean);
+
+  const videoPosters = [
+    ...[...doc.querySelectorAll('video[poster]')].map(node => node.getAttribute('poster')),
+    ...[...doc.querySelectorAll('img')].flatMap(image => [
+      image.getAttribute('src'),
+      image.getAttribute('data-src'),
+      image.getAttribute('data-original'),
+      image.getAttribute('data-lazy-src')
+    ])
+  ]
+    .map(normalizeTweetVideoPosterUrl)
+    .filter(Boolean);
+
+  doc.querySelectorAll('script,style,iframe,video,source').forEach(node => node.remove());
 
   const images = [...doc.querySelectorAll('img')]
     .flatMap(image => [
@@ -302,12 +406,18 @@ function cleanDescription(html) {
 
   const links = [...doc.querySelectorAll('a[href]')]
     .map(anchor => anchor.href)
-    .filter(href => /^https?:/i.test(href) && !isTwitterUrl(href));
+    .filter(href =>
+      /^https?:/i.test(href) &&
+      !isTwitterUrl(href) &&
+      !normalizeTweetVideoUrl(href)
+    );
 
   doc.querySelectorAll('img').forEach(node => node.remove());
   return {
     text: (doc.body.textContent || '').replace(/\s+/g, ' ').trim(),
     images: [...new Set(images)].slice(0, 4),
+    videos: [...new Set(videos)].slice(0, 12),
+    videoPosters: [...new Set(videoPosters)].slice(0, 12),
     links: [...new Set(links)]
   };
 }
@@ -332,6 +442,44 @@ function tweetImages(item, clean) {
     if (images.length >= 4) break;
   }
   return images;
+}
+
+function tweetVideos(item, clean) {
+  const candidates = [
+    ...(Array.isArray(clean?.videos) ? clean.videos : []),
+    ...(Array.isArray(item?.videos) ? item.videos : []),
+    item?.video
+  ];
+
+  // Xは同じ動画を複数解像度のMP4 + HLSで返すことがある。
+  // 動画IDごとに、インライン再生しやすい最大解像度MP4を優先して1本へ集約。
+  const bestByVideo = new Map();
+
+  for (const candidate of candidates) {
+    const url = normalizeTweetVideoUrl(candidate);
+    const identity = tweetVideoIdentity(url);
+    if (!url || !identity) continue;
+
+    const current = bestByVideo.get(identity);
+    if (!current || videoVariantScore(url) > videoVariantScore(current)) {
+      bestByVideo.set(identity, url);
+    }
+  }
+
+  return [...bestByVideo.values()].slice(0, 4);
+}
+
+function tweetVideoPosters(item, clean) {
+  const candidates = [
+    ...(Array.isArray(clean?.videoPosters) ? clean.videoPosters : []),
+    ...(Array.isArray(item?.videoPosters) ? item.videoPosters : []),
+    ...(Array.isArray(item?.images) ? item.images : []),
+    item?.image
+  ];
+
+  return [...new Set(
+    candidates.map(normalizeTweetVideoPosterUrl).filter(Boolean)
+  )].slice(0, 4);
 }
 
 function syncTweetImageGrid(grid) {
@@ -376,10 +524,141 @@ function tweetAuthor(item, clean) {
   return item?.feedName || item?.source || 'Twitter / X';
 }
 
+function canPlayNativeHls(video) {
+  return Boolean(
+    video.canPlayType('application/vnd.apple.mpegurl') ||
+    video.canPlayType('application/x-mpegURL')
+  );
+}
+
+function makeVideoFallback(item, mediaUrl, poster, reason = '') {
+  const fallback = el('div', { class: 'tweet-video-fallback' });
+
+  if (poster) {
+    const image = el('img', {
+      class: 'tweet-video-fallback-poster',
+      src: poster,
+      alt: '投稿動画のプレビュー',
+      loading: 'lazy',
+      decoding: 'async'
+    });
+    image.addEventListener('error', () => image.remove(), { once: true });
+    fallback.append(image);
+  }
+
+  const body = el('div', { class: 'tweet-video-fallback-body' }, [
+    el('strong', {
+      text: mediaUrl ? 'Webアプリ内で再生できませんでした' : '動画はX側で再生できます'
+    }),
+    el('span', {
+      text: reason || (mediaUrl
+        ? '動画URLを外部プレーヤーで開きます'
+        : 'RSSに直接再生できる動画URLが含まれていません')
+    })
+  ]);
+  fallback.append(body);
+
+  const actions = el('div', { class: 'tweet-video-fallback-actions' });
+
+  if (mediaUrl) {
+    actions.append(el('a', {
+      class: 'tweet-video-external-button primary',
+      href: mediaUrl,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      text: '外部プレーヤーで再生 ↗'
+    }));
+  }
+
+  if (item?.link) {
+    actions.append(el('a', {
+      class: 'tweet-video-external-button',
+      href: item.link,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      text: 'Xで動画を見る ↗'
+    }));
+  }
+
+  fallback.append(actions);
+  return fallback;
+}
+
+function makeTweetVideo(item, mediaUrl, poster = '') {
+  const shell = el('div', { class: 'tweet-video-shell' });
+  const video = document.createElement('video');
+
+  video.className = 'tweet-video';
+  video.controls = true;
+  video.playsInline = true;
+  video.preload = 'metadata';
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+  if (poster) video.poster = poster;
+
+  const fallback = makeVideoFallback(item, mediaUrl, poster);
+  fallback.hidden = true;
+  let failed = false;
+
+  const showFallback = reason => {
+    if (failed) return;
+    failed = true;
+
+    try { video.pause(); } catch {}
+    video.removeAttribute('src');
+    video.style.display = 'none';
+
+    const detail = fallback.querySelector('.tweet-video-fallback-body span');
+    if (detail && reason) detail.textContent = reason;
+    fallback.hidden = false;
+  };
+
+  const path = (() => {
+    try { return new URL(mediaUrl).pathname.toLowerCase(); }
+    catch { return ''; }
+  })();
+
+  if (/\.m3u8$/i.test(path) && !canPlayNativeHls(video)) {
+    showFallback('このブラウザはHLSの直接再生に対応していないため、外部で開きます');
+  } else {
+    video.src = mediaUrl;
+    video.addEventListener('error', () => {
+      showFallback('動画CDNから直接読み込めなかったため、外部プレーヤーへ切り替えます');
+    }, { once: true });
+
+    video.addEventListener('abort', () => {
+      if (video.readyState === 0 && video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
+        showFallback('動画ソースを読み込めなかったため、外部プレーヤーへ切り替えます');
+      }
+    }, { once: true });
+  }
+
+  shell.append(video, fallback);
+  return shell;
+}
+
+function makeExternalOnlyVideo(item, poster = '') {
+  const shell = el('div', { class: 'tweet-video-shell external-only' });
+  shell.append(makeVideoFallback(
+    item,
+    '',
+    poster,
+    'RSSから動画の直接URLを取得できなかったため、Xで再生します'
+  ));
+  return shell;
+}
+
 function tweetCard(item) {
-  // v2.14.8: 本文あり投稿でもRSSの元HTML/Media要素から画像を必ず統合する。
+  // v2.14.10:
+  // - v2.14.9の写真枚数/重複修正を維持
+  // - RSS内のvideo.twimg.com動画URLを別メディアとして扱う
+  // - 直接URLが無い動画は動画サムネイルからX再生へフォールバック
   const clean = cleanDescription(item.rawDescription || item.description);
   const images = tweetImages(item, clean);
+  const videos = tweetVideos(item, clean);
+  const videoPosters = tweetVideoPosters(item, clean);
+  const hasVideoMedia = videos.length > 0 || videoPosters.length > 0;
+
   if (isRetweet(item, clean)) return null;
 
   const card = el('article', { class: 'tweet-card' });
@@ -391,14 +670,27 @@ function tweetCard(item) {
 
   const rawTitle = String(item?.title || '').trim();
   const titleIsPlaceholder = /^(?:無題|untitled|no\s*title|\(no\s*title\))$/i.test(rawTitle);
-  const displayText = clean.text || (!images.length && !titleIsPlaceholder ? rawTitle : '');
+  const displayText = clean.text || (!images.length && !hasVideoMedia && !titleIsPlaceholder ? rawTitle : '');
 
   if (displayText) {
     const text = el('div', { class: 'tweet-text' });
     appendLinkified(text, displayText);
     card.append(text);
-  } else if (images.length) {
+  } else if (images.length && !hasVideoMedia) {
     card.classList.add('tweet-card-photo-only');
+  } else if (hasVideoMedia) {
+    card.classList.add('tweet-card-media-only');
+  }
+
+  if (videos.length) {
+    const stack = el('div', { class: 'tweet-video-stack' });
+    videos.forEach((src, index) => {
+      stack.append(makeTweetVideo(item, src, videoPosters[index] || videoPosters[0] || ''));
+    });
+    card.append(stack);
+  } else if (videoPosters.length) {
+    // RSSHubが動画サムネイルだけ返し、video.twimg.comの直接URLを返さないケース。
+    card.append(makeExternalOnlyVideo(item, videoPosters[0]));
   }
 
   if (images.length) {
@@ -428,7 +720,9 @@ function tweetCard(item) {
     card.append(grid);
   }
 
-  const extra = [...new Set(clean.links)].filter(url => !clean.text.includes(url));
+  const extra = [...new Set(clean.links)]
+    .filter(url => !clean.text.includes(url))
+    .filter(url => !normalizeTweetVideoUrl(url));
   if (extra.length) {
     const links = el('div', { class: 'tweet-external-links' });
     extra.forEach(url => links.append(el('a', {
