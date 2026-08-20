@@ -2,7 +2,6 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="referrer" content="no-referrer" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
   <meta name="theme-color" content="#090b0e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -11,15 +10,18 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <title>Personal Dashboard V2</title>
-  <link rel="stylesheet" href="/src/styles/tokens.css" />
-  <link rel="stylesheet" href="/src/styles/base.css" />
-  <link rel="stylesheet" href="/src/styles/navigation.css" />
-  <link rel="stylesheet" href="/src/styles/screens.css" />
-  <link rel="stylesheet" href="/src/styles/v2141.css" />
-  <link rel="stylesheet" href="/src/styles/v21410.css" />
-  <link rel="stylesheet" href="/src/styles/v21411.css" />
-  <link rel="stylesheet" href="/src/styles/v21412.css" />
-  <link rel="stylesheet" href="/src/styles/v21413.css" />
+
+  <!-- v2.14.15: queryを付け、iPhone PWAの旧CSS混在を避ける -->
+  <link rel="stylesheet" href="/src/styles/tokens.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/base.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/navigation.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/screens.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/v2141.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/v21410.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/v21411.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/v21412.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/v21413.css?v=21415" />
+  <link rel="stylesheet" href="/src/styles/v21415.css?v=21415" />
 </head>
 <body>
   <div id="edge-frame" aria-hidden="true"></div>
@@ -29,7 +31,79 @@
   </div>
   <div id="overlay-root"></div>
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
-  <script type="module" src="/src/main.js"></script>
-  <script type="module" src="/src/features/reader/reader-summary-wrap.js"></script>
+
+  <script>
+    /*
+     * v2.14.15 startup watchdog.
+     * main.jsのmodule graphが起動しなかった場合、黒画面のまま放置せず、
+     * 旧Service Worker/cacheを一度だけ自動クリアして再読込する。
+     */
+    (() => {
+      const BUILD = '21415';
+      const RECOVERY_KEY = 'pdv2:startup-recovery:21415';
+      let capturedError = '';
+
+      const rememberError = value => {
+        if (!capturedError && value) capturedError = String(value).slice(0, 500);
+      };
+
+      window.addEventListener('error', event => {
+        rememberError(event?.message || event?.error?.message || 'JavaScript error');
+      }, true);
+
+      window.addEventListener('unhandledrejection', event => {
+        rememberError(event?.reason?.message || event?.reason || 'Promise rejection');
+      });
+
+      const hasBootedUi = () => {
+        if (document.documentElement.dataset.pdv2Booted === '1') return true;
+        const main = document.getElementById('app-main');
+        const nav = document.getElementById('bottom-nav');
+        return Boolean(main?.childElementCount || nav?.childElementCount);
+      };
+
+      const clearOldRuntime = async () => {
+        if ('serviceWorker' in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.allSettled(registrations.map(registration => registration.unregister()));
+        }
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.allSettled(keys
+            .filter(key => key.startsWith('personal-dashboard-'))
+            .map(key => caches.delete(key)));
+        }
+      };
+
+      window.setTimeout(async () => {
+        if (hasBootedUi()) {
+          sessionStorage.removeItem(RECOVERY_KEY);
+          return;
+        }
+
+        if (sessionStorage.getItem(RECOVERY_KEY) !== '1') {
+          sessionStorage.setItem(RECOVERY_KEY, '1');
+          try { await clearOldRuntime(); } catch (_) {}
+          location.replace(`/?v=${BUILD}&recovery=1`);
+          return;
+        }
+
+        const main = document.getElementById('app-main');
+        if (!main || main.childElementCount) return;
+        main.innerHTML = `
+          <section class="screen pd-startup-error">
+            <div class="error-box">
+              <strong>アプリを起動できませんでした</strong><br>
+              <small>${capturedError || 'JavaScriptファイルの読み込みに失敗しています。GitHub/Vercelの最新デプロイを確認してください。'}</small><br><br>
+              <button type="button" class="soft-button" data-pdv2-startup-reload>再読み込み</button>
+            </div>
+          </section>`;
+        main.querySelector('[data-pdv2-startup-reload]')?.addEventListener('click', () => location.reload());
+      }, 6500);
+    })();
+  </script>
+
+  <!-- Reader補助モジュールはここでは直接読み込まない。main.jsがReader表示時に遅延読込する。 -->
+  <script type="module" src="/src/main.js?v=21415"></script>
 </body>
 </html>
