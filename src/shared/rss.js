@@ -68,6 +68,70 @@ function imageUrlsFromHtml(value = '') {
   }
 }
 
+function looksLikeVideoUrl(value = '') {
+  const url = safeHttpUrl(value);
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+
+    if (/\.(?:mp4|m3u8|webm|mov)$/i.test(path)) return true;
+    if (host === 'video.twimg.com' && /\/(?:vid|pl|tweet_video)\//i.test(path)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function videoUrlsFromHtml(value = '') {
+  const source = String(value || '').trim();
+  if (!source || !/(?:<video\b|<source\b|video\.twimg\.com)/i.test(source)) {
+    return { urls: [], posters: [] };
+  }
+
+  try {
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+    const urls = [];
+    const posters = [];
+
+    const pushVideo = value => {
+      const url = safeHttpUrl(value);
+      if (url && looksLikeVideoUrl(url)) urls.push(url);
+    };
+    const pushPoster = value => {
+      const url = safeHttpUrl(value);
+      if (url) posters.push(url);
+    };
+
+    for (const video of doc.querySelectorAll('video')) {
+      pushVideo(video.getAttribute('src'));
+      pushPoster(video.getAttribute('poster'));
+      for (const sourceNode of video.querySelectorAll('source[src]')) {
+        pushVideo(sourceNode.getAttribute('src'));
+      }
+    }
+
+    for (const sourceNode of doc.querySelectorAll('source[src]')) {
+      const type = String(sourceNode.getAttribute('type') || '').toLowerCase();
+      if (type.startsWith('video/') || /mpegurl|m3u8/.test(type) || looksLikeVideoUrl(sourceNode.getAttribute('src'))) {
+        pushVideo(sourceNode.getAttribute('src'));
+      }
+    }
+
+    for (const anchor of doc.querySelectorAll('a[href]')) {
+      if (looksLikeVideoUrl(anchor.getAttribute('href'))) pushVideo(anchor.getAttribute('href'));
+    }
+
+    return {
+      urls: [...new Set(urls)].slice(0, 12),
+      posters: [...new Set(posters)].slice(0, 12)
+    };
+  } catch {
+    return { urls: [], posters: [] };
+  }
+}
+
 function rawDescriptionOf(item) {
   for (const selector of ['content\\:encoded', 'content', 'description', 'summary']) {
     const node = item.querySelector(selector);
@@ -92,19 +156,24 @@ function mediaImagesOf(item, rawDescription = '') {
     const url = node.getAttribute?.('url') || '';
     const type = String(node.getAttribute?.('type') || '').toLowerCase();
     const medium = String(node.getAttribute?.('medium') || '').toLowerCase();
+    const isVideo =
+      medium === 'video' ||
+      type.startsWith('video/') ||
+      /mpegurl|m3u8/.test(type) ||
+      looksLikeVideoUrl(url);
 
-    if (
-      name === 'media:content' ||
-      name === 'media:thumbnail' ||
-      local === 'thumbnail' ||
-      (local === 'content' && (medium === 'image' || type.startsWith('image/')))
-    ) {
+    if (name === 'media:thumbnail' || local === 'thumbnail') {
       push(url);
       continue;
     }
 
+    if (name === 'media:content' || local === 'content') {
+      if (!isVideo && (!medium || medium === 'image' || type.startsWith('image/'))) push(url);
+      continue;
+    }
+
     if (local === 'enclosure' && url) {
-      if (!type || type.startsWith('image/')) push(url);
+      if (!isVideo && (!type || type.startsWith('image/'))) push(url);
     }
   }
 
@@ -113,6 +182,57 @@ function mediaImagesOf(item, rawDescription = '') {
 
   imageUrlsFromHtml(rawDescription).forEach(push);
   return [...new Set(urls)].slice(0, 12);
+}
+
+function mediaVideosOf(item, rawDescription = '') {
+  const urls = [];
+  const posters = [];
+  const pushVideo = value => {
+    const url = safeHttpUrl(value);
+    if (url && looksLikeVideoUrl(url)) urls.push(url);
+  };
+  const pushPoster = value => {
+    const url = safeHttpUrl(value);
+    if (url) posters.push(url);
+  };
+
+  for (const node of item.getElementsByTagName('*')) {
+    const name = String(node.nodeName || '').toLowerCase();
+    const local = String(node.localName || '').toLowerCase();
+    const url = node.getAttribute?.('url') || node.getAttribute?.('href') || '';
+    const type = String(node.getAttribute?.('type') || '').toLowerCase();
+    const medium = String(node.getAttribute?.('medium') || '').toLowerCase();
+
+    if (
+      (name === 'media:content' || local === 'content' || local === 'enclosure') &&
+      (
+        medium === 'video' ||
+        type.startsWith('video/') ||
+        /mpegurl|m3u8/.test(type) ||
+        looksLikeVideoUrl(url)
+      )
+    ) {
+      pushVideo(url);
+    }
+
+    if (name === 'media:thumbnail' || local === 'thumbnail') {
+      pushPoster(node.getAttribute?.('url') || '');
+    }
+
+    if (local === 'video') {
+      pushVideo(node.getAttribute?.('src') || url);
+      pushPoster(node.getAttribute?.('poster') || '');
+    }
+  }
+
+  const fromHtml = videoUrlsFromHtml(rawDescription);
+  fromHtml.urls.forEach(pushVideo);
+  fromHtml.posters.forEach(pushPoster);
+
+  return {
+    urls: [...new Set(urls)].slice(0, 12),
+    posters: [...new Set(posters)].slice(0, 12)
+  };
 }
 
 function plainText(value = '') {
@@ -149,19 +269,23 @@ export function parseFeed(xmlText, feedName = '') {
     const source = text(item, ['source', 'category']) || feedName;
     const author = text(item, ['dc\\:creator', 'creator', 'author name', 'author']) || source;
     const images = mediaImagesOf(item, rawDescription);
+    const videoMedia = mediaVideosOf(item, rawDescription);
 
     return {
       id: `${link || title}-${dateRaw || index}`,
       title,
       link,
       description,
-      // Twitter/Xのように本文HTML内の画像を使う画面向けに元HTMLを保持する。
+      // Twitter/Xのように本文HTML内の画像・動画を使う画面向けに元HTMLを保持する。
       rawDescription,
       source,
       author,
       feedName,
       image: images[0] || '',
       images,
+      video: videoMedia.urls[0] || '',
+      videos: videoMedia.urls,
+      videoPosters: videoMedia.posters,
       pubDate: Number.isNaN(date.getTime()) ? new Date() : date,
       relative: relativeTime(Number.isNaN(date.getTime()) ? Date.now() : date)
     };
