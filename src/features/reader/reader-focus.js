@@ -1,28 +1,8 @@
-import { el, openSheet, showToast } from '../../shared/dom.js';
+import { el, showToast } from '../../shared/dom.js';
 import { shortDate } from '../../shared/time.js';
 
 const summaryCache = new Map();
 const summaryPromises = new Map();
-const AI_BUDGET_KEY = 'pdv2:summaryAiBudget:v2143';
-const AI_DAILY_LIMIT = 16;
-
-function aiTodayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function takeAiBudget() {
-  try {
-    const day = aiTodayKey();
-    const row = JSON.parse(localStorage.getItem(AI_BUDGET_KEY) || 'null');
-    const count = row?.day === day ? Number(row.count || 0) : 0;
-    if (count >= AI_DAILY_LIMIT) return false;
-    localStorage.setItem(AI_BUDGET_KEY, JSON.stringify({ day, count: count + 1 }));
-    return true;
-  } catch {
-    return true;
-  }
-}
 
 function stripHtml(value = '') {
   const d = document.createElement('div');
@@ -41,8 +21,33 @@ function summaryModeOf(item, fallback = '') {
   return String(item?._readerMode || fallback || '').trim();
 }
 
+function focusItemKey(item) {
+  return String(item?.id || item?.link || item?.url || `${item?.source || ''}|${item?.title || ''}`);
+}
+
+function itemDateLabel(item) {
+  const description = String(item?.description || '');
+  const yearOnly = description.match(/(?:公開年|出版年):\s*(\d{4})/)?.[1];
+  if (/日付精度:\s*不明/.test(description)) return '日付不明';
+  if (/日付精度:\s*年/.test(description) && yearOnly) return `${yearOnly}年`;
+  return shortDate(item?.pubDate);
+}
+
+function itemLabel(item, fallback = 'おすすめ') {
+  if (item?._recommendationLabel) return item._recommendationLabel;
+  if (item?._readerMode === 'news') return 'ニュース';
+  if (item?._readerMode === 'knowledge') return '知識';
+  if (item?._readerMode === 'papers') {
+    if (item?._paperTrack === 'core') return '製品・熱研究';
+    if (item?._creativeFamily === 'general') return '一般独創';
+    if (item?._creativeFamily === 'applied') return '応用発想';
+    return '独創研究';
+  }
+  return fallback;
+}
+
 function summaryKey(item, mode = '') {
-  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2143`;
+  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2144`;
 }
 
 function errorMessage(data, status) {
@@ -61,9 +66,6 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
   const description = stripHtml(item?.description).slice(0, 14000);
   const truncatedTitle = /(?:…|\.\.\.)[^。！？!?]{0,12}$/.test(String(item?.title || '').trim());
   const forceJapanese = looksMostlyEnglish(`${item?.title || ''}\n${description}`);
-  // v2.14.3の縦スワイプでは、表示された記事はカテゴリを問わずAI短縮要約を作る。
-  // 先読みは現在位置の前後だけに限定し、無駄なAPI呼び出しはIntersectionObserver側で抑える。
-  const allowAi = true;
 
   const request = fetch('/api/summary', {
     method: 'POST',
@@ -72,11 +74,12 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
       url: item?.link,
       title: item?.title,
       description,
-      source: item?.source,
+      source: item?.source || item?.feedName,
+      category: itemLabel(item),
       mode: activeMode,
       preferFullText: activeMode === 'papers' || activeMode === 'news' || truncatedTitle,
       forceJapanese,
-      allowAi,
+      allowAi: true,
       fast: activeMode !== 'papers'
     })
   }).then(async response => {
@@ -104,32 +107,6 @@ function prefetchSummary(item, mode = '') {
   fetchSummary(item, { mode }).catch(() => {});
 }
 
-
-function focusItemKey(item) {
-  return String(item?.id || item?.link || item?.url || `${item?.source || ''}|${item?.title || ''}`);
-}
-
-function itemDateLabel(item) {
-  const description = String(item?.description || '');
-  const yearOnly = description.match(/(?:公開年|出版年):\s*(\d{4})/)?.[1];
-  if (/日付精度:\s*不明/.test(description)) return '日付不明';
-  if (/日付精度:\s*年/.test(description) && yearOnly) return `${yearOnly}年`;
-  return shortDate(item?.pubDate);
-}
-
-function itemLabel(item, fallback = 'おすすめ') {
-  if (item?._recommendationLabel) return item._recommendationLabel;
-  if (item?._readerMode === 'news') return 'ニュース';
-  if (item?._readerMode === 'knowledge') return '知識';
-  if (item?._readerMode === 'papers') {
-    if (item?._paperTrack === 'core') return '製品・熱研究';
-    if (item?._creativeFamily === 'general') return '一般独創';
-    if (item?._creativeFamily === 'applied') return '応用発想';
-    return '独創研究';
-  }
-  return fallback;
-}
-
 function gridIconSvg() {
   return `
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -140,110 +117,74 @@ function gridIconSvg() {
     </svg>`;
 }
 
-function renderSummarySheet(item, summary, mode) {
-  const wrap = el('div', { class: 'reader-detail-sheet' });
-  const heading = el('div', { class: 'reader-detail-heading' }, [
-    el('span', { class: 'reader-feed-badge', text: itemLabel(item) }),
-    el('h3', { text: summary?.resolvedTitle || item?.titleJa || item?.title || '記事' }),
-    el('p', { text: `${item?.source || item?.feedName || ''}${itemDateLabel(item) ? ` ・ ${itemDateLabel(item)}` : ''}` })
-  ]);
-  wrap.append(heading);
-
-  if (summary?.short) {
-    wrap.append(el('section', { class: 'reader-detail-section' }, [
-      el('strong', { text: 'ひとことで' }),
-      el('p', { text: summary.short })
-    ]));
+function setRichText(node, value = '') {
+  if (!node) return;
+  node.replaceChildren();
+  const text = String(value || '');
+  const pattern = /\*\*([^*]+)\*\*/g;
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(text))) {
+    if (match.index > last) node.append(document.createTextNode(text.slice(last, match.index)));
+    node.append(el('strong', { text: match[1] }));
+    last = pattern.lastIndex;
   }
-
-  const points = Array.isArray(summary?.points) ? summary.points : [];
-  if (points.length) {
-    const list = el('ul', { class: 'reader-detail-points' });
-    points.forEach(point => list.append(el('li', { text: point })));
-    wrap.append(el('section', { class: 'reader-detail-section' }, [
-      el('strong', { text: '要点' }),
-      list
-    ]));
-  }
-
-  const actions = el('div', { class: 'reader-detail-actions' });
-  actions.append(el('a', {
-    class: 'soft-button',
-    href: item?.link || '#',
-    target: '_blank',
-    rel: 'noopener noreferrer',
-    text: '原文を開く'
-  }));
-  actions.append(el('button', {
-    class: 'soft-button',
-    type: 'button',
-    text: 'AIに質問',
-    onclick: () => chatSheet(item, summary, mode)
-  }));
-  wrap.append(actions);
-  openSheet(wrap, { title: '記事の詳細' });
+  if (last < text.length) node.append(document.createTextNode(text.slice(last)));
+  if (!node.childNodes.length) node.textContent = text;
 }
 
-function chatSheet(item, summary, mode) {
-  const wrap = el('div');
-  const history = [];
-  const log = el('div', { class: 'chat-log' });
-  const field = el('div', { class: 'field' });
-  field.append(el('label', { text: 'この記事について質問' }));
-  const input = el('textarea', { rows: '3', placeholder: '例：重要なポイントをもう少し詳しく' });
-  field.append(input);
-  const send = el('button', { class: 'primary-button full-button', type: 'button', text: '送信' });
+function summaryLines(summary) {
+  if (Array.isArray(summary?.lines) && summary.lines.length) {
+    const labels = ['結論/事実', '背景/特徴', '影響/展望'];
+    return labels.map((label, index) => ({
+      label: summary.lines[index]?.label || label,
+      text: summary.lines[index]?.text || ''
+    }));
+  }
+  const points = Array.isArray(summary?.points) ? summary.points : [];
+  return [
+    { label: '結論/事実', text: summary?.short || '' },
+    { label: '背景/特徴', text: points[0] || '' },
+    { label: '影響/展望', text: points[1] || '' }
+  ];
+}
 
-  send.onclick = async () => {
-    const q = input.value.trim();
-    if (!q) return;
-    input.value = '';
-    log.append(el('div', { class: 'chat-user', text: q }));
-    send.disabled = true;
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: item?.link,
-          title: item?.title,
-          description: stripHtml(item?.description),
-          question: q,
-          history,
-          summary: summary?.points || [],
-          mode: summaryModeOf(item, mode)
-        })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(errorMessage(data, response.status));
-      const answer = data.answer || data.text || '';
-      log.append(el('div', { class: 'chat-ai', text: answer }));
-      history.push({ role: 'user', content: q }, { role: 'assistant', content: answer });
-    } catch (error) {
-      log.append(el('div', { class: 'error-box', text: error.message }));
-    } finally {
-      send.disabled = false;
-    }
-  };
+function renderSummaryBlock(node, summary) {
+  if (!node) return;
+  node.replaceChildren();
+  node.classList.remove('is-loading', 'is-error');
 
-  wrap.append(log, field, send);
-  openSheet(wrap, { title: 'AIに質問' });
+  const lines = summaryLines(summary);
+  lines.forEach(line => {
+    const row = el('div', { class: 'reader-ai-line' });
+    const bullet = el('span', { class: 'reader-ai-bullet', text: '•' });
+    const copy = el('span', { class: 'reader-ai-line-copy' });
+    copy.append(el('span', { class: 'reader-ai-label', text: `【${line.label}】` }));
+    const text = el('span', { class: 'reader-ai-text' });
+    setRichText(text, line.text || '—');
+    copy.append(text);
+    row.append(bullet, copy);
+    node.append(row);
+  });
+
+  const tags = Array.isArray(summary?.tags) ? summary.tags.filter(Boolean).slice(0, 3) : [];
+  if (tags.length) {
+    const tagRow = el('div', { class: 'reader-ai-tags' });
+    tags.forEach(tag => tagRow.append(el('span', { class: 'reader-ai-tag', text: String(tag).startsWith('#') ? tag : `#${tag}` })));
+    node.append(tagRow);
+  }
 }
 
 function setCardSummary(card, item, mode, summary) {
   if (!card?.isConnected) return;
-  const summaryText = card.querySelector('[data-reader-summary]');
-  const detailButton = card.querySelector('[data-reader-detail]');
+  const summaryNode = card.querySelector('[data-reader-summary]');
   const title = card.querySelector('[data-reader-title]');
-  if (summaryText) {
-    summaryText.textContent = summary?.short || '要約を取得できませんでした。';
-    summaryText.classList.remove('is-loading');
+
+  if (title) {
+    const headline = summary?.headline || summary?.resolvedTitle || item?.titleJa || item?.title || '記事';
+    setRichText(title, headline);
   }
-  if (title && !item?.titleJa && summary?.resolvedTitle && summary.resolvedTitle !== item.title) {
-    item.title = summary.resolvedTitle;
-    title.textContent = summary.resolvedTitle;
-  }
-  if (detailButton) detailButton.onclick = () => renderSummarySheet(item, summary, mode);
+  if (summaryNode) renderSummaryBlock(summaryNode, summary);
 }
 
 function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
@@ -289,25 +230,24 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   top.append(meta, grid);
 
   const copy = el('div', { class: 'reader-swipe-copy' });
+  const summary = cachedSummary(item, mode);
   const title = el('h2', {
     class: 'reader-swipe-title',
-    'data-reader-title': '1',
-    text: item?.titleJa || item?.title || '無題'
+    'data-reader-title': '1'
   });
-  const summary = cachedSummary(item, mode);
-  const summaryText = el('p', {
-    class: `reader-swipe-summary${summary ? '' : ' is-loading'}`,
-    'data-reader-summary': '1',
-    text: summary?.short || 'AI要約を準備しています…'
+  setRichText(title, summary?.headline || item?.titleJa || item?.title || '無題');
+
+  const summaryBox = el('div', {
+    class: `reader-ai-summary${summary ? '' : ' is-loading'}`,
+    'data-reader-summary': '1'
   });
-  const actions = el('div', { class: 'reader-swipe-actions' });
-  const detail = el('button', {
-    class: 'reader-feed-action',
-    type: 'button',
-    'data-reader-detail': '1',
-    text: '要点'
-  });
-  if (summary) detail.onclick = () => renderSummarySheet(item, summary, mode);
+  if (summary) {
+    renderSummaryBlock(summaryBox, summary);
+  } else {
+    summaryBox.append(el('span', { class: 'reader-ai-loading-text', text: 'AI要約を準備しています…' }));
+  }
+
+  const actions = el('div', { class: 'reader-swipe-actions reader-swipe-actions-minimal' });
   const original = el('a', {
     class: 'reader-feed-action',
     href: item?.link || '#',
@@ -315,8 +255,8 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
     rel: 'noopener noreferrer',
     text: '原文'
   });
-  actions.append(detail, original);
-  copy.append(title, summaryText, actions);
+  actions.append(original);
+  copy.append(title, summaryBox, actions);
 
   const position = el('div', { class: 'reader-swipe-position', text: `${index + 1}` });
   card.append(media, top, copy, position);
@@ -416,14 +356,17 @@ export function mountFocus(host, {
           if (destroyed || !card.isConnected) return;
           const node = card.querySelector('[data-reader-summary]');
           if (node) {
-            node.textContent = '要約を取得できませんでした。タップして再試行できます。';
+            node.replaceChildren(el('span', { class: 'reader-ai-loading-text', text: '要約を取得できませんでした。タップで再試行' }));
             node.classList.remove('is-loading');
+            node.classList.add('is-error');
             node.onclick = () => {
-              node.textContent = 'AI要約を再取得しています…';
+              node.onclick = null;
+              node.replaceChildren(el('span', { class: 'reader-ai-loading-text', text: 'AI要約を再取得しています…' }));
+              node.classList.remove('is-error');
               node.classList.add('is-loading');
               fetchSummary(item, { force: true, mode })
                 .then(summary => setCardSummary(card, item, mode, summary))
-                .catch(err => showToast(err.message || '要約を取得できませんでした'));
+                .catch(err => showToast(err.message || error?.message || '要約を取得できませんでした'));
             };
           }
         });
