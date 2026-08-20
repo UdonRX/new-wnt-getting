@@ -25,6 +25,11 @@ export function showToast(message, ms = 2200) {
 
 export function openSheet(content, { title = '', onClose } = {}) {
   const root = document.getElementById('overlay-root');
+  if (!root) throw new Error('overlay-root が見つかりません');
+
+  // iPhoneでキーボード表示中のVisual Viewportと下部navを分離して扱う。
+  document.documentElement.classList.add('sheet-open');
+
   const backdrop = el('div', { class: 'sheet-backdrop' });
   const sheet = el('section', { class: 'bottom-sheet', role: 'dialog', 'aria-modal': 'true' });
   const grabber = el('div', { class: 'sheet-grabber', 'aria-label': '下にスワイプして閉じる' });
@@ -38,10 +43,31 @@ export function openSheet(content, { title = '', onClose } = {}) {
   const close = () => {
     if (closed) return;
     closed = true;
+
+    // DOMからinputを消すより先にblurし、iOSのキーボード縮小を開始させる。
+    const active = document.activeElement;
+    if (active && /^(INPUT|TEXTAREA|SELECT)$/i.test(active.tagName)) {
+      try { active.blur(); } catch {}
+    }
+
     backdrop.remove();
+
+    if (!root.querySelector('.sheet-backdrop')) {
+      document.documentElement.classList.remove('sheet-open');
+    }
+
+    // visualViewportの復帰には数フレームかかるため、共通navへ複数回通知する。
+    window.dispatchEvent(new CustomEvent('pdv2:sheet-closed'));
+    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('pdv2:viewport-settle')));
+    setTimeout(() => window.dispatchEvent(new CustomEvent('pdv2:viewport-settle')), 120);
+    setTimeout(() => window.dispatchEvent(new CustomEvent('pdv2:viewport-settle')), 320);
+
     onClose?.();
   };
-  backdrop.addEventListener('click', event => { if (event.target === backdrop) close(); });
+
+  backdrop.addEventListener('click', event => {
+    if (event.target === backdrop) close();
+  });
 
   let startY = 0;
   let startX = 0;
@@ -97,5 +123,7 @@ export function openSheet(content, { title = '', onClose } = {}) {
 }
 
 export function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+  return String(value ?? '').replace(/[&<>'"]/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+  }[ch]));
 }
