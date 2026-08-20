@@ -524,6 +524,10 @@ function tweetAuthor(item, clean) {
   return item?.feedName || item?.source || 'Twitter / X';
 }
 
+const TWITTER_VIDEO_DIRECT_FAILURE_LIMIT = 2;
+let twitterVideoDirectFailures = 0;
+let xWidgetsPromise = null;
+
 function canPlayNativeHls(video) {
   return Boolean(
     video.canPlayType('application/vnd.apple.mpegurl') ||
@@ -531,8 +535,122 @@ function canPlayNativeHls(video) {
   );
 }
 
-function makeVideoFallback(item, mediaUrl, poster, reason = '') {
-  const fallback = el('div', { class: 'tweet-video-fallback' });
+function tweetIdOf(item) {
+  const values = [
+    item?.link,
+    item?.guid,
+    item?.id,
+    item?.rawDescription,
+    item?.description,
+    item?.title
+  ];
+  for (const value of values) {
+    const match = String(value || '').match(/(?:x\.com|twitter\.com)\/[^\s/?#]+\/status(?:es)?\/(\d{5,})/i)
+      || String(value || '').match(/\/status(?:es)?\/(\d{5,})/i);
+    if (match?.[1]) return match[1];
+  }
+  return '';
+}
+
+function canonicalPostUrl(item) {
+  const id = tweetIdOf(item);
+  if (id) return `https://x.com/i/status/${id}`;
+  try {
+    const url = new URL(String(item?.link || ''));
+    if (url.hostname === 'twitter.com' || url.hostname.endsWith('.twitter.com')) {
+      url.hostname = 'x.com';
+    }
+    return url.href;
+  } catch {
+    return String(item?.link || 'https://x.com/');
+  }
+}
+
+function proxyVideoUrl(mediaUrl, { probe = false } = {}) {
+  const params = new URLSearchParams({ url: mediaUrl });
+  if (probe) params.set('probe', '1');
+  return `/api/twitter-video-proxy?${params}`;
+}
+
+function xEmbedTheme() {
+  const explicit = document.documentElement.dataset.theme || document.body?.dataset?.theme || '';
+  if (/light/i.test(explicit) || document.body?.classList?.contains('light')) return 'light';
+  return 'dark';
+}
+
+function loadXWidgets() {
+  if (window.twttr?.widgets?.createTweet) return Promise.resolve(window.twttr);
+  if (xWidgetsPromise) return xWidgetsPromise;
+
+  xWidgetsPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-pdv2-x-widgets="1"]');
+    const finish = () => {
+      const started = Date.now();
+      const poll = () => {
+        if (window.twttr?.widgets?.createTweet) return resolve(window.twttr);
+        if (Date.now() - started > 6000) return reject(new Error('X widgets.js timeout'));
+        setTimeout(poll, 80);
+      };
+      poll();
+    };
+
+    if (existing) {
+      if (window.twttr?.widgets?.createTweet) resolve(window.twttr);
+      else {
+        existing.addEventListener('load', finish, { once: true });
+        existing.addEventListener('error', () => reject(new Error('X widgets.js failed')), { once: true });
+        finish();
+      }
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://platform.x.com/widgets.js';
+    script.async = true;
+    script.charset = 'utf-8';
+    script.dataset.pdv2XWidgets = '1';
+    script.referrerPolicy = 'no-referrer';
+    script.addEventListener('load', finish, { once: true });
+    script.addEventListener('error', () => reject(new Error('X widgets.js failed')), { once: true });
+    document.head.append(script);
+  }).catch(error => {
+    xWidgetsPromise = null;
+    throw error;
+  });
+
+  return xWidgetsPromise;
+}
+
+function makeVideoStatus(poster = '') {
+  const status = el('div', { class: 'tweet-video-status' });
+  if (poster) {
+    const image = el('img', {
+      class: 'tweet-video-status-poster',
+      src: poster,
+      alt: '',
+      loading: 'lazy',
+      decoding: 'async'
+    });
+    image.addEventListener('error', () => image.remove(), { once: true });
+    status.append(image);
+  }
+  status.append(el('div', { class: 'tweet-video-status-content' }, [
+    el('strong', { class: 'tweet-video-status-title', text: '動画を準備しています' }),
+    el('span', { class: 'tweet-video-status-detail', text: '再生できる方法を自動判定中…' }),
+    el('span', { class: 'tweet-video-status-progress', 'aria-hidden': 'true' })
+  ]));
+  return status;
+}
+
+function updateVideoStatus(status, title, detail) {
+  const titleEl = status.querySelector('.tweet-video-status-title');
+  const detailEl = status.querySelector('.tweet-video-status-detail');
+  if (titleEl && title) titleEl.textContent = title;
+  if (detailEl && detail) detailEl.textContent = detail;
+}
+
+function makeVideoFallback(item, mediaUrl, poster, reason = '', { final = false } = {}) {
+  const fallback = el('div', { class: `tweet-video-fallback${final ? ' tweet-video-external-final' : ''}` });
 
   if (poster) {
     const image = el('img', {
@@ -548,69 +666,162 @@ function makeVideoFallback(item, mediaUrl, poster, reason = '') {
 
   const body = el('div', { class: 'tweet-video-fallback-body' }, [
     el('strong', {
-      text: mediaUrl ? 'Webアプリ内で再生できませんでした' : '動画はX側で再生できます'
+      text: final ? 'Xアプリで動画を再生' : (mediaUrl ? 'Webアプリ内で再生できませんでした' : '動画はX側で再生できます')
     }),
     el('span', {
-      text: reason || (mediaUrl
-        ? '動画URLを外部プレーヤーで開きます'
-        : 'RSSに直接再生できる動画URLが含まれていません')
+      text: reason || (final
+        ? '直接再生・プロキシ・公式埋め込みを利用できなかったため、投稿をXで開きます'
+        : (mediaUrl ? '動画URLを外部で開きます' : 'RSSに直接再生できる動画URLが含まれていません'))
     })
   ]);
   fallback.append(body);
 
   const actions = el('div', { class: 'tweet-video-fallback-actions' });
+  const postUrl = canonicalPostUrl(item);
 
-  if (mediaUrl) {
+  if (final || !mediaUrl) {
+    actions.append(el('a', {
+      class: 'tweet-video-external-button primary',
+      href: postUrl,
+      rel: 'external',
+      text: 'Xアプリで動画を再生 ↗'
+    }));
+    actions.append(el('a', {
+      class: 'tweet-video-external-button',
+      href: postUrl,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      text: 'ブラウザで投稿を開く ↗'
+    }));
+  } else {
     actions.append(el('a', {
       class: 'tweet-video-external-button primary',
       href: mediaUrl,
       target: '_blank',
-      rel: 'noopener noreferrer',
-      text: '外部プレーヤーで再生 ↗'
+      rel: 'noopener noreferrer nofollow',
+      referrerpolicy: 'no-referrer',
+      text: '動画URLを外部で開く ↗'
     }));
-  }
-
-  if (item?.link) {
-    actions.append(el('a', {
-      class: 'tweet-video-external-button',
-      href: item.link,
-      target: '_blank',
-      rel: 'noopener noreferrer',
-      text: 'Xで動画を見る ↗'
-    }));
+    if (postUrl) {
+      actions.append(el('a', {
+        class: 'tweet-video-external-button',
+        href: postUrl,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        text: 'Xで動画を見る ↗'
+      }));
+    }
   }
 
   fallback.append(actions);
   return fallback;
 }
 
-function makeTweetVideo(item, mediaUrl, poster = '') {
-  const shell = el('div', { class: 'tweet-video-shell' });
-  const video = document.createElement('video');
+function waitForVideo(video, src, { timeout = 3200 } = {}) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (ok, error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      ['loadedmetadata', 'loadeddata', 'canplay', 'error', 'stalled', 'abort'].forEach(type => {
+        video.removeEventListener(type, handlers[type]);
+      });
+      if (ok) resolve();
+      else reject(error || new Error('video load failed'));
+    };
+    const handlers = {
+      loadedmetadata: () => finish(true),
+      loadeddata: () => finish(true),
+      canplay: () => finish(true),
+      error: () => finish(false, new Error('media error')),
+      stalled: () => {
+        if (video.readyState === 0) finish(false, new Error('media stalled'));
+      },
+      abort: () => finish(false, new Error('media aborted'))
+    };
+    const timer = setTimeout(() => finish(false, new Error('media timeout')), timeout);
+    Object.entries(handlers).forEach(([type, handler]) => video.addEventListener(type, handler));
+    try {
+      video.src = src;
+      video.load();
+    } catch (error) {
+      finish(false, error);
+    }
+  });
+}
 
-  video.className = 'tweet-video';
-  video.controls = true;
-  video.playsInline = true;
-  video.preload = 'metadata';
-  video.setAttribute('playsinline', '');
-  video.setAttribute('webkit-playsinline', '');
-  if (poster) video.poster = poster;
+async function probeProxy(mediaUrl) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4500);
+  try {
+    const response = await fetch(proxyVideoUrl(mediaUrl, { probe: true }), {
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`proxy probe ${response.status}`);
+    const data = await response.json().catch(() => ({}));
+    if (data?.ok === false) throw new Error('proxy probe rejected');
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-  const fallback = makeVideoFallback(item, mediaUrl, poster);
-  fallback.hidden = true;
-  let failed = false;
+async function tryOfficialEmbed(item, container) {
+  const tweetId = tweetIdOf(item);
+  if (!tweetId) throw new Error('Tweet ID not found');
+  const twttr = await loadXWidgets();
 
-  const showFallback = reason => {
-    if (failed) return;
-    failed = true;
+  const renderPromise = twttr.widgets.createTweet(tweetId, container, {
+    theme: xEmbedTheme(),
+    conversation: 'none',
+    cards: 'visible',
+    align: 'center',
+    dnt: true,
+    lang: 'ja'
+  });
 
+  const result = await Promise.race([
+    Promise.resolve(renderPromise),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('X embed timeout')), 7000))
+  ]);
+  if (!result) throw new Error('X embed unavailable');
+  return result;
+}
+
+async function resolveTweetVideo(shell, item, mediaUrl, poster) {
+  const status = shell.querySelector('.tweet-video-status');
+  const stage = shell.querySelector('.tweet-video-stage');
+  const embed = shell.querySelector('.tweet-official-embed');
+  if (!status || !stage || !embed) return;
+
+  const makeVideo = () => {
+    const video = document.createElement('video');
+    video.className = 'tweet-video';
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = 'metadata';
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    // 方法1。video要素単体で未対応のブラウザーもあるため、index.html側にも
+    // <meta name="referrer" content="no-referrer"> を設定している。
+    video.setAttribute('referrerpolicy', 'no-referrer');
+    if (poster) video.poster = poster;
+    return video;
+  };
+
+  const revealVideo = (video, methodLabel) => {
+    if (!shell.isConnected) return;
+    status.hidden = true;
+    embed.hidden = true;
+    stage.hidden = false;
+    stage.replaceChildren(video, el('span', { class: 'tweet-video-method-badge', text: methodLabel }));
+  };
+
+  const cleanupVideo = video => {
     try { video.pause(); } catch {}
-    video.removeAttribute('src');
-    video.style.display = 'none';
-
-    const detail = fallback.querySelector('.tweet-video-fallback-body span');
-    if (detail && reason) detail.textContent = reason;
-    fallback.hidden = false;
+    try { video.removeAttribute('src'); video.load(); } catch {}
   };
 
   const path = (() => {
@@ -618,41 +829,128 @@ function makeTweetVideo(item, mediaUrl, poster = '') {
     catch { return ''; }
   })();
 
-  if (/\.m3u8$/i.test(path) && !canPlayNativeHls(video)) {
-    showFallback('このブラウザはHLSの直接再生に対応していないため、外部で開きます');
-  } else {
-    video.src = mediaUrl;
-    video.addEventListener('error', () => {
-      showFallback('動画CDNから直接読み込めなかったため、外部プレーヤーへ切り替えます');
-    }, { once: true });
-
-    video.addEventListener('abort', () => {
-      if (video.readyState === 0 && video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) {
-        showFallback('動画ソースを読み込めなかったため、外部プレーヤーへ切り替えます');
+  // 方法1: no-referrerで直接CDN。2回連続失敗後は同一セッション中はスキップ。
+  if (twitterVideoDirectFailures < TWITTER_VIDEO_DIRECT_FAILURE_LIMIT) {
+    updateVideoStatus(status, '動画を準備しています', '方法1：CDNへリファラーなしで接続中…');
+    const directVideo = makeVideo();
+    if (!/\.m3u8$/i.test(path) || canPlayNativeHls(directVideo)) {
+      try {
+        await waitForVideo(directVideo, mediaUrl, { timeout: 2400 });
+        twitterVideoDirectFailures = 0;
+        revealVideo(directVideo, 'CDN直接再生');
+        return;
+      } catch {
+        twitterVideoDirectFailures += 1;
+        cleanupVideo(directVideo);
       }
-    }, { once: true });
+    } else {
+      cleanupVideo(directVideo);
+    }
   }
 
-  shell.append(video, fallback);
+  // 方法2: Vercelバックエンドを同一オリジンの動画プロキシにする。
+  updateVideoStatus(status, '動画を準備しています', '方法2：バックエンドプロキシ経由で接続中…');
+  const proxyVideo = makeVideo();
+  try {
+    await probeProxy(mediaUrl);
+    await waitForVideo(proxyVideo, proxyVideoUrl(mediaUrl), { timeout: 4200 });
+    revealVideo(proxyVideo, 'プロキシ再生');
+    return;
+  } catch {
+    cleanupVideo(proxyVideo);
+  }
+
+  // 方法3: X公式widgets.js。X自身のiframe内で動画を再生する。
+  updateVideoStatus(status, '動画を準備しています', '方法3：X公式埋め込みへ切り替え中…');
+  try {
+    embed.hidden = false;
+    await tryOfficialEmbed(item, embed);
+    if (!shell.isConnected) return;
+    status.hidden = true;
+    stage.hidden = true;
+    embed.hidden = false;
+    return;
+  } catch {
+    embed.replaceChildren();
+    embed.hidden = true;
+  }
+
+  // 3方式とも失敗した時だけ、壊れた<video>は一切表示せず外部再生カードにする。
+  if (!shell.isConnected) return;
+  status.hidden = true;
+  stage.hidden = true;
+  embed.hidden = true;
+  shell.replaceChildren(makeVideoFallback(
+    item,
+    '',
+    poster,
+    'この環境では3つのWeb再生方法を利用できなかったため、Xアプリ側で再生します',
+    { final: true }
+  ));
+}
+
+function makeTweetVideo(item, mediaUrl, poster = '') {
+  const shell = el('div', { class: 'tweet-video-shell tweet-video-resolver' });
+  const status = makeVideoStatus(poster);
+  const stage = el('div', { class: 'tweet-video-stage' });
+  const embed = el('div', { class: 'tweet-official-embed' });
+  stage.hidden = true;
+  embed.hidden = true;
+  shell.append(status, stage, embed);
+
+  // DOMへ載った直後から解決する。例外でも必ず外部再生へ落とす。
+  queueMicrotask(() => {
+    resolveTweetVideo(shell, item, mediaUrl, poster).catch(() => {
+      if (!shell.isConnected) return;
+      shell.replaceChildren(makeVideoFallback(
+        item,
+        '',
+        poster,
+        'Webアプリ内の動画再生を初期化できなかったため、Xアプリ側で再生します',
+        { final: true }
+      ));
+    });
+  });
   return shell;
 }
 
 function makeExternalOnlyVideo(item, poster = '') {
   const shell = el('div', { class: 'tweet-video-shell external-only' });
-  shell.append(makeVideoFallback(
-    item,
-    '',
-    poster,
-    'RSSから動画の直接URLを取得できなかったため、Xで再生します'
-  ));
+  const embed = el('div', { class: 'tweet-official-embed' });
+  const status = makeVideoStatus(poster);
+  updateVideoStatus(status, '動画を準備しています', '直接URLがないため、X公式埋め込みを確認中…');
+  shell.append(status, embed);
+  embed.hidden = true;
+
+  // 直接URLがなくても方法3は使える。公式Embedまで失敗した時だけ外部へ。
+  queueMicrotask(async () => {
+    try {
+      embed.hidden = false;
+      await tryOfficialEmbed(item, embed);
+      if (!shell.isConnected) return;
+      status.hidden = true;
+      embed.hidden = false;
+    } catch {
+      if (!shell.isConnected) return;
+      shell.replaceChildren(makeVideoFallback(
+        item,
+        '',
+        poster,
+        'RSSから直接動画URLを取得できず、X公式埋め込みも利用できなかったため、Xアプリ側で再生します',
+        { final: true }
+      ));
+    }
+  });
   return shell;
 }
 
 function tweetCard(item) {
-  // v2.14.10:
-  // - v2.14.9の写真枚数/重複修正を維持
-  // - RSS内のvideo.twimg.com動画URLを別メディアとして扱う
-  // - 直接URLが無い動画は動画サムネイルからX再生へフォールバック
+  // v2.14.11:
+  // - 方法1: no-referrer付きCDN直接再生
+  // - 方法2: /api/twitter-video-proxy 経由
+  // - 方法3: X公式widgets.js Embed
+  // - すべて失敗時だけXアプリ/ブラウザへ外部再生
+  // - v2.14.9〜10の写真枚数/重複修正は維持
   const clean = cleanDescription(item.rawDescription || item.description);
   const images = tweetImages(item, clean);
   const videos = tweetVideos(item, clean);
