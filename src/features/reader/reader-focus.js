@@ -3,6 +3,39 @@ import { shortDate } from '../../shared/time.js';
 
 const summaryCache = new Map();
 const summaryPromises = new Map();
+const summaryProgress = new WeakMap();
+const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2146';
+const SUMMARY_STORAGE_LIMIT = 96;
+
+function summaryTtl(mode = '') {
+  return mode === 'papers' ? 14 * 24 * 60 * 60 * 1000 : 36 * 60 * 60 * 1000;
+}
+
+function readStoredSummaries() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '{}');
+    const now = Date.now();
+    for (const [key, entry] of Object.entries(raw || {})) {
+      if (!entry?.value || !entry?.ts) continue;
+      const mode = String(entry.mode || '');
+      if (now - Number(entry.ts) > summaryTtl(mode)) continue;
+      summaryCache.set(key, entry.value);
+    }
+  } catch {}
+}
+
+function persistSummary(key, value, mode = '') {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '{}');
+    raw[key] = { value, ts: Date.now(), mode };
+    const entries = Object.entries(raw)
+      .sort((a, b) => Number(b[1]?.ts || 0) - Number(a[1]?.ts || 0))
+      .slice(0, SUMMARY_STORAGE_LIMIT);
+    localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {}
+}
+
+readStoredSummaries();
 
 function stripHtml(value = '') {
   const d = document.createElement('div');
@@ -47,7 +80,7 @@ function itemLabel(item, fallback = 'おすすめ') {
 }
 
 function summaryKey(item, mode = '') {
-  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2144`;
+  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2146`;
 }
 
 function errorMessage(data, status) {
@@ -77,7 +110,9 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
       source: item?.source || item?.feedName,
       category: itemLabel(item),
       mode: activeMode,
-      preferFullText: activeMode === 'papers' || activeMode === 'news' || truncatedTitle,
+      // v2.14.6: 通常ニュース/知識はRSS本文から直接AI要約する。
+      // 全文取得はPDF/論文、またはRSS本文が極端に短い記事だけに限定する。
+      preferFullText: activeMode === 'papers' || (truncatedTitle && description.length < 180),
       forceJapanese,
       allowAi: true,
       fast: activeMode !== 'papers'
@@ -86,7 +121,8 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(errorMessage(data, response.status));
     summaryCache.set(key, data);
-    while (summaryCache.size > 72) summaryCache.delete(summaryCache.keys().next().value);
+    persistSummary(key, data, activeMode);
+    while (summaryCache.size > SUMMARY_STORAGE_LIMIT) summaryCache.delete(summaryCache.keys().next().value);
     return data;
   }).finally(() => {
     if (summaryPromises.get(key) === request) summaryPromises.delete(key);
@@ -197,8 +233,59 @@ function sourceInitialOf(item) {
   return Array.from(sourceNameOf(item).replace(/^www\./i, ''))[0] || 'R';
 }
 
+
+function loadingMarkup() {
+  const wrap = el('div', { class: 'reader-ai-progress', 'data-reader-progress': '1' });
+  const top = el('div', { class: 'reader-ai-progress-top' }, [
+    el('span', { class: 'reader-ai-loading-text', 'data-reader-loading-text': '1', text: '記事情報を整理中' }),
+    el('span', { class: 'reader-ai-progress-value', 'data-reader-progress-value': '1', text: '8%' })
+  ]);
+  const bar = el('span', { class: 'reader-ai-progress-bar', 'data-reader-progress-bar': '1' });
+  bar.style.width = '8%';
+  wrap.append(top, el('div', { class: 'reader-ai-progress-track' }, [bar]));
+  return wrap;
+}
+
+function stopProgress(card) {
+  const state = summaryProgress.get(card);
+  if (!state) return;
+  state.timers.forEach(clearTimeout);
+  summaryProgress.delete(card);
+}
+
+function setProgress(card, value, text) {
+  if (!card?.isConnected) return;
+  const bar = card.querySelector('[data-reader-progress-bar]');
+  const label = card.querySelector('[data-reader-loading-text]');
+  const number = card.querySelector('[data-reader-progress-value]');
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, value))}%`;
+  if (label && text) label.textContent = text;
+  if (number) number.textContent = `${Math.round(value)}%`;
+}
+
+function startProgress(card) {
+  if (!card?.isConnected || summaryProgress.has(card)) return;
+  const steps = [
+    [180, 18, '記事情報を整理中'],
+    [520, 32, 'AIへ送信中'],
+    [1050, 48, 'AIで要点を抽出中'],
+    [1850, 64, 'AIで要約中'],
+    [3000, 76, 'タイトルを調整中'],
+    [4600, 86, '3行に整えています'],
+    [6800, 92, '仕上げ中']
+  ];
+  const timers = steps.map(([delay, value, text]) => setTimeout(() => setProgress(card, value, text), delay));
+  summaryProgress.set(card, { timers });
+}
+
+function completeProgress(card) {
+  stopProgress(card);
+  setProgress(card, 100, '完了');
+}
+
 function setCardSummary(card, item, mode, summary) {
   if (!card?.isConnected) return;
+  completeProgress(card);
   const summaryNode = card.querySelector('[data-reader-summary]');
   const title = card.querySelector('[data-reader-title]');
 
@@ -295,7 +382,7 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   if (summary) {
     renderSummaryBlock(summaryBox, summary);
   } else {
-    summaryBox.append(el('span', { class: 'reader-ai-loading-text', text: 'AI要約を準備しています…' }));
+    summaryBox.append(loadingMarkup());
   }
 
   const content = el('main', { class: 'reader-story-content' }, [title, summaryBox]);
@@ -383,6 +470,7 @@ export function mountFocus(host, {
     onIndexChange?.(index, rows[index]);
     prefetchSummary(rows[index], summaryMode);
     prefetchSummary(rows[index + 1], summaryMode);
+    prefetchSummary(rows[index + 2], summaryMode);
     prefetchSummary(rows[index - 1], summaryMode);
   };
 
@@ -398,6 +486,7 @@ export function mountFocus(host, {
         setCardSummary(card, item, mode, cached);
         return;
       }
+      startProgress(card);
       fetchSummary(item, { mode })
         .then(summary => {
           if (!destroyed) setCardSummary(card, item, mode, summary);
@@ -406,14 +495,16 @@ export function mountFocus(host, {
           if (destroyed || !card.isConnected) return;
           const node = card.querySelector('[data-reader-summary]');
           if (node) {
+            stopProgress(card);
             node.replaceChildren(el('span', { class: 'reader-ai-loading-text', text: '要約を取得できませんでした。タップで再試行' }));
             node.classList.remove('is-loading');
             node.classList.add('is-error');
             node.onclick = () => {
               node.onclick = null;
-              node.replaceChildren(el('span', { class: 'reader-ai-loading-text', text: 'AI要約を再取得しています…' }));
+              node.replaceChildren(loadingMarkup());
               node.classList.remove('is-error');
               node.classList.add('is-loading');
+              startProgress(card);
               fetchSummary(item, { force: true, mode })
                 .then(summary => setCardSummary(card, item, mode, summary))
                 .catch(err => showToast(err.message || error?.message || '要約を取得できませんでした'));
@@ -421,7 +512,7 @@ export function mountFocus(host, {
           }
         });
     });
-  }, { root: feed, rootMargin: '95% 0px 95% 0px', threshold: [0.18] });
+  }, { root: feed, rootMargin: '165% 0px 165% 0px', threshold: [0.18] });
   cards.forEach(card => observer.observe(card));
 
   activeObserver = new IntersectionObserver(entries => {
@@ -456,6 +547,7 @@ export function mountFocus(host, {
       destroyed = true;
       observer?.disconnect();
       activeObserver?.disconnect();
+      cards.forEach(stopProgress);
       detachHorizontal();
       feed.removeEventListener('scrollend', boundaryTouch);
     },
