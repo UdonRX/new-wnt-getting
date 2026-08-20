@@ -96,6 +96,85 @@ function filterModeItems(items, mode) {
   return mode === 'news' ? items.filter(isStraightNewsItem) : items;
 }
 
+function itemTime(item) {
+  const ms = new Date(item?.pubDate || 0).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function itemKey(item) {
+  return String(item?.link || item?.id || item?.title || '').trim().toLowerCase();
+}
+
+/*
+ * v2.14.10
+ * 「All」でニュースを表示する時は、全フィードを一度まとめて時系列ソートしない。
+ *
+ * 1. 登録フィードごとに新しい順へ並べる
+ * 2. そのフィードの最新更新日時が新しい順にフィードを並べる
+ * 3. 各フィードから1件ずつラウンドロビンで取り出す
+ *
+ * これにより更新本数の多いフィードだけが一覧上位を占領するのを防ぎつつ、
+ * 各取得先の「その時点で新しい記事」を均等に混ぜる。
+ */
+function fairNewsOrder(items, feeds, limit = 350) {
+  const feedOrder = new Map(
+    (Array.isArray(feeds) ? feeds : []).map((feed, index) => [String(feed?.name || ''), index])
+  );
+  const grouped = new Map();
+
+  for (const item of filterModeItems(items, 'news')) {
+    const name = String(item?.feedName || item?.source || 'その他');
+    if (!grouped.has(name)) grouped.set(name, []);
+    grouped.get(name).push(item);
+  }
+
+  const buckets = [...grouped.entries()]
+    .map(([name, rows]) => {
+      const sorted = dedupeSort(rows, limit);
+      return {
+        name,
+        rows: sorted,
+        cursor: 0,
+        latest: sorted.length ? itemTime(sorted[0]) : 0,
+        order: feedOrder.has(name) ? feedOrder.get(name) : Number.MAX_SAFE_INTEGER
+      };
+    })
+    .filter(bucket => bucket.rows.length)
+    .sort((a, b) => b.latest - a.latest || a.order - b.order || a.name.localeCompare(b.name, 'ja'));
+
+  const out = [];
+  const seen = new Set();
+  let addedInRound = true;
+
+  while (out.length < limit && addedInRound) {
+    addedInRound = false;
+
+    for (const bucket of buckets) {
+      while (bucket.cursor < bucket.rows.length) {
+        const item = bucket.rows[bucket.cursor++];
+        const key = itemKey(item);
+        if (key && seen.has(key)) continue;
+
+        if (key) seen.add(key);
+        out.push(item);
+        addedInRound = true;
+        break;
+      }
+
+      if (out.length >= limit) break;
+    }
+  }
+
+  return out;
+}
+
+function arrangeModeItems(items, mode, feeds, limit) {
+  if (mode === 'news' && (feeds?.length || 0) > 1) {
+    return fairNewsOrder(items, feeds, limit);
+  }
+  return filterModeItems(dedupeSort(items, limit), mode);
+}
+
 export async function loadReader(mode, {
   force = false,
   onProgress,
@@ -105,6 +184,10 @@ export async function loadReader(mode, {
   preferCache = false
 } = {}) {
   const normalizedTrack = paperTrack === 'creative' ? 'creative' : 'core';
+  const allFeeds = feedsFor(mode);
+  const feeds = selectedFeed && mode !== 'papers'
+    ? allFeeds.filter(feed => feed.name === selectedFeed)
+    : allFeeds;
   const cached = !force ? readReaderCache(mode, normalizedTrack) : null;
 
   let visibleCached = [];
@@ -112,7 +195,13 @@ export async function loadReader(mode, {
     const visibleCachedRaw = selectedFeed && mode !== 'papers'
       ? cached.items.filter(item => item.feedName === selectedFeed)
       : cached.items;
-    visibleCached = filterModeItems(visibleCachedRaw, mode);
+
+    visibleCached = arrangeModeItems(
+      visibleCachedRaw,
+      mode,
+      feeds,
+      mode === 'papers' ? 300 : 350
+    );
 
     if (visibleCached.length) {
       onProgress?.(visibleCached, { cached: true, paperTrack: normalizedTrack });
@@ -124,10 +213,6 @@ export async function loadReader(mode, {
     }
   }
 
-  const allFeeds = feedsFor(mode);
-  const feeds = selectedFeed && mode !== 'papers'
-    ? allFeeds.filter(feed => feed.name === selectedFeed)
-    : allFeeds;
   const collected = [];
   const failures = [];
 
@@ -158,7 +243,10 @@ export async function loadReader(mode, {
         const { feed } = queue.shift();
         try {
           collected.push(...await fetchFeed(feed));
-          onProgress?.(filterModeItems(dedupeSort(collected), mode), { feed: feed.name });
+          onProgress?.(
+            arrangeModeItems(collected, mode, feeds, 350),
+            { feed: feed.name }
+          );
         } catch (err) {
           failures.push({ feed: feed.name, error: err });
         }
@@ -167,9 +255,11 @@ export async function loadReader(mode, {
     await Promise.all(workers);
   }
 
-  let items = filterModeItems(
-    dedupeSort(collected, mode === 'papers' ? 300 : 350),
-    mode
+  let items = arrangeModeItems(
+    collected,
+    mode,
+    feeds,
+    mode === 'papers' ? 300 : 350
   );
 
   if (mode === 'papers') items = await translatePaperTitles(items);
@@ -183,7 +273,12 @@ export async function loadReader(mode, {
     const fallbackRaw = selectedFeed && mode !== 'papers'
       ? cached.items.filter(item => item.feedName === selectedFeed)
       : cached.items;
-    const fallback = filterModeItems(fallbackRaw, mode);
+    const fallback = arrangeModeItems(
+      fallbackRaw,
+      mode,
+      feeds,
+      mode === 'papers' ? 300 : 350
+    );
     if (fallback.length) {
       return { items: fallback, failures, stale: true, paperTrack: normalizedTrack };
     }
