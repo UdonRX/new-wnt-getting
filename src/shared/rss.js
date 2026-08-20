@@ -27,33 +27,45 @@ function safeHttpUrl(value = '') {
   }
 }
 
-function imageFromHtml(value = '') {
+function imageUrlsFromHtml(value = '') {
   const source = String(value || '').trim();
-  if (!source || !/<img\b/i.test(source)) return '';
+  if (!source || !/<img\b/i.test(source)) return [];
+
   try {
     const doc = new DOMParser().parseFromString(source, 'text/html');
-    const images = [...doc.querySelectorAll('img')];
-    for (const image of images) {
-      const candidate = image.getAttribute('src') || image.getAttribute('data-src') || image.getAttribute('data-original');
-      const url = safeHttpUrl(candidate);
-      if (url) return url;
+    const urls = [];
+
+    for (const image of doc.querySelectorAll('img')) {
+      const candidates = [
+        image.getAttribute('src'),
+        image.getAttribute('data-src'),
+        image.getAttribute('data-original'),
+        image.getAttribute('data-lazy-src')
+      ];
+
+      const srcset = image.getAttribute('srcset') || image.getAttribute('data-srcset') || '';
+      if (srcset) {
+        const largest = srcset
+          .split(',')
+          .map(part => part.trim().split(/\s+/)[0])
+          .filter(Boolean)
+          .pop();
+        if (largest) candidates.unshift(largest);
+      }
+
+      for (const candidate of candidates) {
+        const url = safeHttpUrl(candidate);
+        if (url) {
+          urls.push(url);
+          break;
+        }
+      }
     }
-  } catch {}
-  return '';
-}
 
-function itemImage(item, rawDescription = '') {
-  const candidates = [
-    attr(item, ['media\\:content[url]', 'media\\:thumbnail[url]', 'thumbnail[url]'], 'url'),
-    attr(item, ['enclosure[type^="image"][url]', 'enclosure[url]'], 'url'),
-    text(item, ['image > url', 'image'])
-  ];
-
-  for (const candidate of candidates) {
-    const url = safeHttpUrl(candidate);
-    if (url) return url;
+    return [...new Set(urls)];
+  } catch {
+    return [];
   }
-  return imageFromHtml(rawDescription);
 }
 
 function rawDescriptionOf(item) {
@@ -64,6 +76,43 @@ function rawDescriptionOf(item) {
     if (value) return value;
   }
   return '';
+}
+
+function mediaImagesOf(item, rawDescription = '') {
+  const urls = [];
+  const push = value => {
+    const url = safeHttpUrl(value);
+    if (url) urls.push(url);
+  };
+
+  // XML namespace付き要素も確実に拾うため、querySelectorだけに依存しない。
+  for (const node of item.getElementsByTagName('*')) {
+    const name = String(node.nodeName || '').toLowerCase();
+    const local = String(node.localName || '').toLowerCase();
+    const url = node.getAttribute?.('url') || '';
+    const type = String(node.getAttribute?.('type') || '').toLowerCase();
+    const medium = String(node.getAttribute?.('medium') || '').toLowerCase();
+
+    if (
+      name === 'media:content' ||
+      name === 'media:thumbnail' ||
+      local === 'thumbnail' ||
+      (local === 'content' && (medium === 'image' || type.startsWith('image/')))
+    ) {
+      push(url);
+      continue;
+    }
+
+    if (local === 'enclosure' && url) {
+      if (!type || type.startsWith('image/')) push(url);
+    }
+  }
+
+  const imageNodeUrl = text(item, ['image > url', 'image']);
+  push(imageNodeUrl);
+
+  imageUrlsFromHtml(rawDescription).forEach(push);
+  return [...new Set(urls)].slice(0, 12);
 }
 
 function plainText(value = '') {
@@ -99,17 +148,20 @@ export function parseFeed(xmlText, feedName = '') {
     const description = plainText(rawDescription) || title;
     const source = text(item, ['source', 'category']) || feedName;
     const author = text(item, ['dc\\:creator', 'creator', 'author name', 'author']) || source;
-    const image = itemImage(item, rawDescription);
+    const images = mediaImagesOf(item, rawDescription);
 
     return {
       id: `${link || title}-${dateRaw || index}`,
       title,
       link,
       description,
+      // Twitter/Xのように本文HTML内の画像を使う画面向けに元HTMLを保持する。
+      rawDescription,
       source,
       author,
       feedName,
-      image,
+      image: images[0] || '',
+      images,
       pubDate: Number.isNaN(date.getTime()) ? new Date() : date,
       relative: relativeTime(Number.isNaN(date.getTime()) ? Date.now() : date)
     };
