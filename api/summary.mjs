@@ -4,6 +4,33 @@ import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 const MAX_RSS_INPUT = 7200;
 const MAX_AI_INPUT = 30000;
 const MAX_EXTRACT = 180000;
+const FAST_AI_INPUT = 6200;
+const SERVER_CACHE_TTL = 6 * 60 * 60 * 1000;
+const SERVER_CACHE_LIMIT = 120;
+const serverSummaryCache = globalThis.__pdSummaryCache2146 || new Map();
+globalThis.__pdSummaryCache2146 = serverSummaryCache;
+
+function summaryCacheKey({ url, title, description, mode, category, source, fast }) {
+  return [url, title, description.slice(0, 600), mode, category, source, fast ? 'fast' : 'full'].join('::');
+}
+
+function readServerCache(key) {
+  const entry = serverSummaryCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > SERVER_CACHE_TTL) {
+    serverSummaryCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function writeServerCache(key, value) {
+  serverSummaryCache.set(key, { ts: Date.now(), value });
+  while (serverSummaryCache.size > SERVER_CACHE_LIMIT) {
+    serverSummaryCache.delete(serverSummaryCache.keys().next().value);
+  }
+  return value;
+}
 
 function bodyOf(req) {
   if (!req.body) return {};
@@ -272,11 +299,20 @@ export default async function handler(req, res) {
   const url = String(body.url || body.link || '').trim().slice(0, 3000);
   const mode = String(body.mode || '').trim();
   const likelyPdfUrl = /\.pdf(?:$|[?#])/i.test(url);
-  const preferFullText = body.preferFullText === true || mode === 'papers' || likelyPdfUrl;
+  const fastMode = body.fast === true && mode !== 'papers' && !likelyPdfUrl;
+  const requestedFullText = body.preferFullText === true;
+  // v2.14.6: ニュース/知識の通常カードはRSS本文を優先して即AIへ。
+  // 本文取得は論文/PDF、またはRSS情報が短すぎる場合だけにする。
+  const rssTooSparse = description.length < 170;
+  const preferFullText = mode === 'papers' || likelyPdfUrl || (fastMode && rssTooSparse && !!url) || (requestedFullText && !fastMode);
   const forceJapanese = body.forceJapanese === true || looksMostlyEnglish(`${title}\n${description}`);
   const allowAi = forceJapanese ? true : body.allowAi !== false;
 
   if (!title && !description && !url) return res.status(400).json({ error: '要約する情報がありません' });
+
+  const cacheKey = summaryCacheKey({ url, title, description, mode, category, source, fast: fastMode });
+  const serverCached = readServerCache(cacheKey);
+  if (serverCached) return res.status(200).json({ ...serverCached, cache: 'server' });
 
   let inputTitle = title;
   let inputText = description || title;
@@ -301,12 +337,12 @@ export default async function handler(req, res) {
       }
     } catch (error) {
       extractError = String(error?.message || error);
-      console.warn('[summary-v2144] full-text fallback:', extractError, url);
+      console.warn('[summary-v2146] full-text fallback:', extractError, url);
     }
   }
 
   if (!allowAi) {
-    return res.status(200).json(localSummary({
+    const value = localSummary({
       title: inputTitle,
       description: inputText,
       reason: 'client-budget',
@@ -315,8 +351,13 @@ export default async function handler(req, res) {
       mode,
       category,
       source
-    }));
+    });
+    return res.status(200).json(writeServerCache(cacheKey, value));
   }
+
+  const aiInputText = fastMode
+    ? clean(inputText, FAST_AI_INPUT)
+    : clean(inputText, MAX_AI_INPUT);
 
   const prompt = [
     `元タイトル: ${inputTitle || '不明'}`,
@@ -326,7 +367,7 @@ export default async function handler(req, res) {
     `入力種別: ${contentSource === 'pdf' ? 'PDF本文の重要ページ抜粋' : contentSource === 'article' ? 'リンク先本文' : 'RSS本文・抄録'}`,
     '',
     '本文・抄録:',
-    clean(inputText, MAX_AI_INPUT) || inputTitle,
+    aiInputText || inputTitle,
     '',
     '上の情報だけを根拠に、おすすめフィード用の日本語要約をJSONで作成してください。',
     '',
@@ -350,15 +391,15 @@ export default async function handler(req, res) {
     const result = await generateGemini({
       prompt,
       systemInstruction: 'モバイル向けニュース編集者。35文字タイトルと40文字以内の3行要約を、平易で正確な日本語にする。重要な数値・固有名詞は**太字**。省略記号で文を切らない。',
-      maxOutputTokens: 620,
+      maxOutputTokens: fastMode ? 420 : 560,
       responseSchema,
-      timeoutMs: contentSource === 'pdf' ? 22000 : 14000
+      timeoutMs: contentSource === 'pdf' ? 22000 : fastMode ? 9000 : 12500
     });
 
     let parsed;
     try { parsed = JSON.parse(stripFence(result.text)); }
     catch {
-      return res.status(200).json(localSummary({
+      const value = localSummary({
         title: inputTitle,
         description: inputText,
         reason: 'invalid-ai-json',
@@ -367,30 +408,32 @@ export default async function handler(req, res) {
         mode,
         category,
         source
-      }));
+      });
+      return res.status(200).json(writeServerCache(cacheKey, value));
     }
 
     const normalized = normalizeAiSummary(parsed, { title: inputTitle, mode, category, source });
 
-    return res.status(200).json({
+    const value = {
       ...normalized,
       why: '',
       provider: 'gemini',
       model: result.model,
       contentSource,
       extractedLength,
-      aiInputLength: Math.min(String(inputText || '').length, MAX_AI_INPUT),
-      fastPath: contentSource === 'pdf' ? 'pdf-sampled-ai' : contentSource === 'article' ? 'article-sampled-ai' : 'rss-ai',
+      aiInputLength: aiInputText.length,
+      fastPath: contentSource === 'pdf' ? 'pdf-sampled-ai' : contentSource === 'article' ? 'article-sampled-ai' : fastMode ? 'rss-fast-ai' : 'rss-ai',
       fallbackReason: '',
       pdfPageCount,
       pdfUrl,
       extractError,
       resolvedTitle: inputTitle || title,
       limits: { headline: 35, line: 40, tags: 3 }
-    });
+    };
+    return res.status(200).json(writeServerCache(cacheKey, value));
   } catch (err) {
-    console.warn('[summary-v2144] Gemini unavailable, using local summary:', err?.statusCode, err?.message);
-    return res.status(200).json(localSummary({
+    console.warn('[summary-v2146] Gemini unavailable, using local summary:', err?.statusCode, err?.message);
+    const value = localSummary({
       title: inputTitle,
       description: inputText,
       reason: isQuotaError(err) ? 'quota' : 'gemini-unavailable',
@@ -399,6 +442,7 @@ export default async function handler(req, res) {
       mode,
       category,
       source
-    }));
+    });
+    return res.status(200).json(writeServerCache(cacheKey, value));
   }
 }
