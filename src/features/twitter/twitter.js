@@ -244,11 +244,42 @@ function normalizeTweetImageUrl(value = '') {
     const url = new URL(String(value || '').trim(), location.href);
     if (!/^https?:$/.test(url.protocol)) return '';
 
-    // pbs.twimg.com はRSS側で small/thumb が返ることがあるため、表示時だけ高解像度へ。
-    if (url.hostname === 'pbs.twimg.com' && url.pathname.includes('/media/')) {
-      if (url.searchParams.has('name')) url.searchParams.set('name', 'large');
-    }
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname;
+
+    // v2.14.9: Twitter/X投稿の「写真」だけを対象にする。
+    // profile画像・OG画像・動画サムネイル等が混ざると、実際の投稿枚数より多く見えるため除外。
+    const isTweetPhoto =
+      (host === 'pbs.twimg.com' || host.endsWith('.twimg.com')) &&
+      /^\/media\//i.test(path);
+    if (!isTweetPhoto) return '';
+
+    // small/thumb違いは同じ写真なので表示URLはlargeへ寄せる。
+    if (url.searchParams.has('name')) url.searchParams.set('name', 'large');
     return url.href;
+  } catch {
+    return '';
+  }
+}
+
+function tweetImageIdentity(value = '') {
+  try {
+    const url = new URL(String(value || '').trim(), location.href);
+    const host = url.hostname.toLowerCase();
+    if (!(host === 'pbs.twimg.com' || host.endsWith('.twimg.com'))) return '';
+    if (!/^\/media\//i.test(url.pathname)) return '';
+
+    // 同一写真が
+    // /media/ABC.jpg
+    // /media/ABC?format=jpg&name=small
+    // /media/ABC?format=jpg&name=large
+    // のように複数表現されても、画像ID「ABC」で1枚にまとめる。
+    const leaf = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '')
+      .replace(/\.(?:jpe?g|png|webp|gif|avif)$/i, '')
+      .trim()
+      .toLowerCase();
+    if (!leaf) return '';
+    return `twitter-photo:${leaf}`;
   } catch {
     return '';
   }
@@ -282,22 +313,33 @@ function cleanDescription(html) {
 }
 
 function tweetImages(item, clean) {
+  // 本文HTML内の画像を最優先。RSSHubのmedia:thumbnail等には
+  // 同じ写真の別サイズや投稿画像ではないサムネイルが混ざる場合がある。
   const candidates = [
+    ...(Array.isArray(clean?.images) ? clean.images : []),
     ...(Array.isArray(item?.images) ? item.images : []),
-    item?.image,
-    ...(Array.isArray(clean?.images) ? clean.images : [])
+    item?.image
   ];
 
   const seen = new Set();
   const images = [];
   for (const candidate of candidates) {
     const url = normalizeTweetImageUrl(candidate);
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
+    const identity = tweetImageIdentity(url);
+    if (!url || !identity || seen.has(identity)) continue;
+    seen.add(identity);
     images.push(url);
     if (images.length >= 4) break;
   }
   return images;
+}
+
+function syncTweetImageGrid(grid) {
+  if (!grid) return;
+  const count = grid.querySelectorAll('.tweet-image-button').length;
+  grid.classList.remove('count-1', 'count-2', 'count-3', 'count-4');
+  if (count > 0) grid.classList.add(`count-${Math.min(4, count)}`);
+  if (count === 0) grid.remove();
 }
 
 function isRetweet(item, clean) {
@@ -361,10 +403,26 @@ function tweetCard(item) {
 
   if (images.length) {
     const grid = el('div', { class: `tweet-images count-${Math.min(4, images.length)}` });
-    images.forEach((src, index) => {
+    images.forEach(src => {
       const button = el('button', { class: 'tweet-image-button', type: 'button', 'aria-label': '画像を拡大' });
-      button.append(el('img', { src, alt: '投稿画像', loading: 'lazy', decoding: 'async' }));
-      button.onclick = () => openImageViewer(images, index);
+      const image = el('img', { src, alt: '投稿画像', loading: 'lazy', decoding: 'async' });
+
+      // RSSに壊れた画像候補が混ざっていても「?」の壊れ画像を残さない。
+      image.addEventListener('error', () => {
+        button.remove();
+        syncTweetImageGrid(grid);
+      }, { once: true });
+
+      button.append(image);
+      button.onclick = () => {
+        const visibleImages = [...grid.querySelectorAll('.tweet-image-button img')]
+          .filter(img => img.complete && img.naturalWidth > 0)
+          .map(img => img.currentSrc || img.src)
+          .filter(Boolean);
+        const current = image.currentSrc || image.src;
+        const index = Math.max(0, visibleImages.indexOf(current));
+        if (visibleImages.length) openImageViewer(visibleImages, index);
+      };
       grid.append(button);
     });
     card.append(grid);
