@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
+  <meta name="referrer" content="no-referrer" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
   <meta name="theme-color" content="#090b0e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -11,17 +12,18 @@
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <title>Personal Dashboard V2</title>
 
-  <!-- v2.14.15: queryを付け、iPhone PWAの旧CSS混在を避ける -->
-  <link rel="stylesheet" href="/src/styles/tokens.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/base.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/navigation.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/screens.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/v2141.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/v21410.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/v21411.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/v21412.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/v21413.css?v=21415" />
-  <link rel="stylesheet" href="/src/styles/v21415.css?v=21415" />
+  <!-- v2.14.16: queryを付け、iPhone PWAの旧CSS混在を避ける -->
+  <link rel="stylesheet" href="/src/styles/tokens.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/base.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/navigation.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/screens.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/v2141.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/v21410.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/v21411.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/v21412.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/v21413.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/v21415.css?v=21416" />
+  <link rel="stylesheet" href="/src/styles/v21416.css?v=21416" />
 </head>
 <body>
   <div id="edge-frame" aria-hidden="true"></div>
@@ -34,13 +36,13 @@
 
   <script>
     /*
-     * v2.14.15 startup watchdog.
+     * v2.14.16 startup watchdog.
      * main.jsのmodule graphが起動しなかった場合、黒画面のまま放置せず、
      * 旧Service Worker/cacheを一度だけ自動クリアして再読込する。
      */
     (() => {
-      const BUILD = '21415';
-      const RECOVERY_KEY = 'pdv2:startup-recovery:21415';
+      const BUILD = '21416';
+      const RECOVERY_KEY = 'pdv2:startup-recovery:21416';
       let capturedError = '';
 
       const rememberError = value => {
@@ -104,6 +106,6 @@
   </script>
 
   <!-- Reader補助モジュールはここでは直接読み込まない。main.jsがReader表示時に遅延読込する。 -->
-  <script type="module" src="/src/main.js?v=21415"></script>
+  <script type="module" src="/src/main.js?v=21416"></script>
 </body>
 </html>
