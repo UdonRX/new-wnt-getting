@@ -1,8 +1,8 @@
-const CACHE_NAME = 'personal-dashboard-v2-14-17';
+const CACHE_NAME = 'personal-dashboard-v2-14-18';
 const STATIC_FETCH_TIMEOUT_MS = 5500;
 
 /*
- * v2.14.17
+ * v2.14.18
  * Reader / SNS の on-demand module graph を PWA キャッシュへ明示的に含める。
  * 存在しないファイルが1つあっても Promise.allSettled で install 自体は成功する。
  */
@@ -72,7 +72,7 @@ async function cacheStatic(cache, request, response) {
   if (!response?.ok) return;
   try { await cache.put(request, response.clone()); } catch (_) {}
 
-  // ?v=21417 付きとクエリ無しのどちらからも復旧できるよう canonical も保存。
+  // ?v=21418 付きとクエリ無しのどちらからも復旧できるよう canonical も保存。
   const canonical = canonicalRequest(request);
   if (canonical) {
     try { await cache.put(canonical, response.clone()); } catch (_) {}
@@ -113,7 +113,7 @@ self.addEventListener('message', event => {
 });
 
 async function cachedFallback(request) {
-  // 動的 import の ?v=21417 と precache のクエリ無しURLを同一視する。
+  // 動的 import の ?v=21418 と precache のクエリ無しURLを同一視する。
   const direct = await caches.match(request, { ignoreSearch: true });
   if (direct) return direct;
 
