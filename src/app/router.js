@@ -39,7 +39,7 @@ export function renderNav(onNavigate) {
       class: `nav-item ${state.screen === key ? 'active' : ''}`,
       type: 'button',
       'aria-label': label,
-      onclick: () => onNavigate(key)
+      onclick: () => onNavigate(key, { source: 'bottom-nav' })
     });
     button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${iconPath(icon)}</svg><span>${label}</span>`;
     nav.append(button);
