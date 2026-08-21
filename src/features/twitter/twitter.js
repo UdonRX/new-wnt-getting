@@ -246,20 +246,63 @@ function normalizeTweetImageUrl(value = '') {
 
     const host = url.hostname.toLowerCase();
     const path = url.pathname;
-
-    // v2.14.9: Twitter/X投稿の「写真」だけを対象にする。
-    // profile画像・OG画像・動画サムネイル等が混ざると、実際の投稿枚数より多く見えるため除外。
     const isTweetPhoto =
       (host === 'pbs.twimg.com' || host.endsWith('.twimg.com')) &&
       /^\/media\//i.test(path);
     if (!isTweetPhoto) return '';
 
-    // small/thumb違いは同じ写真なので表示URLはlargeへ寄せる。
     if (url.searchParams.has('name')) url.searchParams.set('name', 'large');
     return url.href;
   } catch {
     return '';
   }
+}
+
+function normalizeProfileImageUrl(value = '') {
+  try {
+    const url = new URL(String(value || '').trim(), location.href);
+    if (!/^https?:$/.test(url.protocol)) return '';
+    const host = url.hostname.toLowerCase();
+    if (!(host === 'pbs.twimg.com' || host.endsWith('.twimg.com'))) return '';
+    if (!/^\/profile_images\//i.test(url.pathname)) return '';
+    url.searchParams.delete('name');
+    return url.href.replace(/_(?:normal|bigger|mini)(?=\.[a-z0-9]+(?:$|\?))/i, '_200x200');
+  } catch {
+    return '';
+  }
+}
+
+function youtubeVideoIdFromUrl(value = '') {
+  try {
+    const url = new URL(String(value || '').trim(), location.href);
+    const host = url.hostname.replace(/^www\./, '').toLowerCase();
+    if (host === 'youtu.be') {
+      const id = url.pathname.split('/').filter(Boolean)[0] || '';
+      return /^[A-Za-z0-9_-]{6,20}$/.test(id) ? id : '';
+    }
+    if (host !== 'youtube.com' && host !== 'm.youtube.com' && host !== 'music.youtube.com') return '';
+    if (url.pathname === '/watch') {
+      const id = url.searchParams.get('v') || '';
+      return /^[A-Za-z0-9_-]{6,20}$/.test(id) ? id : '';
+    }
+    const match = url.pathname.match(/^\/(?:shorts|live|embed)\/([A-Za-z0-9_-]{6,20})/i);
+    return match?.[1] || '';
+  } catch {
+    return '';
+  }
+}
+
+function nestedMarkupSources(html = '') {
+  const sources = [];
+  let current = String(html || '').trim();
+  for (let depth = 0; depth < 3 && current; depth += 1) {
+    if (!sources.includes(current)) sources.push(current);
+    const doc = new DOMParser().parseFromString(`<div>${current}</div>`, 'text/html');
+    const decoded = String(doc.body?.textContent || '').trim();
+    if (!decoded || decoded === current || !/<(?:img|video|source|a|blockquote)\b/i.test(decoded)) break;
+    current = decoded;
+  }
+  return sources;
 }
 
 function tweetImageIdentity(value = '') {
@@ -269,11 +312,6 @@ function tweetImageIdentity(value = '') {
     if (!(host === 'pbs.twimg.com' || host.endsWith('.twimg.com'))) return '';
     if (!/^\/media\//i.test(url.pathname)) return '';
 
-    // 同一写真が
-    // /media/ABC.jpg
-    // /media/ABC?format=jpg&name=small
-    // /media/ABC?format=jpg&name=large
-    // のように複数表現されても、画像ID「ABC」で1枚にまとめる。
     const leaf = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || '')
       .replace(/\.(?:jpe?g|png|webp|gif|avif)$/i, '')
       .trim()
@@ -339,8 +377,6 @@ function videoVariantScore(value = '') {
     const resolution = path.match(/\/vid\/(?:[^/]+\/)?(\d+)x(\d+)\//i);
     const area = resolution ? Number(resolution[1]) * Number(resolution[2]) : 0;
 
-    // MP4を第一候補。iPhone/SafariはHLSも直接再生できるが、
-    // MP4の方が他ブラウザでもそのまま扱いやすい。
     if (/\.mp4$/i.test(path)) return 1_000_000_000 + area;
     if (/\.m3u8$/i.test(path)) return 500_000_000 + area;
     if (/\.webm$/i.test(path)) return 300_000_000 + area;
@@ -369,62 +405,75 @@ function normalizeTweetVideoPosterUrl(value = '') {
 }
 
 function cleanDescription(html) {
-  const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
+  const sources = nestedMarkupSources(html);
+  const images = [];
+  const videos = [];
+  const videoPosters = [];
+  const links = [];
+  const avatars = [];
+  const youtubeIds = [];
+  let visibleText = '';
 
-  const videos = [
-    ...[...doc.querySelectorAll('video[src]')].map(node => node.getAttribute('src')),
-    ...[...doc.querySelectorAll('video source[src], source[src]')].map(node => node.getAttribute('src')),
-    ...[...doc.querySelectorAll('a[href]')].map(node => node.getAttribute('href'))
-  ]
-    .map(normalizeTweetVideoUrl)
-    .filter(Boolean);
+  sources.forEach((source, sourceIndex) => {
+    const doc = new DOMParser().parseFromString(`<div>${source || ''}</div>`, 'text/html');
 
-  const videoPosters = [
-    ...[...doc.querySelectorAll('video[poster]')].map(node => node.getAttribute('poster')),
-    ...[...doc.querySelectorAll('img')].flatMap(image => [
-      image.getAttribute('src'),
-      image.getAttribute('data-src'),
-      image.getAttribute('data-original'),
-      image.getAttribute('data-lazy-src')
-    ])
-  ]
-    .map(normalizeTweetVideoPosterUrl)
-    .filter(Boolean);
+    for (const video of doc.querySelectorAll('video')) {
+      videos.push(video.getAttribute('src'));
+      videoPosters.push(video.getAttribute('poster'));
+      video.querySelectorAll('source[src]').forEach(node => videos.push(node.getAttribute('src')));
+    }
+    doc.querySelectorAll('source[src]').forEach(node => videos.push(node.getAttribute('src')));
 
-  doc.querySelectorAll('script,style,iframe,video,source').forEach(node => node.remove());
+    for (const image of doc.querySelectorAll('img')) {
+      const candidates = [
+        image.getAttribute('src'),
+        image.getAttribute('data-src'),
+        image.getAttribute('data-original'),
+        image.getAttribute('data-lazy-src')
+      ].filter(Boolean);
 
-  const images = [...doc.querySelectorAll('img')]
-    .flatMap(image => [
-      image.getAttribute('src'),
-      image.getAttribute('data-src'),
-      image.getAttribute('data-original'),
-      image.getAttribute('data-lazy-src')
-    ])
-    .map(normalizeTweetImageUrl)
-    .filter(Boolean)
-    .filter(src => /twimg\.com|pbs\.twimg|twitter\.com/i.test(src));
+      for (const candidate of candidates) {
+        const avatar = normalizeProfileImageUrl(candidate);
+        if (avatar) avatars.push(avatar);
 
-  const links = [...doc.querySelectorAll('a[href]')]
-    .map(anchor => anchor.href)
-    .filter(href =>
-      /^https?:/i.test(href) &&
-      !isTwitterUrl(href) &&
-      !normalizeTweetVideoUrl(href)
-    );
+        const poster = normalizeTweetVideoPosterUrl(candidate);
+        if (poster) videoPosters.push(poster);
 
-  doc.querySelectorAll('img').forEach(node => node.remove());
+        const photo = normalizeTweetImageUrl(candidate);
+        if (photo) images.push(photo);
+      }
+    }
+
+    for (const anchor of doc.querySelectorAll('a[href]')) {
+      const href = anchor.href || anchor.getAttribute('href') || '';
+      const yt = youtubeVideoIdFromUrl(href);
+      if (yt) youtubeIds.push(yt);
+      if (normalizeTweetVideoUrl(href)) videos.push(href);
+      if (/^https?:/i.test(href) && !isTwitterUrl(href) && !normalizeTweetVideoUrl(href)) links.push(href);
+    }
+
+    const sourceText = (doc.body?.textContent || '').replace(/\s+/g, ' ').trim();
+    if (sourceIndex === 0) visibleText = sourceText;
+
+    for (const match of sourceText.matchAll(/https?:\/\/[^\s<]+/gi)) {
+      const raw = match[0].replace(/[),.!?。、「」]+$/, '');
+      const yt = youtubeVideoIdFromUrl(raw);
+      if (yt) youtubeIds.push(yt);
+    }
+  });
+
   return {
-    text: (doc.body.textContent || '').replace(/\s+/g, ' ').trim(),
-    images: [...new Set(images)].slice(0, 4),
-    videos: [...new Set(videos)].slice(0, 12),
-    videoPosters: [...new Set(videoPosters)].slice(0, 12),
-    links: [...new Set(links)]
+    text: visibleText,
+    images: [...new Set(images)].slice(0, 8),
+    videos: [...new Set(videos.map(normalizeTweetVideoUrl).filter(Boolean))].slice(0, 12),
+    videoPosters: [...new Set(videoPosters.map(normalizeTweetVideoPosterUrl).filter(Boolean))].slice(0, 12),
+    links: [...new Set(links)],
+    avatar: [...new Set(avatars)][0] || '',
+    youtubeIds: [...new Set(youtubeIds)].slice(0, 3)
   };
 }
 
 function tweetImages(item, clean) {
-  // 本文HTML内の画像を最優先。RSSHubのmedia:thumbnail等には
-  // 同じ写真の別サイズや投稿画像ではないサムネイルが混ざる場合がある。
   const candidates = [
     ...(Array.isArray(clean?.images) ? clean.images : []),
     ...(Array.isArray(item?.images) ? item.images : []),
@@ -451,8 +500,6 @@ function tweetVideos(item, clean) {
     item?.video
   ];
 
-  // Xは同じ動画を複数解像度のMP4 + HLSで返すことがある。
-  // 動画IDごとに、インライン再生しやすい最大解像度MP4を優先して1本へ集約。
   const bestByVideo = new Map();
 
   for (const candidate of candidates) {
@@ -522,6 +569,61 @@ function tweetAuthor(item, clean) {
     if (handle?.[1]) return handle[1];
   }
   return item?.feedName || item?.source || 'Twitter / X';
+}
+
+function makeTweetAuthorAvatar(author, avatarUrl = '') {
+  const fallback = String(author).replace(/^@/, '').slice(0, 1).toUpperCase() || 'X';
+  const avatar = el('div', { class: 'tweet-author-avatar', text: avatarUrl ? '' : fallback });
+
+  if (avatarUrl) {
+    const image = el('img', {
+      class: 'tweet-author-avatar-image',
+      src: avatarUrl,
+      alt: '',
+      loading: 'lazy',
+      decoding: 'async',
+      referrerpolicy: 'no-referrer'
+    });
+    image.addEventListener('error', () => {
+      image.remove();
+      avatar.textContent = fallback;
+    }, { once: true });
+    avatar.append(image);
+  }
+
+  return avatar;
+}
+
+function makeTweetYouTubeCard(videoId) {
+  const card = el('div', { class: 'tweet-youtube-card' });
+  const launcher = el('button', {
+    class: 'tweet-youtube-launcher',
+    type: 'button',
+    'aria-label': 'YouTube動画を再生'
+  });
+  launcher.append(el('img', {
+    src: `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`,
+    alt: '',
+    loading: 'lazy',
+    decoding: 'async'
+  }));
+
+  launcher.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const iframe = el('iframe', {
+      class: 'tweet-youtube-frame',
+      src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?autoplay=1&playsinline=1&rel=0`,
+      title: 'YouTube video player',
+      allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share',
+      allowfullscreen: 'true',
+      referrerpolicy: 'strict-origin-when-cross-origin'
+    });
+    card.replaceChildren(iframe);
+  });
+
+  card.append(launcher);
+  return card;
 }
 
 let xWidgetsPromise = null;
@@ -747,15 +849,11 @@ function cleanupVideo(video) {
 }
 
 function startVideoPlayback(video) {
-  // 再生アイコンを押した操作から始まった処理なので、そのまま再生開始を試す。
-  // iOS側の自動再生制限で拒否された場合も、表示したネイティブcontrolsからすぐ再生できる。
   const playResult = video.play?.();
   if (playResult?.catch) playResult.catch(() => {});
 }
 
 function openTweetExternally(item) {
-  // Universal Linkを同じ画面で開く。XアプリがインストールされていればiOS側で
-  // アプリへ引き渡され、未インストール時はブラウザ版Xへフォールバックする。
   window.location.assign(canonicalPostUrl(item));
 }
 
@@ -783,7 +881,6 @@ async function resolveTweetVideoFromClick(shell, item, mediaUrl, poster) {
     catch { return ''; }
   })();
 
-  // 方法1: no-referrerを付けてvideo.twimg.comから直接再生。
   const directVideo = makePlayableVideo(poster);
   if (!/\.m3u8$/i.test(path) || canPlayNativeHls(directVideo)) {
     try {
@@ -793,7 +890,6 @@ async function resolveTweetVideoFromClick(shell, item, mediaUrl, poster) {
   }
   cleanupVideo(directVideo);
 
-  // 方法2: Vercelの動画プロキシ経由。
   const proxyVideo = makePlayableVideo(poster);
   try {
     await probeProxy(mediaUrl);
@@ -802,7 +898,6 @@ async function resolveTweetVideoFromClick(shell, item, mediaUrl, poster) {
   } catch {}
   cleanupVideo(proxyVideo);
 
-  // 方法3: X公式Embed。判定中は元のサムネイル+再生アイコンを残す。
   try {
     embed.hidden = false;
     embed.classList.add('tweet-official-embed-probing');
@@ -819,7 +914,6 @@ async function resolveTweetVideoFromClick(shell, item, mediaUrl, poster) {
     embed.classList.remove('tweet-official-embed-probing');
   }
 
-  // 方法4: 1〜3が全て失敗したら説明カードを挟まず、そのままXへ。
   if (shell.isConnected) openTweetExternally(item);
 }
 
@@ -857,7 +951,6 @@ function makeExternalOnlyVideo(item, poster = '') {
     if (launcher.disabled) return;
     setLauncherResolving(launcher, true);
 
-    // RSSにvideo.twimg.comのURLが無い場合は方法1/2を実行できないため、方法3から開始。
     try {
       embed.hidden = false;
       embed.classList.add('tweet-official-embed-probing');
@@ -878,11 +971,6 @@ function makeExternalOnlyVideo(item, poster = '') {
 }
 
 function tweetCard(item) {
-  // v2.14.12:
-  // - 初期表示は動画サムネイル+中央再生アイコンのみ
-  // - タップ後に 方法1(no-referrer) → 方法2(proxy) → 方法3(X Embed) の順で試す
-  // - すべて失敗時は説明カードを出さず、そのままXアプリ/ブラウザへ遷移
-  // - v2.14.9〜10の写真枚数/重複修正は維持
   const clean = cleanDescription(item.rawDescription || item.description);
   const images = tweetImages(item, clean);
   const videos = tweetVideos(item, clean);
@@ -894,7 +982,7 @@ function tweetCard(item) {
   const card = el('article', { class: 'tweet-card' });
   const author = tweetAuthor(item, clean);
   card.append(el('div', { class: 'tweet-author-row' }, [
-    el('div', { class: 'tweet-author-avatar', text: String(author).replace(/^@/, '').slice(0, 1).toUpperCase() || 'X' }),
+    makeTweetAuthorAvatar(author, clean.avatar),
     el('strong', { class: 'tweet-author-name', text: author })
   ]));
 
@@ -919,7 +1007,6 @@ function tweetCard(item) {
     });
     card.append(stack);
   } else if (videoPosters.length) {
-    // RSSHubが動画サムネイルだけ返し、video.twimg.comの直接URLを返さないケース。
     card.append(makeExternalOnlyVideo(item, videoPosters[0]));
   }
 
@@ -929,7 +1016,6 @@ function tweetCard(item) {
       const button = el('button', { class: 'tweet-image-button', type: 'button', 'aria-label': '画像を拡大' });
       const image = el('img', { src, alt: '投稿画像', loading: 'lazy', decoding: 'async' });
 
-      // RSSに壊れた画像候補が混ざっていても「?」の壊れ画像を残さない。
       image.addEventListener('error', () => {
         button.remove();
         syncTweetImageGrid(grid);
@@ -950,9 +1036,16 @@ function tweetCard(item) {
     card.append(grid);
   }
 
+  if (clean.youtubeIds?.length) {
+    const youtubeStack = el('div', { class: 'tweet-youtube-stack' });
+    clean.youtubeIds.forEach(videoId => youtubeStack.append(makeTweetYouTubeCard(videoId)));
+    card.append(youtubeStack);
+  }
+
   const extra = [...new Set(clean.links)]
     .filter(url => !clean.text.includes(url))
-    .filter(url => !normalizeTweetVideoUrl(url));
+    .filter(url => !normalizeTweetVideoUrl(url))
+    .filter(url => !youtubeVideoIdFromUrl(url));
   if (extra.length) {
     const links = el('div', { class: 'tweet-external-links' });
     extra.forEach(url => links.append(el('a', {
