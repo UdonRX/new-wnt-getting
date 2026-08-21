@@ -1,14 +1,11 @@
-/*
- * v2.10 bottom navigation
- * iPhone のホームインジケータ用 safe-area は残しつつ、
- * ナビ本体は document のスクロール/ゴム引っ張りから独立させる。
- */
+/* Personal Dashboard v2.15.0 — Bottom navigation */
 :root {
-  --nav-height: 46px;
+  --nav-height: 58px;
+  --nav-total: calc(var(--nav-height) + env(safe-area-inset-bottom));
 }
 
 #app-main {
-  padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom) + 14px);
+  padding-bottom: calc(var(--nav-total) + 16px);
 }
 
 .bottom-nav {
@@ -19,20 +16,14 @@
   top: auto !important;
   bottom: 0 !important;
   inset-inline: 0 !important;
-  min-height: calc(var(--nav-height) + env(safe-area-inset-bottom));
-  padding:
-    0
-    max(4px, env(safe-area-inset-right))
-    max(1px, env(safe-area-inset-bottom))
-    max(4px, env(safe-area-inset-left));
+  min-height: var(--nav-total);
+  padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left));
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
   background: #0c1014;
-  border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
-  box-shadow: 0 -7px 18px rgba(0,0,0,.12);
-
-  /* iOS Safari/PWAでoverscroll時にfixed要素が一緒に浮くのを抑える */
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  box-shadow: 0 -8px 22px rgba(0,0,0,.16);
   transform: translate3d(0, 0, 0) !important;
   -webkit-transform: translate3d(0, 0, 0) !important;
   backface-visibility: hidden;
@@ -43,25 +34,23 @@
 .nav-item {
   position: relative;
   min-width: 0;
-  min-height: 44px;
-  padding: 1px 2px 0;
+  min-height: var(--nav-height);
+  padding: 5px 2px 1px;
   background: transparent;
   color: var(--muted-2);
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 0;
+  gap: 3px;
   cursor: pointer;
   transition: color .16s ease, transform .12s ease;
 }
 
-.nav-item:active {
-  transform: scale(.94);
-}
+.nav-item:active { transform: scale(.94); }
 
 .nav-item svg {
-  width: 19px;
-  height: 19px;
+  width: 20px;
+  height: 20px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.85;
@@ -80,23 +69,5 @@
   letter-spacing: .01em;
 }
 
-.nav-item.active {
-  color: var(--feature-color);
-}
-
-.nav-item.active::before {
-  content: "";
-  position: absolute;
-  top: -1px;
-  width: 22px;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--feature-color);
-  opacity: .88;
-}
-
-/* 縦方向のbounceを可能な範囲でapp内に閉じ込める。 */
-html,
-body {
-  overscroll-behavior-y: none;
-}
+.nav-item.active { color: var(--feature-color); }
+html, body { overscroll-behavior-y: none; }
