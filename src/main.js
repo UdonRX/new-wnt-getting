@@ -2,8 +2,9 @@ import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
 /*
- * Personal Dashboard v2.14.16
+ * Personal Dashboard v2.14.17
  *
+ * Reader quota/UI/request gating is installed before main.js from index.html.
  * v2.14.15 で導入した feature isolation は維持しつつ、
  * Reader / SNS をタップした時に「動的 import 待ちの空画面」にならないよう修正。
  *
@@ -14,7 +15,7 @@ import { state, update } from './app/store.js';
  * - 失敗時は必ず画面上に再試行ボタンを出す。
  */
 
-const BUILD = '21416';
+const BUILD = '21417';
 const root = document.getElementById('app-main');
 let renderSerial = 0;
 
