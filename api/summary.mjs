@@ -1,36 +1,29 @@
 import { generateGemini } from '../lib/gemini.mjs';
 import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 
-const MAX_RSS_INPUT = 7200;
-const MAX_AI_INPUT = 30000;
-const MAX_EXTRACT = 180000;
-const FAST_AI_INPUT = 6200;
-const SERVER_CACHE_TTL = 6 * 60 * 60 * 1000;
-const SERVER_CACHE_LIMIT = 120;
-const serverSummaryCache = globalThis.__pdSummaryCache2146 || new Map();
-globalThis.__pdSummaryCache2146 = serverSummaryCache;
+/*
+ * Personal Dashboard v2.14.17 — fast / quota-safe Reader summary
+ *
+ * Goals:
+ * - Gemini 429 / quota / timeout must never be shown as a Reader error.
+ * - News / knowledge summarize RSS text directly for speed.
+ * - Full article/PDF extraction is reserved for papers or explicitly requested short RSS.
+ * - Warm-instance cache + in-flight de-duplication avoid duplicate Gemini calls.
+ * - If Gemini is unavailable, return HTTP 200 with a readable local fallback.
+ */
 
-function summaryCacheKey({ url, title, description, mode, category, source, fast }) {
-  return [url, title, description.slice(0, 600), mode, category, source, fast ? 'fast' : 'full'].join('::');
-}
+const FAST_INPUT_LIMIT = 5200;
+const PAPER_INPUT_LIMIT = 15000;
+const EXTRACT_TEXT_LIMIT = 55000;
+const CACHE_LIMIT = 180;
+const NEWS_CACHE_TTL = 6 * 60 * 60 * 1000;
+const PAPER_CACHE_TTL = 24 * 60 * 60 * 1000;
+const GEMINI_QUOTA_BLOCK_MS = 60 * 60 * 1000;
+const GEMINI_ERROR_BLOCK_MS = 2 * 60 * 1000;
 
-function readServerCache(key) {
-  const entry = serverSummaryCache.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > SERVER_CACHE_TTL) {
-    serverSummaryCache.delete(key);
-    return null;
-  }
-  return entry.value;
-}
-
-function writeServerCache(key, value) {
-  serverSummaryCache.set(key, { ts: Date.now(), value });
-  while (serverSummaryCache.size > SERVER_CACHE_LIMIT) {
-    serverSummaryCache.delete(serverSummaryCache.keys().next().value);
-  }
-  return value;
-}
+const memoryCache = new Map();
+const inFlight = new Map();
+let geminiBlockedUntil = 0;
 
 function bodyOf(req) {
   if (!req.body) return {};
@@ -40,82 +33,42 @@ function bodyOf(req) {
   return req.body;
 }
 
-function clean(value, max = MAX_RSS_INPUT) {
+function clean(value, max = FAST_INPUT_LIMIT) {
   return String(value || '')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max);
 }
 
-function stripFence(value) {
-  return String(value || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+function stripFence(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
 }
 
 function stripMarkdown(value = '') {
   return String(value || '').replace(/\*\*/g, '').trim();
 }
 
-function visibleLength(value = '') {
-  return Array.from(stripMarkdown(value)).length;
-}
-
-function clampMarkdown(value = '', maxVisible = 40) {
-  const source = clean(value, 2400).replace(/\*{3,}/g, '**');
-  let out = '';
-  let visible = 0;
-  let boldOpen = false;
-  for (let i = 0; i < source.length && visible < maxVisible;) {
-    if (source.startsWith('**', i)) {
-      out += '**';
-      boldOpen = !boldOpen;
-      i += 2;
-      continue;
-    }
-    const code = source.codePointAt(i);
-    const ch = String.fromCodePoint(code);
-    out += ch;
-    visible += 1;
-    i += ch.length;
-  }
-  if (boldOpen) out += '**';
-  return out.replace(/\*\*\s*\*\*/g, '').trim();
-}
-
-function clampPlain(value = '', maxVisible = 40) {
-  return Array.from(stripMarkdown(clean(value, 2400))).slice(0, maxVisible).join('').trim();
-}
-
-function emphasizeNumbers(value = '') {
-  return String(value || '').replace(/(?<!\*)([0-9０-９]+(?:[.,．，][0-9０-９]+)?(?:%|％|倍|件|人|年|円|ドル|万|億|兆|℃|度|nm|mm|cm|km|GB|TB|W|kW|MW|GW)?)(?!\*)/g, '**$1**');
-}
-
 function normalizeTag(value = '') {
-  const raw = stripMarkdown(clean(value, 80)).replace(/^#+/, '').replace(/[\s　]+/g, '');
+  const raw = stripMarkdown(clean(value, 60)).replace(/^#+/, '').replace(/[\s　]+/g, '');
   return raw ? `#${raw}` : '';
 }
 
 function categoryTag(mode = '', category = '') {
-  const value = String(category || '').trim();
-  if (value) return normalizeTag(value);
-  if (mode === 'news') return '#最新ニュース';
-  if (mode === 'knowledge') return '#専門知識';
+  if (String(category || '').trim()) return normalizeTag(category);
   if (mode === 'papers') return '#研究';
-  return '#おすすめ';
-}
-
-function splitSentences(text = '') {
-  const normalized = clean(text, MAX_AI_INPUT);
-  if (!normalized) return [];
-  return normalized
-    .split(/(?<=[。！？!?])\s+|(?:\n+)|(?<=。)(?=[^」』])/) 
-    .map(v => v.trim())
-    .filter(v => v.length >= 8)
-    .slice(0, 30);
+  if (mode === 'knowledge') return '#専門知識';
+  return '#最新ニュース';
 }
 
 function looksMostlyEnglish(value = '') {
@@ -125,19 +78,79 @@ function looksMostlyEnglish(value = '') {
   return latin >= 24 && latin > ja * 1.4;
 }
 
-function localSummary({ title, description, reason = 'local', forceJapanese = false, contentSource = 'rss', mode = '', category = '', source = '' }) {
+function sentenceCandidates(value = '') {
+  const text = clean(value, PAPER_INPUT_LIMIT);
+  if (!text) return [];
+  const rows = text.match(/[^。！？!?]+[。！？!?]?/g) || [text];
+  return rows
+    .map(row => row.trim())
+    .filter(row => row.length >= 5)
+    .slice(0, 24);
+}
+
+function naturalClamp(value = '', max = 40) {
+  let text = clean(stripMarkdown(value), 600).replace(/^[・●\-–—\s]+/, '').trim();
+  if (!text) return '';
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+
+  const head = chars.slice(0, max).join('');
+  const preferred = [];
+  const patterns = [
+    /[。！？!?]/g,
+    /[、，,；;：:]/g,
+    /(?:ため|ので|一方|ただし|しかし|さらに|また|では|には|から|まで|より|は|が|を|で|に|へ|も|と)/g
+  ];
+
+  patterns.forEach((pattern, priority) => {
+    for (const match of head.matchAll(pattern)) {
+      const index = match.index + match[0].length;
+      if (index < Math.floor(max * .55)) continue;
+      preferred.push({ index, score: 100 - priority * 20 + index / max });
+    }
+  });
+
+  preferred.sort((a, b) => b.score - a.score);
+  const cut = preferred[0]?.index || max;
+  text = Array.from(head).slice(0, cut).join('').replace(/[、，,；;：:\s]+$/g, '').trim();
+  if (text && !/[。！？!?]$/.test(text)) text += '。';
+  return text;
+}
+
+function emphasizeNumbers(value = '') {
+  return String(value || '').replace(
+    /(?<!\*)([0-9０-９]+(?:[.,．，][0-9０-９]+)?(?:%|％|倍|件|人|年|円|ドル|万|億|兆|℃|度|nm|mm|cm|km|GB|TB|W|kW|MW|GW)?)(?!\*)/g,
+    '**$1**'
+  );
+}
+
+function localSummary({
+  title,
+  description,
+  reason = 'local',
+  forceJapanese = false,
+  contentSource = 'rss',
+  mode = '',
+  category = '',
+  source = ''
+}) {
+  const tags = [categoryTag(mode, category), source ? normalizeTag(source) : ''].filter(Boolean).slice(0, 3);
+  const titleText = clean(title, 500) || '記事のポイント';
+
   if (forceJapanese && looksMostlyEnglish(`${title}\n${description}`)) {
-    const tags = [categoryTag(mode, category), source ? normalizeTag(source) : ''].filter(Boolean).slice(0, 3);
     return {
-      headline: '日本語要約を再取得してください',
+      headline: '記事のポイント',
       lines: [
-        { label: '結論/事実', text: '日本語要約の生成に一時的に失敗しました。' },
-        { label: '背景/特徴', text: '原文は英語のため、生文のまま表示しません。' },
-        { label: '影響/展望', text: '再取得するとAI翻訳をもう一度試します。' }
+        { label: '結論/事実', text: '日本語要約を準備できないため、原文情報を表示します。' },
+        { label: '背景/特徴', text: 'AI利用枠の回復後は、自動で日本語要約を再取得できます。' },
+        { label: '影響/展望', text: '元記事ボタンから、記事本文をすぐ確認できます。' }
       ],
       tags,
-      short: '日本語要約の生成に一時的に失敗しました。',
-      points: [],
+      short: '日本語要約を準備できないため、原文情報を表示します。',
+      points: [
+        'AI利用枠の回復後は、自動で日本語要約を再取得できます。',
+        '元記事ボタンから、記事本文をすぐ確認できます。'
+      ],
       why: '',
       provider: 'local',
       model: '',
@@ -146,17 +159,16 @@ function localSummary({ title, description, reason = 'local', forceJapanese = fa
       aiInputLength: 0,
       fastPath: 'japanese-safe-fallback',
       fallbackReason: reason,
-      resolvedTitle: clean(title, 1000)
+      resolvedTitle: titleText,
+      limits: { headline: 35, line: 40, tags: 3 }
     };
   }
 
-  const sentences = splitSentences(description);
-  const originalTitle = clean(title, 500) || '記事のポイント';
-  const headline = clampPlain(originalTitle, 35) || '記事のポイント';
-  const conclusion = clampMarkdown(emphasizeNumbers(sentences[0] || originalTitle), 40) || '記事の中心となる内容を確認できます。';
-  const background = clampMarkdown(emphasizeNumbers(sentences[1] || '背景や特徴は原文で詳しく確認できます。'), 40);
-  const impact = clampMarkdown(emphasizeNumbers(sentences[2] || '今後の動きや影響に注目が必要です。'), 40);
-  const tags = [categoryTag(mode, category), source ? normalizeTag(source) : ''].filter(Boolean).slice(0, 3);
+  const sentences = sentenceCandidates(description);
+  const headline = naturalClamp(titleText, 35) || '記事のポイント';
+  const conclusion = naturalClamp(emphasizeNumbers(sentences[0] || titleText), 40) || '記事の中心となる内容を確認できます。';
+  const background = naturalClamp(emphasizeNumbers(sentences[1] || '背景や特徴は元記事で詳しく確認できます。'), 40);
+  const impact = naturalClamp(emphasizeNumbers(sentences[2] || '今後の動きや影響に注目が必要です。'), 40);
 
   return {
     headline,
@@ -167,111 +179,47 @@ function localSummary({ title, description, reason = 'local', forceJapanese = fa
     ],
     tags,
     short: stripMarkdown(conclusion),
-    points: [background, impact].map(stripMarkdown).filter(Boolean),
+    points: [background, impact].map(stripMarkdown),
     why: '',
     provider: 'local',
     model: '',
     contentSource,
     extractedLength: String(description || '').length,
     aiInputLength: 0,
-    fastPath: 'local-fast',
+    fastPath: 'instant-local-fallback',
     fallbackReason: reason,
-    resolvedTitle: clean(title, 1000)
+    resolvedTitle: titleText,
+    limits: { headline: 35, line: 40, tags: 3 }
   };
-}
-
-function pageText(page) {
-  if (typeof page === 'string') return page;
-  return String(page?.text || page?.content || '');
-}
-
-function sampledPdfText(extracted) {
-  const pages = Array.isArray(extracted?.pages) ? extracted.pages : [];
-  if (!pages.length) return clean(extracted?.text, MAX_AI_INPUT);
-
-  const picked = new Set();
-  const add = index => {
-    if (index >= 0 && index < pages.length) picked.add(index);
-  };
-
-  for (let i = 0; i < Math.min(5, pages.length); i += 1) add(i);
-
-  pages.forEach((page, index) => {
-    const text = pageText(page);
-    if (/abstract|要旨|概要|results?|結果|discussion|考察|conclusions?|結論|summary|まとめ/i.test(text)) add(index);
-  });
-
-  if (pages.length > 10) {
-    for (const ratio of [.28, .5, .72]) add(Math.floor((pages.length - 1) * ratio));
-  }
-
-  for (let i = Math.max(0, pages.length - 4); i < pages.length; i += 1) add(i);
-
-  let out = '';
-  for (const index of [...picked].sort((a, b) => a - b)) {
-    const text = clean(pageText(pages[index]), 8500);
-    if (!text) continue;
-    const piece = `\n\n[PDF ${index + 1}ページ]\n${text}`;
-    if (out.length + piece.length > MAX_AI_INPUT) break;
-    out += piece;
-  }
-  return out.trim() || clean(extracted?.text, MAX_AI_INPUT);
-}
-
-function sampledArticleText(extracted) {
-  if (extracted?.sourceType === 'pdf' || Array.isArray(extracted?.pages)) return sampledPdfText(extracted);
-  const text = String(extracted?.text || '');
-  if (text.length <= MAX_AI_INPUT) return clean(text, MAX_AI_INPUT);
-
-  const head = text.slice(0, 18000);
-  const middleStart = Math.max(0, Math.floor(text.length * .52) - 3000);
-  const middle = text.slice(middleStart, middleStart + 6000);
-  const tail = text.slice(-6000);
-  return clean(`${head}\n\n[中盤]\n${middle}\n\n[終盤]\n${tail}`, MAX_AI_INPUT);
 }
 
 const responseSchema = {
   type: 'object',
   properties: {
-    headline: {
-      type: 'string',
-      description: '35文字以内の日本語タイトル。結論や最もインパクトのある事実を先頭に置く。重要な数値や固有名詞は**太字**にしてよい。'
-    },
-    conclusion: {
-      type: 'string',
-      description: '40文字以内の1文。何が起きた・発表されたかを明確に。重要な数値や固有名詞は**太字**。'
-    },
-    background: {
-      type: 'string',
-      description: '40文字以内の1文。なぜ重要か、仕組みや理由を平易に説明。重要な数値や固有名詞は**太字**。'
-    },
-    impact: {
-      type: 'string',
-      description: '40文字以内の1文。今後の影響や展望を具体的に。重要な数値や固有名詞は**太字**。'
-    },
+    headline: { type: 'string', description: '35文字以内の自然な日本語タイトル。文の途中で切らない。' },
+    conclusion: { type: 'string', description: '40文字以内。結論または事実を1文で完結させる。' },
+    background: { type: 'string', description: '40文字以内。背景または特徴を1文で完結させる。' },
+    impact: { type: 'string', description: '40文字以内。影響または展望を1文で完結させる。' },
     tags: {
       type: 'array',
       maxItems: 3,
-      items: { type: 'string', description: '#から始まる短い日本語タグ。最大3つ。' }
+      items: { type: 'string', description: '#から始まる短い日本語タグ' }
     }
   },
   required: ['headline', 'conclusion', 'background', 'impact', 'tags'],
   additionalProperties: false
 };
 
-function isQuotaError(err) {
-  return Number(err?.statusCode) === 429 || /quota|rate limit|resource_exhausted|too many requests/i.test(String(err?.message || ''));
-}
-
-function normalizeAiSummary(parsed, { title, mode, category, source }) {
-  const headline = clampMarkdown(parsed?.headline || title || '記事のポイント', 35) || '記事のポイント';
-  const conclusion = clampMarkdown(parsed?.conclusion || '', 40) || '記事の中心となる事実を確認できます。';
-  const background = clampMarkdown(parsed?.background || '', 40) || '背景や仕組みを短く整理しています。';
-  const impact = clampMarkdown(parsed?.impact || '', 40) || '今後の影響や展開に注目が必要です。';
+function normalizeAiSummary(parsed, { title, mode, category, source, contentSource, extractedLength, aiInputLength, model, fastPath }) {
+  const headline = naturalClamp(parsed?.headline || title || '記事のポイント', 35) || '記事のポイント';
+  const conclusion = naturalClamp(parsed?.conclusion || '', 40) || '記事の中心となる内容を確認できます。';
+  const background = naturalClamp(parsed?.background || '', 40) || '背景や特徴を短く整理しています。';
+  const impact = naturalClamp(parsed?.impact || '', 40) || '今後の動きや影響に注目が必要です。';
   const rawTags = Array.isArray(parsed?.tags) ? parsed.tags : [];
   const tags = [...new Set([
     categoryTag(mode, category),
-    ...rawTags.map(normalizeTag).filter(Boolean)
+    ...rawTags.map(normalizeTag).filter(Boolean),
+    source ? normalizeTag(source) : ''
   ].filter(Boolean))].slice(0, 3);
 
   return {
@@ -283,166 +231,291 @@ function normalizeAiSummary(parsed, { title, mode, category, source }) {
     ],
     tags,
     short: stripMarkdown(conclusion),
-    points: [background, impact].map(stripMarkdown)
+    points: [background, impact].map(stripMarkdown),
+    why: '',
+    provider: 'gemini',
+    model: model || '',
+    contentSource,
+    extractedLength,
+    aiInputLength,
+    fastPath,
+    fallbackReason: '',
+    resolvedTitle: clean(title, 500),
+    limits: { headline: 35, line: 40, tags: 3 }
   };
 }
 
-export default async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+function isQuotaError(error) {
+  return Number(error?.statusCode) === 429 || /quota|rate limit|resource_exhausted|too many requests|exceeded/i.test(
+    `${error?.message || ''} ${error?.publicError?.error || ''} ${error?.publicError?.detail || ''}`
+  );
+}
 
-  const body = bodyOf(req);
-  const title = clean(body.title, 500);
-  const source = clean(body.source, 180);
-  const category = clean(body.category, 80);
-  const description = clean(body.description, MAX_RSS_INPUT);
-  const url = String(body.url || body.link || '').trim().slice(0, 3000);
-  const mode = String(body.mode || '').trim();
-  const likelyPdfUrl = /\.pdf(?:$|[?#])/i.test(url);
-  const fastMode = body.fast === true && mode !== 'papers' && !likelyPdfUrl;
-  const requestedFullText = body.preferFullText === true;
-  // v2.14.6: ニュース/知識の通常カードはRSS本文を優先して即AIへ。
-  // 本文取得は論文/PDF、またはRSS情報が短すぎる場合だけにする。
-  const rssTooSparse = description.length < 170;
-  const preferFullText = mode === 'papers' || likelyPdfUrl || (fastMode && rssTooSparse && !!url) || (requestedFullText && !fastMode);
-  const forceJapanese = body.forceJapanese === true || looksMostlyEnglish(`${title}\n${description}`);
-  const allowAi = forceJapanese ? true : body.allowAi !== false;
+function hashString(value = '') {
+  let hash = 2166136261;
+  for (const ch of String(value)) {
+    hash ^= ch.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
 
-  if (!title && !description && !url) return res.status(400).json({ error: '要約する情報がありません' });
+function cacheKeyFor(body, title, description, mode) {
+  return [
+    mode || 'auto',
+    clean(body.url || body.link, 500),
+    clean(title, 180),
+    hashString(description.slice(0, 2200)),
+    'v21417'
+  ].join('::');
+}
 
-  const cacheKey = summaryCacheKey({ url, title, description, mode, category, source, fast: fastMode });
-  const serverCached = readServerCache(cacheKey);
-  if (serverCached) return res.status(200).json({ ...serverCached, cache: 'server' });
+function getCached(key, mode) {
+  const hit = memoryCache.get(key);
+  if (!hit) return null;
+  const ttl = mode === 'papers' ? PAPER_CACHE_TTL : NEWS_CACHE_TTL;
+  if (Date.now() - hit.at > ttl) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return hit.value;
+}
 
-  let inputTitle = title;
-  let inputText = description || title;
-  let contentSource = 'rss';
-  let extractedLength = inputText.length;
-  let pdfPageCount = 0;
-  let pdfUrl = '';
-  let extractError = '';
+function putCached(key, value) {
+  memoryCache.set(key, { at: Date.now(), value });
+  while (memoryCache.size > CACHE_LIMIT) memoryCache.delete(memoryCache.keys().next().value);
+  return value;
+}
 
-  if (preferFullText && url) {
-    try {
-      const extracted = await extractArticleFromUrl(url, { maxTextLength: MAX_EXTRACT, preferPdf: true });
-      if (extracted?.text) {
-        inputTitle = clean(extracted.title || title, 500);
-        inputText = sampledArticleText(extracted);
-        contentSource = extracted.sourceType === 'pdf' || Array.isArray(extracted.pages) ? 'pdf' : 'article';
-        extractedLength = String(extracted.text || '').length;
-        if (contentSource === 'pdf') {
-          pdfPageCount = Array.isArray(extracted.pages) ? extracted.pages.length : Number(extracted.pageCount || 0);
-          pdfUrl = String(extracted.pdfUrl || extracted.articleUrl || extracted.url || url || '');
-        }
-      }
-    } catch (error) {
-      extractError = String(error?.message || error);
-      console.warn('[summary-v2146] full-text fallback:', extractError, url);
-    }
+async function withTimeout(promise, ms, label = '処理') {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(`${label}がタイムアウトしました`), { name: 'TimeoutError' })), ms);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function maybeExtract({ url, mode, preferFullText, description, title }) {
+  const shouldExtract = Boolean(url) && (
+    mode === 'papers' ||
+    (preferFullText && String(description || '').length < 220)
+  );
+
+  if (!shouldExtract) {
+    return {
+      title,
+      text: description,
+      contentSource: 'rss',
+      extractedLength: String(description || '').length,
+      extractError: ''
+    };
   }
 
+  try {
+    const extracted = await withTimeout(
+      extractArticleFromUrl(url, { maxTextLength: EXTRACT_TEXT_LIMIT }),
+      mode === 'papers' ? 6500 : 3000,
+      '本文取得'
+    );
+    const text = clean(extracted?.text || '', mode === 'papers' ? PAPER_INPUT_LIMIT : FAST_INPUT_LIMIT);
+    if (!text) throw new Error('本文が空です');
+    return {
+      title: clean(extracted?.title || title, 500) || title,
+      text,
+      contentSource: extracted?.sourceType === 'pdf' ? 'pdf' : 'article',
+      extractedLength: Number(extracted?.originalLength || extracted?.text?.length || text.length),
+      extractError: ''
+    };
+  } catch (error) {
+    return {
+      title,
+      text: description,
+      contentSource: 'rss',
+      extractedLength: String(description || '').length,
+      extractError: String(error?.message || error || '')
+    };
+  }
+}
+
+async function buildSummary(body) {
+  const mode = clean(body.mode, 32);
+  const fastMode = mode !== 'papers' && body.fast !== false;
+  const title = clean(body.title, 500);
+  const source = clean(body.source, 180);
+  const category = clean(body.category, 100);
+  const description = clean(body.description, mode === 'papers' ? PAPER_INPUT_LIMIT : FAST_INPUT_LIMIT);
+  const url = clean(body.url || body.link, 3000);
+  const forceJapanese = Boolean(body.forceJapanese) || looksMostlyEnglish(`${title}\n${description}`);
+  const allowAi = body.allowAi !== false;
+
+  if (!title && !description && !url) {
+    const error = new Error('要約する情報がありません');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const extracted = await maybeExtract({
+    url,
+    mode,
+    preferFullText: Boolean(body.preferFullText),
+    description,
+    title
+  });
+
+  const inputTitle = extracted.title || title;
+  const inputText = clean(
+    extracted.text || description || inputTitle,
+    mode === 'papers' ? PAPER_INPUT_LIMIT : FAST_INPUT_LIMIT
+  );
+
   if (!allowAi) {
-    const value = localSummary({
+    return localSummary({
       title: inputTitle,
       description: inputText,
-      reason: 'client-budget',
+      reason: 'client-ai-budget',
       forceJapanese,
-      contentSource,
+      contentSource: extracted.contentSource,
       mode,
       category,
       source
     });
-    return res.status(200).json(writeServerCache(cacheKey, value));
   }
 
-  const aiInputText = fastMode
-    ? clean(inputText, FAST_AI_INPUT)
-    : clean(inputText, MAX_AI_INPUT);
+  if (Date.now() < geminiBlockedUntil) {
+    return localSummary({
+      title: inputTitle,
+      description: inputText,
+      reason: 'quota-circuit-open',
+      forceJapanese,
+      contentSource: extracted.contentSource,
+      mode,
+      category,
+      source
+    });
+  }
 
   const prompt = [
-    `元タイトル: ${inputTitle || '不明'}`,
+    `タイトル: ${inputTitle || '不明'}`,
     source ? `媒体: ${source}` : '',
     category ? `カテゴリ: ${category}` : '',
-    url ? `URL: ${url}` : '',
-    `入力種別: ${contentSource === 'pdf' ? 'PDF本文の重要ページ抜粋' : contentSource === 'article' ? 'リンク先本文' : 'RSS本文・抄録'}`,
     '',
-    '本文・抄録:',
-    aiInputText || inputTitle,
+    '記事本文・抄録:',
+    inputText || inputTitle,
     '',
-    '上の情報だけを根拠に、おすすめフィード用の日本語要約をJSONで作成してください。',
-    '',
-    '【必須フォーマット】',
-    '1. headline: 最大35文字。結論や最もインパクトのある事実を先頭に置き、思わず手を止めたくなるタイトルへ打ち直す。',
-    '2. conclusion: 最大40文字・1文。何が起きたのか、何が発表されたのかを明確にする。',
-    '3. background: 最大40文字・1文。なぜ重要か、仕組みや理由を説明する。',
-    '4. impact: 最大40文字・1文。今後どうなるか、社会や技術への変化を書く。',
-    '5. tags: 内容を表すタグを最大3個。必ず # から始める。',
-    '',
-    '【文章ルール】',
-    '・原文が英語でも、すべて自然な日本語へ翻訳する。',
-    '・難解な専門用語は、日常的な例えや平易な言葉に噛み砕く。特に論文、製品・熱研究、独創研究では専門家向けの言い回しを避ける。',
-    '・重要な数値と重要な固有名詞は Markdown の **太字** で強調する。',
-    '・事実を足したり推測したりしない。本文にない将来予測を断定しない。',
-    '・文字数を合わせるために「…」「...」で途中省略しない。各文を短く言い換えて制限内に収める。',
-    '・同じ内容を3行で言い換えない。結論→背景→影響の役割を明確に分ける。'
+    '上の情報だけを根拠に、日本語で要約してください。',
+    'headlineは35文字以内。',
+    'conclusion/background/impactは各40文字以内の完結した1文。',
+    '省略記号や文の途中での切断は禁止。',
+    '最も重要な数値・固有名詞は**太字**にしてよい。',
+    '前置き、一般論、重複、本文にない推測は不要。'
   ].filter(Boolean).join('\n');
 
   try {
     const result = await generateGemini({
       prompt,
-      systemInstruction: 'モバイル向けニュース編集者。35文字タイトルと40文字以内の3行要約を、平易で正確な日本語にする。重要な数値・固有名詞は**太字**。省略記号で文を切らない。',
-      maxOutputTokens: fastMode ? 420 : 560,
+      systemInstruction: 'モバイル向けニュース編集者。短く、平易で、完結した日本語3行要約を返す。事実を増やさない。',
+      maxOutputTokens: fastMode ? 300 : 430,
       responseSchema,
-      timeoutMs: contentSource === 'pdf' ? 22000 : fastMode ? 9000 : 12500
+      timeoutMs: fastMode ? 4800 : 9500
     });
 
     let parsed;
-    try { parsed = JSON.parse(stripFence(result.text)); }
-    catch {
-      const value = localSummary({
+    try {
+      parsed = JSON.parse(stripFence(result.text));
+    } catch {
+      return localSummary({
         title: inputTitle,
         description: inputText,
         reason: 'invalid-ai-json',
         forceJapanese,
-        contentSource,
+        contentSource: extracted.contentSource,
         mode,
         category,
         source
       });
-      return res.status(200).json(writeServerCache(cacheKey, value));
     }
 
-    const normalized = normalizeAiSummary(parsed, { title: inputTitle, mode, category, source });
-
-    const value = {
-      ...normalized,
-      why: '',
-      provider: 'gemini',
+    return normalizeAiSummary(parsed, {
+      title: inputTitle,
+      mode,
+      category,
+      source,
+      contentSource: extracted.contentSource,
+      extractedLength: extracted.extractedLength,
+      aiInputLength: inputText.length,
       model: result.model,
-      contentSource,
-      extractedLength,
-      aiInputLength: aiInputText.length,
-      fastPath: contentSource === 'pdf' ? 'pdf-sampled-ai' : contentSource === 'article' ? 'article-sampled-ai' : fastMode ? 'rss-fast-ai' : 'rss-ai',
-      fallbackReason: '',
-      pdfPageCount,
-      pdfUrl,
-      extractError,
-      resolvedTitle: inputTitle || title,
-      limits: { headline: 35, line: 40, tags: 3 }
-    };
-    return res.status(200).json(writeServerCache(cacheKey, value));
-  } catch (err) {
-    console.warn('[summary-v2146] Gemini unavailable, using local summary:', err?.statusCode, err?.message);
-    const value = localSummary({
+      fastPath: fastMode ? 'rss-fast-ai-v21417' : `${extracted.contentSource}-ai-v21417`
+    });
+  } catch (error) {
+    if (isQuotaError(error)) {
+      geminiBlockedUntil = Date.now() + GEMINI_QUOTA_BLOCK_MS;
+    } else {
+      geminiBlockedUntil = Math.max(geminiBlockedUntil, Date.now() + GEMINI_ERROR_BLOCK_MS);
+    }
+
+    console.warn('[summary-v21417] Gemini unavailable -> local fallback', error?.statusCode, error?.message);
+
+    return localSummary({
       title: inputTitle,
       description: inputText,
-      reason: isQuotaError(err) ? 'quota' : 'gemini-unavailable',
+      reason: isQuotaError(error) ? 'quota' : 'gemini-unavailable',
       forceJapanese,
-      contentSource,
+      contentSource: extracted.contentSource,
       mode,
       category,
       source
     });
-    return res.status(200).json(writeServerCache(cacheKey, value));
+  }
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'no-store');
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  const body = bodyOf(req);
+  const mode = clean(body.mode, 32);
+  const title = clean(body.title, 500);
+  const description = clean(body.description, mode === 'papers' ? PAPER_INPUT_LIMIT : FAST_INPUT_LIMIT);
+  const key = cacheKeyFor(body, title, description, mode);
+
+  const cached = getCached(key, mode);
+  if (cached) return res.status(200).json({ ...cached, cache: 'server-memory' });
+
+  try {
+    if (!inFlight.has(key)) {
+      const promise = buildSummary(body)
+        .then(value => putCached(key, value))
+        .finally(() => inFlight.delete(key));
+      inFlight.set(key, promise);
+    }
+
+    const value = await inFlight.get(key);
+    return res.status(200).json(value);
+  } catch (error) {
+    if (Number(error?.statusCode) === 400) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    // Reader must remain readable even on unexpected server errors.
+    const fallback = localSummary({
+      title,
+      description,
+      reason: 'summary-server-fallback',
+      forceJapanese: looksMostlyEnglish(`${title}\n${description}`),
+      contentSource: 'rss',
+      mode,
+      category: clean(body.category, 100),
+      source: clean(body.source, 180)
+    });
+    return res.status(200).json(fallback);
   }
 }
