@@ -1,24 +1,10 @@
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-/*
- * Personal Dashboard v2.14.20
- *
- * Reader quota/UI/request gating is installed before main.js from index.html.
- * v2.14.15 で導入した feature isolation は維持しつつ、
- * Reader / SNS をタップした時に「動的 import 待ちの空画面」にならないよう修正。
- *
- * - 画面を消してから import しない。まず loading shell を表示する。
- * - Reader / SNS は Home 表示後に先読みする。
- * - import にタイムアウトを設け、versioned URL -> canonical URL の順で再試行する。
- * - 成功した module はメモリに保持し、画面切替ごとの再 import を避ける。
- * - 失敗時は必ず画面上に再試行ボタンを出す。
- */
-
-const BUILD = '21420';
+/* Personal Dashboard v2.15.0 — clean runtime */
+const BUILD = '2150';
 const root = document.getElementById('app-main');
 let renderSerial = 0;
-
 const modulePromises = new Map();
 const importFailures = new Map();
 
@@ -32,21 +18,12 @@ const SCREEN = {
   settings:  { path: './features/settings/settings.js',   exportName: 'renderSettings',  label: '設定' }
 };
 
-function versioned(path) {
-  return `${path}?v=${BUILD}`;
-}
-
+function versioned(path) { return `${path}?v=${BUILD}`; }
 function safeMessage(error) {
-  const message = String(error?.message || error || '不明なエラー');
-  return message.replace(/[&<>"']/g, char => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
+  return String(error?.message || error || '不明なエラー').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[char]));
 }
-
 function timeoutPromise(promise, timeoutMs, label) {
   let timer = null;
   return Promise.race([
@@ -56,39 +33,30 @@ function timeoutPromise(promise, timeoutMs, label) {
     })
   ]).finally(() => clearTimeout(timer));
 }
-
 async function importAttempt(path, url, timeoutMs) {
   return timeoutPromise(import(url), timeoutMs, path);
 }
-
 async function importResilient(path) {
-  // 1回目: build query 付き。新しいデプロイを最優先。
   try {
     return await importAttempt(path, versioned(path), 6500);
   } catch (firstError) {
     console.warn('[pdv2 module retry: versioned]', path, firstError);
     importFailures.set(path, firstError);
   }
-
-  // 2回目: query なし。Service Worker の ignoreSearch fallback / precache を使える。
   try {
     return await importAttempt(path, path, 4500);
   } catch (secondError) {
     console.warn('[pdv2 module retry: canonical]', path, secondError);
     const first = importFailures.get(path);
-    const error = new Error(
-      `${path} を読み込めませんでした。${secondError?.message || first?.message || ''}`.trim()
-    );
+    const error = new Error(`${path} を読み込めませんでした。${secondError?.message || first?.message || ''}`.trim());
     error.cause = secondError;
     throw error;
   }
 }
-
 function loadModule(path, { force = false } = {}) {
   if (force) modulePromises.delete(path);
   if (!modulePromises.has(path)) {
     const promise = importResilient(path).catch(error => {
-      // 失敗を永久キャッシュしない。次回タップの再試行を許可する。
       modulePromises.delete(path);
       throw error;
     });
@@ -96,24 +64,19 @@ function loadModule(path, { force = false } = {}) {
   }
   return modulePromises.get(path);
 }
-
 async function loadRenderer(screen, { force = false } = {}) {
   const config = SCREEN[screen];
   if (!config) throw new Error(`Unknown screen: ${screen}`);
   const module = await loadModule(config.path, { force });
   const renderer = module?.[config.exportName];
-  if (typeof renderer !== 'function') {
-    throw new Error(`${config.path} に ${config.exportName} がありません`);
-  }
+  if (typeof renderer !== 'function') throw new Error(`${config.path} に ${config.exportName} がありません`);
   return { module, renderer };
 }
-
 function loadingText(screen) {
   if (screen === 'reader') return '読むカードを準備しています…';
   if (screen === 'twitter') return 'SNSカードを準備しています…';
   return `${SCREEN[screen]?.label || '画面'}を準備しています…`;
 }
-
 function renderLoading(screen) {
   if (!root) return;
   root.innerHTML = `
@@ -133,11 +96,7 @@ async function clearDashboardRuntime() {
     }
     if ('caches' in window) {
       const keys = await caches.keys();
-      await Promise.allSettled(
-        keys
-          .filter(key => key.startsWith('personal-dashboard-'))
-          .map(key => caches.delete(key))
-      );
+      await Promise.allSettled(keys.filter(key => key.startsWith('personal-dashboard-')).map(key => caches.delete(key)));
     }
   } catch (error) {
     console.warn('[pdv2 clear runtime]', error);
@@ -158,13 +117,11 @@ function renderScreenError(screen, error, options = {}) {
         </div>
       </div>
     </section>`;
-
   root.querySelector('[data-pdv2-feature-retry]')?.addEventListener('click', () => {
     const path = SCREEN[screen]?.path;
     if (path) modulePromises.delete(path);
     navigate(screen, { ...options, forceModuleReload: true });
   });
-
   root.querySelector('[data-pdv2-feature-cache]')?.addEventListener('click', async () => {
     await clearDashboardRuntime();
     location.replace(`/?v=${BUILD}&feature-recovery=${encodeURIComponent(screen)}`);
@@ -185,7 +142,6 @@ function renderBootError(error) {
         </div>
       </div>
     </section>`;
-
   root.querySelector('[data-pdv2-reload]')?.addEventListener('click', () => location.reload());
   root.querySelector('[data-pdv2-clear-cache]')?.addEventListener('click', async () => {
     await clearDashboardRuntime();
@@ -196,38 +152,21 @@ function renderBootError(error) {
 export async function navigate(screen, options = {}) {
   window.dispatchEvent(new CustomEvent('pdv2:before-navigate', { detail: { screen } }));
   if (!SCREEN[screen]) screen = 'home';
-
   if (options.readerMode) update('lastReaderMode', options.readerMode);
-
-  // 動画カード/下部タブから普通に「動画」へ入る時はYouTubeを初期表示。
-  // ホームのTwitchカードなどmediaModeを明示した遷移だけTwitchを開く。
   if (screen === 'media' && !options.mediaMode) update('lastMediaMode', 'youtube');
   else if (options.mediaMode) update('lastMediaMode', options.mediaMode);
-
   if (options.paperTrack) update('paperTrack', options.paperTrack);
 
   setScreen(screen);
   renderNav(navigate);
-
   const serial = ++renderSerial;
-
-  // v2.14.15 の root.replaceChildren() だけの空白待ちを廃止。
-  // module import が遅くても必ず画面には状態を出す。
   renderLoading(screen);
 
   try {
     const { renderer } = await loadRenderer(screen, { force: Boolean(options.forceModuleReload) });
     if (serial !== renderSerial) return;
-
-    await renderer(root, {
-      navigate,
-      refresh: Boolean(options.refresh)
-    });
-
-    // renderer が異常終了せず戻ったのに何も描画しなかった場合も空画面にしない。
-    if (serial === renderSerial && root && !root.childElementCount) {
-      throw new Error(`${SCREEN[screen].label} の描画結果が空です`);
-    }
+    await renderer(root, { navigate, refresh: Boolean(options.refresh) });
+    if (serial === renderSerial && root && !root.childElementCount) throw new Error(`${SCREEN[screen].label} の描画結果が空です`);
   } catch (error) {
     console.error('[pdv2] render failed:', screen, error);
     if (serial === renderSerial) renderScreenError(screen, error, options);
@@ -235,68 +174,106 @@ export async function navigate(screen, options = {}) {
 }
 
 function idle(callback, delay = 0) {
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(callback, { timeout: Math.max(1000, delay + 1500) });
-  } else {
-    setTimeout(callback, delay);
-  }
+  if ('requestIdleCallback' in window) window.requestIdleCallback(callback, { timeout: Math.max(1000, delay + 1500) });
+  else setTimeout(callback, delay);
 }
-
 function preloadFeature(screen, { warm = false } = {}) {
   const config = SCREEN[screen];
   if (!config) return;
-
-  loadModule(config.path)
-    .then(module => {
-      if (screen === 'reader') {
-        // 自然な日本語改行補助。失敗してもReader本体には影響させない。
-        loadModule('./features/reader/reader-summary-wrap.js')
-          .catch(error => console.warn('[reader-summary-wrap]', error));
-        if (warm) return module.warmReaderRecommendations?.();
-      }
-      if (screen === 'twitter' && warm) return module.warmTwitterFeeds?.();
-      return undefined;
-    })
-    .catch(error => console.warn(`[${screen}-preload]`, error));
+  loadModule(config.path).then(module => {
+    if (screen === 'reader' && warm) return module.warmReaderRecommendations?.();
+    if (screen === 'twitter' && warm) return module.warmTwitterFeeds?.();
+    return undefined;
+  }).catch(error => console.warn(`[${screen}-preload]`, error));
 }
-
 function startBackgroundJobs() {
-  // SNS / Reader はユーザーがタブを押す前に module graph を解決しておく。
-  // v2.14.15 の「タップしてから初めて import」をやめる。
   idle(() => preloadFeature('reader', { warm: true }), 80);
   idle(() => preloadFeature('twitter', { warm: true }), 180);
-
-  // その他の画面もアイドル時に軽く先読み。
   idle(() => preloadFeature('weather'), 450);
   idle(() => preloadFeature('media'), 700);
 }
 
+function installStorageQuotaGuard() {
+  if (window.__pdv2150StorageGuard || !('Storage' in window)) return;
+  window.__pdv2150StorageGuard = true;
+
+  const proto = Storage.prototype;
+  const originalSetItem = proto.setItem;
+  const originalRemoveItem = proto.removeItem;
+  const disposablePrefixes = [
+    'reader-summary-cache-',
+    'pdv2:readerCache:',
+    'pdv2:twitterWarm:',
+    'pdv2:mixedRecommendations:',
+    'pdv2:rank:',
+    'pdv2:lastReaderSeen:',
+    'pdv2:read:',
+    'pdv2:youtubeCache'
+  ];
+
+  const quotaLike = error => {
+    const text = `${error?.name || ''} ${error?.message || ''}`.toLowerCase();
+    return error?.name === 'QuotaExceededError' || error?.code === 22 || /quota|storage.*full|exceeded/.test(text);
+  };
+
+  proto.setItem = function pdv2150SafeSetItem(key, value) {
+    try {
+      return originalSetItem.call(this, key, value);
+    } catch (error) {
+      let isLocal = false;
+      try { isLocal = this === window.localStorage; } catch {}
+      if (!isLocal || !quotaLike(error)) throw error;
+
+      const remove = [];
+      for (let i = 0; i < this.length; i += 1) {
+        const storedKey = this.key(i);
+        if (storedKey && disposablePrefixes.some(prefix => storedKey.startsWith(prefix))) remove.push(storedKey);
+      }
+      remove.forEach(storedKey => {
+        try { originalRemoveItem.call(this, storedKey); } catch {}
+      });
+
+      try {
+        return originalSetItem.call(this, key, value);
+      } catch (retryError) {
+        if (disposablePrefixes.some(prefix => String(key || '').startsWith(prefix)) || quotaLike(retryError)) {
+          console.warn('[storage] cache write skipped after quota cleanup:', key);
+          return undefined;
+        }
+        throw retryError;
+      }
+    }
+  };
+}
+
+function cleanupLegacyCaches() {
+  try {
+    const prefixes = ['reader-summary-cache-v214', 'pdv2:geminiSummaryBlockedUntil:v214'];
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && prefixes.some(prefix => key.startsWith(prefix))) keys.push(key);
+    }
+    keys.forEach(key => localStorage.removeItem(key));
+    // 旧YouTube分類（LIVEがShortsに入る可能性があるキャッシュ）を破棄。
+    localStorage.removeItem('pdv2:youtubeCache');
+  } catch {}
+}
+
 async function boot() {
   if (!root) throw new Error('#app-main が見つかりません');
+  installStorageQuotaGuard();
+  try { applyTheme(); } catch (error) { console.warn('[theme-init]', error); }
+  cleanupLegacyCaches();
 
-  try {
-    applyTheme();
-  } catch (error) {
-    console.warn('[theme-init]', error);
-  }
-
-  // viewport補助は失敗しても画面描画を止めない。
-  loadModule('./shared/viewport-stability.js')
-    .then(module => module.initViewportStability?.())
-    .catch(error => console.warn('[viewport-stability]', error));
-
-  // v2.14のおすすめキャッシュ方式へ切替。
   try {
     if (localStorage.getItem('pdv2:creativeCacheVersion') !== 'v214') {
       localStorage.removeItem('pdv2:readerCache:papers:creative');
       localStorage.removeItem('pdv2:mixedRecommendations:v211');
       localStorage.setItem('pdv2:creativeCacheVersion', 'v214');
     }
-  } catch (error) {
-    console.warn('[cache-migration]', error);
-  }
+  } catch (error) { console.warn('[cache-migration]', error); }
 
-  // Twitch OAuthは失敗してもホームを止めない。
   loadModule('./features/twitch/twitch-chat.js')
     .then(module => module.handleTwitchOAuthReturn?.())
     .catch(error => console.warn('[twitch-oauth]', error));
@@ -308,7 +285,7 @@ async function boot() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register(`/sw.js?v=${BUILD}`, { updateViaCache: 'none' })
       .then(async registration => {
-        try { await registration.update(); } catch (_) {}
+        try { await registration.update(); } catch {}
         registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
       })
       .catch(error => console.warn('[sw]', error));
@@ -317,12 +294,10 @@ async function boot() {
   window.addEventListener('pdv2:settings-changed', () => {
     try { applyTheme(); } catch (error) { console.warn('[theme]', error); }
   });
-
   window.addEventListener('pdv2:context-changed', () => {
     try { applyTheme(); } catch (error) { console.warn('[theme]', error); }
     try { renderNav(navigate); } catch (error) { console.warn('[nav]', error); }
   });
-
   window.addEventListener('popstate', () => navigate(state.screen || 'home'));
 
   document.documentElement.dataset.pdv2Booted = '1';
