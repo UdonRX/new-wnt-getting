@@ -13,19 +13,20 @@
   <title>Personal Dashboard V2</title>
 
   <!-- v2.14.17: queryを付け、iPhone PWAの旧CSS混在を避ける -->
-  <link rel="stylesheet" href="/src/styles/tokens.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/base.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/navigation.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/screens.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v2141.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21410.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21411.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21412.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21413.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21415.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21416.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21417.css?v=21419" />
-  <link rel="stylesheet" href="/src/styles/v21419.css?v=21419" />
+  <link rel="stylesheet" href="/src/styles/tokens.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/base.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/navigation.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/screens.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v2141.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21410.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21411.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21412.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21413.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21415.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21416.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21417.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21419.css?v=21420" />
+  <link rel="stylesheet" href="/src/styles/v21420.css?v=21420" />
 </head>
 <body>
   <div id="edge-frame" aria-hidden="true"></div>
@@ -38,13 +39,13 @@
 
   <script>
     /*
-     * v2.14.17 startup watchdog.
+     * v2.14.20 startup watchdog.
      * main.jsのmodule graphが起動しなかった場合、黒画面のまま放置せず、
      * 旧Service Worker/cacheを一度だけ自動クリアして再読込する。
      */
     (() => {
-      const BUILD = '21419';
-      const RECOVERY_KEY = 'pdv2:startup-recovery:21419';
+      const BUILD = '21420';
+      const RECOVERY_KEY = 'pdv2:startup-recovery:21420';
       let capturedError = '';
 
       const rememberError = value => {
@@ -108,8 +109,9 @@
   </script>
 
   <!-- v2.14.17: Readerの容量保護・タブ非表示・要約通信制御をmainより先に有効化。 -->
-  <script type="module" src="/src/features/reader/reader-v21417-fixes.js?v=21419"></script>
-  <script type="module" src="/src/features/reader/reader-v21419-fixes.js?v=21419"></script>
-  <script type="module" src="/src/main.js?v=21419"></script>
+  <script type="module" src="/src/features/reader/reader-v21417-fixes.js?v=21420"></script>
+  <script type="module" src="/src/features/reader/reader-v21419-fixes.js?v=21420"></script>
+  <script type="module" src="/src/features/reader/reader-v21420-fixes.js?v=21420"></script>
+  <script type="module" src="/src/main.js?v=21420"></script>
 </body>
 </html>
