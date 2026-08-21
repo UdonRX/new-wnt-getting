@@ -1,6 +1,6 @@
 import { state, update } from '../../app/store.js';
 import { el, openSheet, showToast } from '../../shared/dom.js';
-import { topbar, segmented, centerScrollItem } from '../../shared/components.js';
+import { topbar, segmented, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';
 import { iconSvg as appIconSvg } from '../../shared/icons.js';
 import { attachSwipe } from '../../shared/gestures.js';
 import { fetchHourlyJmaModel, fetchOfficialJma, parseOfficialForecast, geocodeJapan } from './weather-api.js';
@@ -333,7 +333,6 @@ function openLocationAdd(onDone) {
   }));
 
   sheet = openSheet(wrap, { title: '地域を追加' });
-  attachPullDownDismiss(sheet);
 }
 
 
@@ -342,31 +341,33 @@ export async function renderWeather(root, { navigate, refresh = false }) {
   if (selectedIndex < 0) selectedIndex = 0;
 
   const location = state.weatherLocations[selectedIndex];
-  const screen = el('section', { class: 'screen' });
+  const screen = el('section', { class: 'screen weather-screen' });
 
-  screen.append(topbar('天気', {
-    subtitle: '気象庁 + JMA MSM 1時間予報',
+  const headerBar = topbar('天気', {
+    subtitle: '',
     actions: [
       { html: appIconSvg('plus', { size: 20 }), title: '地域', onClick: () => openLocationManager(() => renderWeather(root, { navigate, refresh: true })) },
       { html: appIconSvg('refresh', { size: 20 }), title: '更新', onClick: () => renderWeather(root, { navigate, refresh: true }) },
       { html: appIconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
-  }));
+  });
+
+  const shrinkHeader = el('div', { class: 'weather-shrink-header shrink-header' }, [headerBar]);
 
   if (!location) {
-    screen.append(el('div', { class: 'empty', text: '地域を追加してください' }));
+    screen.append(shrinkHeader, el('div', { class: 'empty', text: '地域を追加してください' }));
     root.replaceChildren(screen);
+    installShrinkingHeader(shrinkHeader, { threshold: 34 });
     return;
   }
 
-  const locTabs = el('div', { class: 'chips weather-location-chips' });
+  const locTabs = el('div', { class: 'chips weather-location-chips weather-location-tabs' });
 
   const selectLocation = (index, { refreshData = false } = {}) => {
     const count = state.weatherLocations.length;
     if (!count) return;
     const next = Math.max(0, Math.min(count - 1, index));
     if (next === selectedIndex && !refreshData) return;
-
     selectedIndex = next;
     localStorage.setItem('pdv2:weatherIndex', String(next));
     renderWeather(root, { navigate, refresh: refreshData });
@@ -381,12 +382,14 @@ export async function renderWeather(root, { navigate, refresh = false }) {
     }));
   });
 
+  shrinkHeader.append(locTabs);
   screen.append(
-    locTabs,
+    shrinkHeader,
     el('div', { class: 'card', html: '<div class="loading">天気を読み込み中...</div>' })
   );
   root.replaceChildren(screen);
   centerActiveChip(locTabs);
+  installShrinkingHeader(shrinkHeader, { threshold: 44 });
 
   const cacheKey = `pdv2:weatherCache:${location.lat},${location.lon}`;
   let model;
@@ -461,7 +464,6 @@ export async function renderWeather(root, { navigate, refresh = false }) {
       ], mode, changePeriod));
 
       detail.replaceChildren();
-
       if (mode === 'week') {
         detail.append(weekRows(model, official));
       } else {
@@ -474,23 +476,17 @@ export async function renderWeather(root, { navigate, refresh = false }) {
     };
 
     renderMode();
-
-    // 左へスワイプ = 右の項目、右へスワイプ = 左の項目。
     attachSwipe(tabsHost, {
       left: () => cyclePeriod(1),
       right: () => cyclePeriod(-1),
       threshold: 42
     });
 
-    screen.replaceChildren(screen.firstChild, locTabs, card, tabsHost, detail);
+    screen.replaceChildren(shrinkHeader, card, tabsHost, detail);
     root.replaceChildren(screen);
     centerActiveChip(locTabs);
   } catch (err) {
-    screen.replaceChildren(
-      screen.firstChild,
-      locTabs,
-      el('div', { class: 'error-box', text: err.message })
-    );
+    screen.replaceChildren(shrinkHeader, el('div', { class: 'error-box', text: err.message }));
     root.replaceChildren(screen);
     centerActiveChip(locTabs);
   }
