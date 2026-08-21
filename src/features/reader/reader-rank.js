@@ -5,10 +5,33 @@ const SOURCE_BONUS = [
 
 const IMPACT = /発表|決定|開始|導入|新工場|新製品|新技術|規制|法案|選挙|事故|災害|決算|買収|提携|AI|半導体|製造|自動化|省エネ|断熱|炊飯|thermal|insulat|rice|cooker/i;
 const CREATIVE_SIGNAL = /独創研究軸|独創性スコア|acoustic|wettability|contact angle|capillary|porous media|microstructure|rheology|volatile|aroma release|thermal effusivity|haptic|human factors|cognitive ergonomics|biomimetic|bio-inspired|digital twin|sensor fusion|音響|濡れ性|毛細管|微細構造|香気|熱浸透率|認知人間工学|生物模倣|デジタルツイン/i;
-const RIGOR_SIGNAL = /実験|測定|検証|モデル|シミュレーション|解析|最適化|experiment|measurement|validation|model|simulation|mechanism|optimization|characteri[sz]ation|prototype/i;
+const RIGOR_SIGNAL = /実験|測定|検証|モデル|シミュレーション|解析|最適化|試作|比較|評価|experiment|measurement|validation|model|simulation|mechanism|optimization|characteri[sz]ation|prototype|benchmark/i;
+const PAPER_NOVELTY_SIGNAL = /新規|新しい|初めて|世界初|意外|予想外|独創|提案|発見|novel|novelty|new approach|first|unexpected|counterintuitive|discovery|propose[ds]?/i;
+const PAPER_CROSS_SIGNAL = /異分野|融合|横断|転用|応用|組み合わせ|interdisciplinary|cross[- ]disciplinary|cross[- ]domain|transfer|analogy|integration|hybrid|bio[- ]?inspired|biomimetic/i;
+const PAPER_PRACTICAL_SIGNAL = /実装|試作|プロトタイプ|実証|現場|製造|省エネ|高効率|低コスト|改善|prototype|demonstrat|implementation|manufactur|energy efficien|low[- ]cost|improv/i;
 
 function isPaperMode(mode) {
   return String(mode || '').startsWith('papers');
+}
+
+
+function paperInterestScore(item) {
+  const hay = `${item?.title || ''} ${item?.description || ''}`;
+  let score = 0;
+
+  // 「新しい視点」「実際に検証した」「異分野をつないだ」を面白さの中心にする。
+  if (PAPER_NOVELTY_SIGNAL.test(hay)) score += 28;
+  if (RIGOR_SIGNAL.test(hay)) score += 20;
+  if (PAPER_CROSS_SIGNAL.test(hay)) score += 18;
+  if (PAPER_PRACTICAL_SIGNAL.test(hay)) score += 12;
+  if (CREATIVE_SIGNAL.test(hay)) score += 18;
+
+  const embedded = Number(String(item?.description || '').match(/独創性スコア:\s*([0-9.]+)/)?.[1] || 0);
+  if (Number.isFinite(embedded) && embedded > 0) score += Math.min(24, embedded * 0.6);
+
+  // タイトルが具体的な問い・比較・機構を含むものを少し優先。
+  if (/なぜ|どうして|どのよう|比較|機構|メカニズム|効果|影響|why|how|versus|vs\.?|mechanism|effect|impact/i.test(item?.title || '')) score += 7;
+  return score;
 }
 
 function recencyScore(date) {
@@ -37,23 +60,21 @@ function acquisitionSource(item) {
 }
 
 export function heuristicRank(items, mode, unreadSet = new Set()) {
-  const creative = mode === 'papers-creative';
+  const paper = isPaperMode(mode);
   return (Array.isArray(items) ? items : []).map(item => {
-    let score = recencyScore(item.pubDate);
+    const freshness = recencyScore(item.pubDate);
+    // ニュース/知識は更新日の近さを強く効かせる。論文は鮮度を弱めて面白さを主軸にする。
+    let score = paper ? freshness * 0.18 : freshness;
     const hay = `${item.title || ''} ${item.description || ''}`;
 
-    if (IMPACT.test(hay)) score += isPaperMode(mode) ? 26 : 18;
-    if (SOURCE_BONUS[0].test(item.source || '')) score += 14;
-    else if (SOURCE_BONUS[1].test(item.source || '')) score += 8;
-    if (!unreadSet.has(item.id)) score += 8;
-    if (isPaperMode(mode) && /pdf/i.test(item.description || '')) score += 8;
+    if (IMPACT.test(hay)) score += paper ? 8 : 18;
+    if (SOURCE_BONUS[0].test(item.source || '')) score += paper ? 8 : 14;
+    else if (SOURCE_BONUS[1].test(item.source || '')) score += paper ? 5 : 8;
+    if (!unreadSet.has(item.id)) score += paper ? 5 : 8;
 
-    if (creative) {
-      if (CREATIVE_SIGNAL.test(hay)) score += 18;
-      if (RIGOR_SIGNAL.test(hay)) score += 12;
-      const embedded = Number(String(item.description || '').match(/独創性スコア:\s*([0-9.]+)/)?.[1] || 0);
-      score += Math.min(18, embedded * 0.45);
-      score -= recencyScore(item.pubDate) * 0.35;
+    if (paper) {
+      score += paperInterestScore(item);
+      if (/pdf/i.test(item.description || '')) score += 6;
     }
 
     return { item, score };
@@ -102,8 +123,9 @@ function interleaveBuckets(buckets) {
  *
  * 全体件数の上限は設けない。条件を満たした分だけ表示する。
  */
-export function chooseBalancedNewsRecommendations(items, unreadSet = new Set(), aiRanking = []) {
-  const rows = heuristicRank(items, 'news', unreadSet);
+export function chooseBalancedRecentRecommendations(items, mode = 'news', unreadSet = new Set(), aiRanking = []) {
+  const activeMode = mode === 'knowledge' ? 'knowledge' : 'news';
+  const rows = heuristicRank(items, activeMode, unreadSet);
   if (!rows.length) return [];
 
   const aiOrder = new Map();
@@ -183,10 +205,14 @@ export function chooseBalancedNewsRecommendations(items, unreadSet = new Set(), 
   return interleaveBuckets(buckets);
 }
 
+export function chooseBalancedNewsRecommendations(items, unreadSet = new Set(), aiRanking = []) {
+  return chooseBalancedRecentRecommendations(items, 'news', unreadSet, aiRanking);
+}
+
 export function chooseTop(items, mode, unreadSet, limit = 5, aiRanking = []) {
   // ニュースだけはグローバル件数上限を撤廃し、登録取得先単位で公平に選別する。
-  if (mode === 'news') {
-    return chooseBalancedNewsRecommendations(items, unreadSet, aiRanking);
+  if (mode === 'news' || mode === 'knowledge') {
+    return chooseBalancedRecentRecommendations(items, mode, unreadSet, aiRanking);
   }
 
   const heuristic = heuristicRank(items, mode, unreadSet);
