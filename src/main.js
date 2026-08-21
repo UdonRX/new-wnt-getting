@@ -1,307 +1,109 @@
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-/* Personal Dashboard v2.15.0 — clean runtime */
-const BUILD = '2150';
-const root = document.getElementById('app-main');
-let renderSerial = 0;
-const modulePromises = new Map();
-const importFailures = new Map();
+const BUILD='2160';
+const root=document.getElementById('app-main');
+let renderSerial=0;
+const modulePromises=new Map();
+const importFailures=new Map();
 
-const SCREEN = {
-  home:      { path: './features/home/home.js',           exportName: 'renderHome',      label: 'ホーム' },
-  weather:   { path: './features/weather/weather.js',     exportName: 'renderWeather',   label: '天気' },
-  reader:    { path: './features/reader/reader.js',       exportName: 'renderReader',    label: '読む' },
-  media:     { path: './features/media/media.js',         exportName: 'renderMedia',     label: '動画' },
-  twitter:   { path: './features/twitter/twitter.js',     exportName: 'renderTwitter',   label: 'SNS' },
-  wikipedia: { path: './features/wikipedia/wikipedia.js', exportName: 'renderWikipedia', label: 'Wikipedia' },
-  settings:  { path: './features/settings/settings.js',   exportName: 'renderSettings',  label: '設定' }
+const SCREEN={
+  home:{path:'./features/home/home.js',exportName:'renderHome',label:'ホーム'},
+  weather:{path:'./features/weather/weather.js',exportName:'renderWeather',label:'天気'},
+  reader:{path:'./features/reader/reader.js',exportName:'renderReader',label:'読む'},
+  media:{path:'./features/media/media.js',exportName:'renderMedia',label:'動画'},
+  twitter:{path:'./features/twitter/twitter.js',exportName:'renderTwitter',label:'SNS'},
+  wikipedia:{path:'./features/wikipedia/wikipedia.js',exportName:'renderWikipedia',label:'Wikipedia'},
+  settings:{path:'./features/settings/settings.js',exportName:'renderSettings',label:'設定'}
 };
 
-function versioned(path) { return `${path}?v=${BUILD}`; }
-function safeMessage(error) {
-  return String(error?.message || error || '不明なエラー').replace(/[&<>"']/g, char => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[char]));
+function versioned(path){return `${path}?v=${BUILD}`;}
+function safeMessage(error){return String(error?.message||error||'不明なエラー').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
+function timeoutPromise(promise,timeoutMs,label){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`${label} の読み込みがタイムアウトしました`)),timeoutMs);})]).finally(()=>clearTimeout(timer));}
+async function importAttempt(path,url,timeoutMs){return timeoutPromise(import(url),timeoutMs,path);}
+async function importResilient(path){
+  try{return await importAttempt(path,versioned(path),6500);}catch(firstError){console.warn('[pdv2 module retry: versioned]',path,firstError);importFailures.set(path,firstError);}
+  try{return await importAttempt(path,path,4500);}catch(secondError){const error=new Error(`${path} を読み込めませんでした。${secondError?.message||importFailures.get(path)?.message||''}`.trim());error.cause=secondError;throw error;}
 }
-function timeoutPromise(promise, timeoutMs, label) {
-  let timer = null;
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} の読み込みがタイムアウトしました`)), timeoutMs);
-    })
-  ]).finally(() => clearTimeout(timer));
-}
-async function importAttempt(path, url, timeoutMs) {
-  return timeoutPromise(import(url), timeoutMs, path);
-}
-async function importResilient(path) {
-  try {
-    return await importAttempt(path, versioned(path), 6500);
-  } catch (firstError) {
-    console.warn('[pdv2 module retry: versioned]', path, firstError);
-    importFailures.set(path, firstError);
-  }
-  try {
-    return await importAttempt(path, path, 4500);
-  } catch (secondError) {
-    console.warn('[pdv2 module retry: canonical]', path, secondError);
-    const first = importFailures.get(path);
-    const error = new Error(`${path} を読み込めませんでした。${secondError?.message || first?.message || ''}`.trim());
-    error.cause = secondError;
-    throw error;
-  }
-}
-function loadModule(path, { force = false } = {}) {
-  if (force) modulePromises.delete(path);
-  if (!modulePromises.has(path)) {
-    const promise = importResilient(path).catch(error => {
-      modulePromises.delete(path);
-      throw error;
-    });
-    modulePromises.set(path, promise);
+function loadModule(path,{force=false}={}){
+  if(force)modulePromises.delete(path);
+  if(!modulePromises.has(path)){
+    const promise=importResilient(path).catch(error=>{modulePromises.delete(path);throw error;});
+    modulePromises.set(path,promise);
   }
   return modulePromises.get(path);
 }
-async function loadRenderer(screen, { force = false } = {}) {
-  const config = SCREEN[screen];
-  if (!config) throw new Error(`Unknown screen: ${screen}`);
-  const module = await loadModule(config.path, { force });
-  const renderer = module?.[config.exportName];
-  if (typeof renderer !== 'function') throw new Error(`${config.path} に ${config.exportName} がありません`);
-  return { module, renderer };
+async function loadRenderer(screen,{force=false}={}){
+  const config=SCREEN[screen];
+  if(!config)throw new Error(`Unknown screen: ${screen}`);
+  const module=await loadModule(config.path,{force});
+  const renderer=module?.[config.exportName];
+  if(typeof renderer!=='function')throw new Error(`${config.path} に ${config.exportName} がありません`);
+  return {renderer};
 }
-function loadingText(screen) {
-  if (screen === 'reader') return '読むカードを準備しています…';
-  if (screen === 'twitter') return 'SNSカードを準備しています…';
-  return `${SCREEN[screen]?.label || '画面'}を準備しています…`;
-}
-function renderLoading(screen) {
-  if (!root) return;
-  root.innerHTML = `
-    <section class="screen pd-feature-loading" data-pdv2-loading-screen="${screen}">
-      <div class="card pd-feature-loading-card" role="status" aria-live="polite">
-        <div class="pd-feature-loading-spinner" aria-hidden="true"></div>
-        <div class="pd-feature-loading-title">${loadingText(screen)}</div>
-      </div>
-    </section>`;
+function loadingText(screen){if(screen==='reader')return '読むカードを準備しています…';if(screen==='twitter')return 'SNSカードを準備しています…';return `${SCREEN[screen]?.label||'画面'}を準備しています…`;}
+function renderLoading(screen){if(root)root.innerHTML=`<section class="screen pd-feature-loading"><div class="card pd-feature-loading-card" role="status"><div class="pd-feature-loading-spinner"></div><div class="pd-feature-loading-title">${loadingText(screen)}</div></div></section>`;}
+
+async function clearDashboardRuntime(){
+  try{
+    if('serviceWorker'in navigator){const registrations=await navigator.serviceWorker.getRegistrations();await Promise.allSettled(registrations.map(r=>r.unregister()));}
+    if('caches'in window){const keys=await caches.keys();await Promise.allSettled(keys.filter(key=>key.startsWith('personal-dashboard-')).map(key=>caches.delete(key)));}
+  }catch(error){console.warn('[pdv2 clear runtime]',error);}
 }
 
-async function clearDashboardRuntime() {
-  try {
-    if ('serviceWorker' in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.allSettled(registrations.map(registration => registration.unregister()));
-    }
-    if ('caches' in window) {
-      const keys = await caches.keys();
-      await Promise.allSettled(keys.filter(key => key.startsWith('personal-dashboard-')).map(key => caches.delete(key)));
-    }
-  } catch (error) {
-    console.warn('[pdv2 clear runtime]', error);
-  }
+function renderScreenError(screen,error,options={}){
+  if(!root)return;
+  const label=SCREEN[screen]?.label||'画面';
+  root.innerHTML=`<section class="screen pd-feature-error"><div class="error-box"><strong>${label}を表示できませんでした</strong><br><small>${safeMessage(error)}</small><div class="pd-feature-error-actions"><button type="button" class="soft-button" data-pdv2-feature-retry>もう一度試す</button><button type="button" class="soft-button" data-pdv2-feature-cache>キャッシュを更新</button></div></div></section>`;
+  root.querySelector('[data-pdv2-feature-retry]')?.addEventListener('click',()=>{const path=SCREEN[screen]?.path;if(path)modulePromises.delete(path);navigate(screen,{...options,forceModuleReload:true});});
+  root.querySelector('[data-pdv2-feature-cache]')?.addEventListener('click',async()=>{await clearDashboardRuntime();location.replace(`/?v=${BUILD}&feature-recovery=${encodeURIComponent(screen)}`);});
 }
+function renderBootError(error){console.error('[pdv2] boot failed:',error);if(!root)return;root.innerHTML=`<section class="screen pd-startup-error"><div class="error-box"><strong>アプリの起動に失敗しました</strong><br><small>${safeMessage(error)}</small><div class="pd-startup-error-actions"><button type="button" class="soft-button" onclick="location.reload()">再読み込み</button></div></div></section>`;}
 
-function renderScreenError(screen, error, options = {}) {
-  if (!root) return;
-  const label = SCREEN[screen]?.label || '画面';
-  root.innerHTML = `
-    <section class="screen pd-feature-error">
-      <div class="error-box">
-        <strong>${label}を表示できませんでした</strong><br>
-        <small>${safeMessage(error)}</small>
-        <div class="pd-feature-error-actions">
-          <button type="button" class="soft-button" data-pdv2-feature-retry>もう一度試す</button>
-          <button type="button" class="soft-button" data-pdv2-feature-cache>キャッシュを更新</button>
-        </div>
-      </div>
-    </section>`;
-  root.querySelector('[data-pdv2-feature-retry]')?.addEventListener('click', () => {
-    const path = SCREEN[screen]?.path;
-    if (path) modulePromises.delete(path);
-    navigate(screen, { ...options, forceModuleReload: true });
-  });
-  root.querySelector('[data-pdv2-feature-cache]')?.addEventListener('click', async () => {
-    await clearDashboardRuntime();
-    location.replace(`/?v=${BUILD}&feature-recovery=${encodeURIComponent(screen)}`);
-  });
-}
-
-function renderBootError(error) {
-  console.error('[pdv2] boot failed:', error);
-  if (!root) return;
-  root.innerHTML = `
-    <section class="screen pd-startup-error">
-      <div class="error-box">
-        <strong>アプリの起動に失敗しました</strong><br>
-        <small>${safeMessage(error)}</small>
-        <div class="pd-startup-error-actions">
-          <button type="button" class="soft-button" data-pdv2-reload>再読み込み</button>
-          <button type="button" class="soft-button" data-pdv2-clear-cache>キャッシュを更新</button>
-        </div>
-      </div>
-    </section>`;
-  root.querySelector('[data-pdv2-reload]')?.addEventListener('click', () => location.reload());
-  root.querySelector('[data-pdv2-clear-cache]')?.addEventListener('click', async () => {
-    await clearDashboardRuntime();
-    location.replace(`/?v=${BUILD}&recovered=1`);
-  });
-}
-
-export async function navigate(screen, options = {}) {
-  window.dispatchEvent(new CustomEvent('pdv2:before-navigate', { detail: { screen } }));
-  if (!SCREEN[screen]) screen = 'home';
-  if (options.readerMode) update('lastReaderMode', options.readerMode);
-  if (screen === 'media' && !options.mediaMode) update('lastMediaMode', 'youtube');
-  else if (options.mediaMode) update('lastMediaMode', options.mediaMode);
-  if (options.paperTrack) update('paperTrack', options.paperTrack);
-
+export async function navigate(screen,options={}){
+  window.dispatchEvent(new CustomEvent('pdv2:before-navigate',{detail:{screen}}));
+  if(!SCREEN[screen])screen='home';
+  if(options.readerMode)update('lastReaderMode',options.readerMode);
+  if(screen==='media'&&!options.mediaMode)update('lastMediaMode','youtube');
+  else if(options.mediaMode)update('lastMediaMode',options.mediaMode);
+  if(options.paperTrack)update('paperTrack',options.paperTrack);
   setScreen(screen);
   renderNav(navigate);
-  const serial = ++renderSerial;
+  const serial=++renderSerial;
   renderLoading(screen);
-
-  try {
-    const { renderer } = await loadRenderer(screen, { force: Boolean(options.forceModuleReload) });
-    if (serial !== renderSerial) return;
-    await renderer(root, { navigate, refresh: Boolean(options.refresh) });
-    if (serial === renderSerial && root && !root.childElementCount) throw new Error(`${SCREEN[screen].label} の描画結果が空です`);
-  } catch (error) {
-    console.error('[pdv2] render failed:', screen, error);
-    if (serial === renderSerial) renderScreenError(screen, error, options);
-  }
+  try{
+    const {renderer}=await loadRenderer(screen,{force:Boolean(options.forceModuleReload)});
+    if(serial!==renderSerial)return;
+    await renderer(root,{
+      navigate,
+      refresh:Boolean(options.refresh),
+      navigationSource:options.source||'',
+      readerRecommendations:screen==='reader'&&options.source==='bottom-nav',
+      ...options
+    });
+    if(serial===renderSerial&&root&&!root.childElementCount)throw new Error(`${SCREEN[screen].label} の描画結果が空です`);
+  }catch(error){console.error('[pdv2] render failed:',screen,error);if(serial===renderSerial)renderScreenError(screen,error,options);}
 }
 
-function idle(callback, delay = 0) {
-  if ('requestIdleCallback' in window) window.requestIdleCallback(callback, { timeout: Math.max(1000, delay + 1500) });
-  else setTimeout(callback, delay);
+function idle(callback,delay=0){if('requestIdleCallback'in window)window.requestIdleCallback(callback,{timeout:Math.max(1000,delay+1500)});else setTimeout(callback,delay);}
+function preloadFeature(screen,{warm=false}={}){
+  const config=SCREEN[screen];if(!config)return;
+  loadModule(config.path).then(module=>{if(screen==='reader'&&warm)return module.warmReaderRecommendations?.();if(screen==='twitter'&&warm)return module.warmTwitterFeeds?.();}).catch(error=>console.warn(`[${screen}-preload]`,error));
 }
-function preloadFeature(screen, { warm = false } = {}) {
-  const config = SCREEN[screen];
-  if (!config) return;
-  loadModule(config.path).then(module => {
-    if (screen === 'reader' && warm) return module.warmReaderRecommendations?.();
-    if (screen === 'twitter' && warm) return module.warmTwitterFeeds?.();
-    return undefined;
-  }).catch(error => console.warn(`[${screen}-preload]`, error));
-}
-function startBackgroundJobs() {
-  idle(() => preloadFeature('reader', { warm: true }), 80);
-  idle(() => preloadFeature('twitter', { warm: true }), 180);
-  idle(() => preloadFeature('weather'), 450);
-  idle(() => preloadFeature('media'), 700);
-}
+function startBackgroundJobs(){idle(()=>preloadFeature('reader',{warm:true}),80);idle(()=>preloadFeature('twitter',{warm:true}),180);idle(()=>preloadFeature('weather'),450);idle(()=>preloadFeature('media'),700);}
 
-function installStorageQuotaGuard() {
-  if (window.__pdv2150StorageGuard || !('Storage' in window)) return;
-  window.__pdv2150StorageGuard = true;
-
-  const proto = Storage.prototype;
-  const originalSetItem = proto.setItem;
-  const originalRemoveItem = proto.removeItem;
-  const disposablePrefixes = [
-    'reader-summary-cache-',
-    'pdv2:readerCache:',
-    'pdv2:twitterWarm:',
-    'pdv2:mixedRecommendations:',
-    'pdv2:rank:',
-    'pdv2:lastReaderSeen:',
-    'pdv2:read:',
-    'pdv2:youtubeCache'
-  ];
-
-  const quotaLike = error => {
-    const text = `${error?.name || ''} ${error?.message || ''}`.toLowerCase();
-    return error?.name === 'QuotaExceededError' || error?.code === 22 || /quota|storage.*full|exceeded/.test(text);
-  };
-
-  proto.setItem = function pdv2150SafeSetItem(key, value) {
-    try {
-      return originalSetItem.call(this, key, value);
-    } catch (error) {
-      let isLocal = false;
-      try { isLocal = this === window.localStorage; } catch {}
-      if (!isLocal || !quotaLike(error)) throw error;
-
-      const remove = [];
-      for (let i = 0; i < this.length; i += 1) {
-        const storedKey = this.key(i);
-        if (storedKey && disposablePrefixes.some(prefix => storedKey.startsWith(prefix))) remove.push(storedKey);
-      }
-      remove.forEach(storedKey => {
-        try { originalRemoveItem.call(this, storedKey); } catch {}
-      });
-
-      try {
-        return originalSetItem.call(this, key, value);
-      } catch (retryError) {
-        if (disposablePrefixes.some(prefix => String(key || '').startsWith(prefix)) || quotaLike(retryError)) {
-          console.warn('[storage] cache write skipped after quota cleanup:', key);
-          return undefined;
-        }
-        throw retryError;
-      }
-    }
-  };
-}
-
-function cleanupLegacyCaches() {
-  try {
-    const prefixes = ['reader-summary-cache-v214', 'pdv2:geminiSummaryBlockedUntil:v214'];
-    const keys = [];
-    for (let index = 0; index < localStorage.length; index += 1) {
-      const key = localStorage.key(index);
-      if (key && prefixes.some(prefix => key.startsWith(prefix))) keys.push(key);
-    }
-    keys.forEach(key => localStorage.removeItem(key));
-    // 旧YouTube分類（LIVEがShortsに入る可能性があるキャッシュ）を破棄。
-    localStorage.removeItem('pdv2:youtubeCache');
-  } catch {}
-}
-
-async function boot() {
-  if (!root) throw new Error('#app-main が見つかりません');
-  installStorageQuotaGuard();
-  try { applyTheme(); } catch (error) { console.warn('[theme-init]', error); }
-  cleanupLegacyCaches();
-
-  try {
-    if (localStorage.getItem('pdv2:creativeCacheVersion') !== 'v214') {
-      localStorage.removeItem('pdv2:readerCache:papers:creative');
-      localStorage.removeItem('pdv2:mixedRecommendations:v211');
-      localStorage.setItem('pdv2:creativeCacheVersion', 'v214');
-    }
-  } catch (error) { console.warn('[cache-migration]', error); }
-
-  loadModule('./features/twitch/twitch-chat.js')
-    .then(module => module.handleTwitchOAuthReturn?.())
-    .catch(error => console.warn('[twitch-oauth]', error));
-
+async function boot(){
+  if(!root)throw new Error('#app-main が見つかりません');
+  applyTheme();
+  loadModule('./features/twitch/twitch-chat.js').then(module=>module.handleTwitchOAuthReturn?.()).catch(error=>console.warn('[twitch-oauth]',error));
   renderNav(navigate);
   await navigate('home');
   startBackgroundJobs();
-
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register(`/sw.js?v=${BUILD}`, { updateViaCache: 'none' })
-      .then(async registration => {
-        try { await registration.update(); } catch {}
-        registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
-      })
-      .catch(error => console.warn('[sw]', error));
-  }
-
-  window.addEventListener('pdv2:settings-changed', () => {
-    try { applyTheme(); } catch (error) { console.warn('[theme]', error); }
-  });
-  window.addEventListener('pdv2:context-changed', () => {
-    try { applyTheme(); } catch (error) { console.warn('[theme]', error); }
-    try { renderNav(navigate); } catch (error) { console.warn('[nav]', error); }
-  });
-  window.addEventListener('popstate', () => navigate(state.screen || 'home'));
-
-  document.documentElement.dataset.pdv2Booted = '1';
-  window.dispatchEvent(new CustomEvent('pdv2:booted', { detail: { build: BUILD } }));
+  if('serviceWorker'in navigator)navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});}).catch(error=>console.warn('[sw]',error));
+  window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();}catch{}});
+  window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();renderNav(navigate);}catch{}});
+  window.addEventListener('popstate',()=>navigate(state.screen||'home'));
+  document.documentElement.dataset.pdv2Booted='1';
+  window.dispatchEvent(new CustomEvent('pdv2:booted',{detail:{build:BUILD}}));
 }
-
 boot().catch(renderBootError);
