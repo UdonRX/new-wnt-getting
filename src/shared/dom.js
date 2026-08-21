@@ -27,8 +27,10 @@ export function openSheet(content, { title = '', onClose } = {}) {
   const root = document.getElementById('overlay-root');
   if (!root) throw new Error('overlay-root が見つかりません');
 
-  // iPhoneでキーボード表示中のVisual Viewportと下部navを分離して扱う。
+  const lockedScrollY = Math.max(0, Number(window.scrollY || document.scrollingElement?.scrollTop || 0));
   document.documentElement.classList.add('sheet-open');
+  document.body.classList.add('sheet-lock');
+  document.body.style.top = `-${lockedScrollY}px`;
 
   const backdrop = el('div', { class: 'sheet-backdrop' });
   const sheet = el('section', { class: 'bottom-sheet', role: 'dialog', 'aria-modal': 'true' });
@@ -44,24 +46,18 @@ export function openSheet(content, { title = '', onClose } = {}) {
     if (closed) return;
     closed = true;
 
-    // DOMからinputを消すより先にblurし、iOSのキーボード縮小を開始させる。
     const active = document.activeElement;
     if (active && /^(INPUT|TEXTAREA|SELECT)$/i.test(active.tagName)) {
       try { active.blur(); } catch {}
     }
 
     backdrop.remove();
-
     if (!root.querySelector('.sheet-backdrop')) {
       document.documentElement.classList.remove('sheet-open');
+      document.body.classList.remove('sheet-lock');
+      document.body.style.top = '';
+      requestAnimationFrame(() => window.scrollTo({ top: lockedScrollY, behavior: 'auto' }));
     }
-
-    // visualViewportの復帰には数フレームかかるため、共通navへ複数回通知する。
-    window.dispatchEvent(new CustomEvent('pdv2:sheet-closed'));
-    requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('pdv2:viewport-settle')));
-    setTimeout(() => window.dispatchEvent(new CustomEvent('pdv2:viewport-settle')), 120);
-    setTimeout(() => window.dispatchEvent(new CustomEvent('pdv2:viewport-settle')), 320);
-
     onClose?.();
   };
 
@@ -72,10 +68,9 @@ export function openSheet(content, { title = '', onClose } = {}) {
   let startY = 0;
   let startX = 0;
   let dragging = false;
-
   const reset = () => {
     dragging = false;
-    sheet.style.transition = 'transform .18s ease';
+    sheet.style.transition = 'transform .18s cubic-bezier(.2,.8,.2,1)';
     sheet.style.transform = '';
     setTimeout(() => { if (sheet.isConnected) sheet.style.transition = ''; }, 190);
   };
@@ -117,7 +112,6 @@ export function openSheet(content, { title = '', onClose } = {}) {
 
   grabber.addEventListener('touchend', endDrag, { passive: true });
   grabber.addEventListener('touchcancel', reset, { passive: true });
-
   root.append(backdrop);
   return { backdrop, sheet, close };
 }
