@@ -1,4 +1,4 @@
-/* Personal Dashboard v2.15.0 — Bottom navigation */
+/* Personal Dashboard v2.16.0 — physical-bottom navigation */
 :root {
   --nav-height: 58px;
   --nav-total: calc(var(--nav-height) + env(safe-area-inset-bottom));
@@ -10,47 +10,62 @@
 
 .bottom-nav {
   position: fixed !important;
-  z-index: 90;
+  z-index: 300 !important;
   left: 0 !important;
   right: 0 !important;
   top: auto !important;
   bottom: 0 !important;
-  inset-inline: 0 !important;
-  min-height: var(--nav-total);
-  padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left));
+  width: 100vw !important;
+  height: var(--nav-total) !important;
+  min-height: var(--nav-total) !important;
+  margin: 0 !important;
+  padding: 0 max(2px, env(safe-area-inset-right)) 0 max(2px, env(safe-area-inset-left)) !important;
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
   background: #0c1014;
   border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   box-shadow: 0 -8px 22px rgba(0,0,0,.16);
-  transform: translate3d(0, 0, 0) !important;
-  -webkit-transform: translate3d(0, 0, 0) !important;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-  will-change: transform;
+  transform: none !important;
+  -webkit-transform: none !important;
+  will-change: auto !important;
+  contain: layout paint;
+  overscroll-behavior: none;
+  touch-action: manipulation;
 }
 
 .nav-item {
   position: relative;
   min-width: 0;
-  min-height: var(--nav-height);
-  padding: 5px 2px 1px;
+  width: 100%;
+  height: var(--nav-total);
+  min-height: var(--nav-total);
+  margin: 0;
+  padding: 6px 2px env(safe-area-inset-bottom);
   background: transparent;
   color: var(--muted-2);
-  display: grid;
-  place-items: center;
-  align-content: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
   gap: 3px;
   cursor: pointer;
-  transition: color .16s ease, transform .12s ease;
+  transition: color .16s ease, opacity .16s ease;
 }
 
-.nav-item:active { transform: scale(.94); }
+.nav-item::before {
+  content: '';
+  flex: 0 0 1px;
+}
+
+.nav-item:active {
+  opacity: .62;
+}
 
 .nav-item svg {
   width: 20px;
   height: 20px;
+  flex: 0 0 20px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.85;
@@ -70,4 +85,17 @@
 }
 
 .nav-item.active { color: var(--feature-color); }
+
+/* iOS VisualViewport / keyboard changes must never translate the nav layer. */
+html.sheet-open .bottom-nav,
+html.media-player-open .bottom-nav,
+body.sheet-lock .bottom-nav {
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  transform: none !important;
+  -webkit-transform: none !important;
+}
+
 html, body { overscroll-behavior-y: none; }
