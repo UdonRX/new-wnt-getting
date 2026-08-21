@@ -682,3 +682,412 @@ html.wiki-reading body { width: 100%; height: 100%; overflow: hidden !important;
   .reader-swipe-feed { scroll-behavior: auto; }
   .reader-ai-progress-bar { transition: none; }
 }
+
+/* ========================================================================== */
+/* Personal Dashboard v2.16.0 — append to the END of src/styles/app.css      */
+/* ========================================================================== */
+
+/* --- Physical frame clipping -------------------------------------------- */
+#edge-mask {
+  position: fixed;
+  z-index: 290;
+  inset: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+  padding:
+    max(2px, env(safe-area-inset-top))
+    max(2px, env(safe-area-inset-right))
+    var(--nav-total)
+    max(2px, env(safe-area-inset-left));
+  background: var(--bg, #090b0e);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+#edge-frame { z-index: 310 !important; }
+.bottom-nav { z-index: 300 !important; }
+
+/* Wikipedia reading is the explicit full-screen exception. */
+html.wiki-reading #edge-frame,
+html.wiki-reading #edge-mask {
+  display: none !important;
+}
+
+/* --- Sheet / iOS viewport lock ------------------------------------------ */
+html.sheet-open,
+html.sheet-open body,
+body.sheet-lock {
+  overscroll-behavior: none !important;
+}
+body.sheet-lock {
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  height: 100dvh !important;
+  overflow: hidden !important;
+}
+
+/* --- Shared shrinking sticky header ------------------------------------ */
+.shrink-header {
+  position: sticky !important;
+  z-index: 72;
+  top: max(3px, calc(env(safe-area-inset-top) + 3px));
+  margin-inline: -3px;
+  padding: 5px 3px;
+  border-radius: 18px;
+  transition:
+    padding .28s cubic-bezier(.2,.82,.2,1),
+    border-radius .28s cubic-bezier(.2,.82,.2,1),
+    background .28s ease,
+    box-shadow .28s ease,
+    transform .28s cubic-bezier(.2,.82,.2,1);
+}
+.shrink-header .topbar-copy h1,
+.shrink-header .subtitle,
+.shrink-header .icon-button,
+.weather-location-tabs .chip {
+  transition:
+    font-size .28s cubic-bezier(.2,.82,.2,1),
+    min-height .28s cubic-bezier(.2,.82,.2,1),
+    width .28s cubic-bezier(.2,.82,.2,1),
+    height .28s cubic-bezier(.2,.82,.2,1),
+    padding .28s cubic-bezier(.2,.82,.2,1),
+    opacity .22s ease,
+    transform .28s cubic-bezier(.2,.82,.2,1);
+}
+.shrink-header.is-compact {
+  padding: 2px 7px;
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  box-shadow: 0 8px 24px rgba(0,0,0,.14);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+.shrink-header.is-compact .topbar { min-height: 42px; }
+.shrink-header.is-compact .topbar-copy h1 { font-size: 18px !important; line-height: 1.05; }
+.shrink-header.is-compact .subtitle { font-size: 9px !important; opacity: .66; }
+.shrink-header.is-compact .icon-button { width: 36px !important; height: 36px !important; min-width: 36px !important; min-height: 36px !important; }
+
+/* Home */
+.tile-dot { display: none !important; }
+.home-shrink-header.is-compact { transform: translateY(0) scale(.985); }
+
+/* Weather: title + location tabs act as one shrinking sticky unit. */
+.weather-shrink-header {
+  display: grid;
+  gap: 4px;
+}
+.weather-shrink-header .topbar { padding-bottom: 2px; }
+.weather-shrink-header .weather-location-tabs {
+  margin: 0;
+  padding: 0 2px 2px;
+  max-height: 48px;
+  overflow: hidden;
+  transition: max-height .28s cubic-bezier(.2,.82,.2,1), opacity .22s ease, transform .28s cubic-bezier(.2,.82,.2,1);
+}
+.weather-shrink-header.is-compact { gap: 0; }
+.weather-shrink-header.is-compact .weather-location-tabs { max-height: 35px; transform: translateY(-1px); }
+.weather-shrink-header.is-compact .weather-location-tabs .chip { min-height: 28px; padding: 5px 9px; font-size: 9.5px; }
+
+/* --- Reader recommendation: hero 40% / lower 60% ----------------------- */
+.reader-story-card {
+  grid-template-rows: minmax(210px, 40%) minmax(0, 1fr) auto !important;
+  gap: clamp(7px, 1dvh, 11px) !important;
+}
+.reader-story-content {
+  justify-content: flex-start;
+  overflow: hidden !important;
+}
+.reader-story-actions {
+  position: relative;
+  z-index: 8;
+  align-self: end;
+}
+.reader-ai-progress-inline {
+  margin-top: auto;
+  padding: 1px 2px 0;
+}
+.reader-recommend-loading {
+  min-height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+.reader-recommend-loading span { color: var(--muted); font-size: 11px; }
+
+/* Reader list: only active source + recommendation button remains sticky. */
+.reader-list-sticky-bar {
+  position: sticky;
+  z-index: 74;
+  top: max(3px, calc(env(safe-area-inset-top) + 3px));
+  min-height: 44px;
+  margin: 0 -2px 4px;
+  padding: 4px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+  transition: min-height .28s cubic-bezier(.2,.82,.2,1), padding .28s cubic-bezier(.2,.82,.2,1), border-radius .28s ease;
+}
+.reader-list-current-source { max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reader-list-recommend { min-height: 36px; white-space: nowrap; }
+
+.reader-list-open > .topbar,
+.reader-list-open > .reader-mode-nav,
+.reader-list-open > .paper-track-level,
+.reader-list-open > .reader-sticky-context {
+  overflow: hidden;
+  max-height: 130px;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    max-height .30s cubic-bezier(.2,.82,.2,1),
+    opacity .20s ease,
+    transform .30s cubic-bezier(.2,.82,.2,1),
+    margin .30s cubic-bezier(.2,.82,.2,1),
+    padding .30s cubic-bezier(.2,.82,.2,1);
+}
+.reader-list-open.reader-list-compact > .topbar,
+.reader-list-open.reader-list-compact > .reader-mode-nav,
+.reader-list-open.reader-list-compact > .paper-track-level,
+.reader-list-open.reader-list-compact > .reader-sticky-context {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  transform: translateY(-18px) scale(.97);
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  pointer-events: none;
+}
+.reader-list-compact .reader-list-sticky-bar { min-height: 38px; padding: 2px 6px; border-radius: 14px; }
+.reader-list-compact .reader-list-current-source { min-height: 29px; padding: 5px 9px; font-size: 9.5px; }
+.reader-list-compact .reader-list-recommend { min-height: 31px; padding-block: 5px; font-size: 9.5px; }
+
+/* Keep Reader settings icon identical to other cards. */
+.reader-screen .topbar-actions .icon-button svg { width: 20px !important; height: 20px !important; }
+
+/* --- YouTube scroll shrinking ------------------------------------------ */
+.youtube-primary-tabs {
+  position: sticky;
+  z-index: 76;
+  top: max(3px, calc(env(safe-area-inset-top) + 3px));
+  padding: 4px 0;
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+  transition: padding .28s cubic-bezier(.2,.82,.2,1), transform .28s cubic-bezier(.2,.82,.2,1);
+}
+.youtube-list-screen > .topbar,
+.youtube-list-screen > .media-mode-nav,
+.youtube-list-screen .youtube-channel-picker,
+.youtube-list-screen .media-warning {
+  overflow: hidden;
+  max-height: 110px;
+  opacity: 1;
+  transform: translateY(0);
+  transition: max-height .30s cubic-bezier(.2,.82,.2,1), opacity .2s ease, transform .30s cubic-bezier(.2,.82,.2,1), margin .30s ease, padding .30s ease;
+}
+.youtube-list-screen.youtube-scroll-compact > .topbar,
+.youtube-list-screen.youtube-scroll-compact > .media-mode-nav,
+.youtube-list-screen.youtube-scroll-compact .youtube-channel-picker,
+.youtube-list-screen.youtube-scroll-compact .media-warning {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  transform: translateY(-18px) scale(.97);
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  pointer-events: none;
+}
+.youtube-scroll-compact .youtube-primary-tabs { padding: 1px 4px; transform: scale(.985); border-radius: 14px; }
+.youtube-scroll-compact .youtube-primary-tabs .segmented button { min-height: 30px; padding-block: 4px; font-size: 10px; }
+.media-row-copy { min-width: 0; }
+.media-title-line { min-width: 0; }
+
+/* --- YouTube fixed landscape player ------------------------------------ */
+html.youtube-landscape-open,
+html.youtube-landscape-open body,
+body.youtube-landscape-open {
+  width: 100%;
+  height: 100%;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  touch-action: none;
+}
+.youtube-landscape-controls { display: none; }
+.youtube-inline-player.youtube-css-landscape {
+  position: fixed !important;
+  z-index: 360 !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left) !important;
+  display: grid !important;
+  grid-template-rows: 52px minmax(0, 1fr) 58px !important;
+  gap: 0 !important;
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  touch-action: none !important;
+  background: #000 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  transform: none !important;
+}
+.youtube-css-landscape .youtube-player-head {
+  grid-row: 1;
+  min-width: 0;
+  padding: 4px max(10px, env(safe-area-inset-right)) 4px max(10px, env(safe-area-inset-left));
+  display: grid !important;
+  grid-template-columns: minmax(0,1fr) 42px;
+  align-items: center;
+  background: #090b0e;
+}
+.youtube-css-landscape .youtube-player-channel-copy { min-width: 0; }
+.youtube-css-landscape .youtube-player-channel { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.youtube-css-landscape .youtube-inline-stage {
+  grid-row: 2;
+  position: relative !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  aspect-ratio: auto !important;
+  overflow: hidden !important;
+  background: #000;
+}
+.youtube-css-landscape .youtube-inline-stage > div,
+.youtube-css-landscape .youtube-inline-stage iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0 !important;
+}
+.youtube-css-landscape .youtube-inline-info { display: none !important; }
+.youtube-css-landscape .youtube-landscape-controls {
+  grid-row: 3;
+  display: grid !important;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  padding: 6px max(10px, env(safe-area-inset-right)) 6px max(10px, env(safe-area-inset-left));
+  background: #090b0e;
+}
+.youtube-landscape-action {
+  min-width: 0;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 12px;
+  background: rgba(255,255,255,.09);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 750;
+}
+.youtube-css-landscape .bottom-nav { display: none !important; }
+
+/* --- Twitter additions -------------------------------------------------- */
+.tweet-author-avatar {
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.tweet-author-avatar-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: inherit;
+}
+.tweet-youtube-card {
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #000;
+}
+.tweet-youtube-launcher {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+}
+.tweet-youtube-launcher img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; opacity:.86; }
+.tweet-youtube-launcher::after {
+  content: '▶';
+  position: relative;
+  z-index: 2;
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  padding-left: 3px;
+  border-radius: 50%;
+  background: rgba(0,0,0,.68);
+  border: 1px solid rgba(255,255,255,.28);
+  font-size: 22px;
+}
+.tweet-youtube-frame { width:100%; aspect-ratio:16/9; border:0; display:block; background:#000; }
+
+/* --- Wikipedia reading -------------------------------------------------- */
+.wiki-edge {
+  width: min(13vw, 54px) !important;
+  max-width: 54px !important;
+}
+.wiki-edge-left { left: 0 !important; right: auto !important; }
+.wiki-edge-right { right: 0 !important; left: auto !important; }
+.wiki-center-tap {
+  left: min(13vw, 54px) !important;
+  right: min(13vw, 54px) !important;
+  width: auto !important;
+}
+
+@media (max-height: 760px) {
+  .reader-story-card { grid-template-rows: minmax(185px, 37%) minmax(0, 1fr) auto !important; }
+}
+
+/* Full-screen YouTube players use the physical safe-area frame because bottom nav is hidden. */
+html.youtube-landscape-open .bottom-nav,
+html.youtube-shorts-open .bottom-nav {
+  display: none !important;
+}
+html.youtube-landscape-open #edge-mask,
+html.youtube-shorts-open #edge-mask {
+  padding-bottom: max(2px, env(safe-area-inset-bottom));
+}
+html.youtube-landscape-open #edge-frame::before,
+html.youtube-shorts-open #edge-frame::before {
+  bottom: max(2px, env(safe-area-inset-bottom)) !important;
+  border-radius: clamp(15px, 4.8vw, 24px) !important;
+}
+html.youtube-landscape-open #edge-frame::after,
+html.youtube-shorts-open #edge-frame::after {
+  bottom: max(4px, calc(env(safe-area-inset-bottom) + 2px)) !important;
+  border-radius: clamp(15px, 4.8vw, 24px) !important;
+}
+.youtube-inline-player.youtube-css-landscape { z-index: 280 !important; }
