@@ -77,8 +77,6 @@ function chooseNaturalBreak(chars, start, maximumEnd) {
   const span = maximumEnd - start;
   if (span < 20) return maximumEnd;
 
-  // Natural punctuation is preferred only near the measured edge. We never
-  // delete the skipped characters: the next page starts at the exact cut index.
   const minEnd = start + Math.floor(span * .94);
   for (let i = maximumEnd; i > minEnd; i -= 1) {
     const ch = chars[i - 1];
@@ -114,8 +112,6 @@ function paginateMeasured(text, measureNode, vertical) {
       }
     }
 
-    // Extremely large fonts can theoretically make even one glyph overflow.
-    // Advancing by one character avoids an infinite loop while preserving text.
     if (best <= start) best = Math.min(chars.length, start + 1);
 
     let end = best < chars.length ? chooseNaturalBreak(chars, start, best) : best;
@@ -191,10 +187,9 @@ function showReader(root, articleMeta, article, backToList) {
   const shell = el('section', { class: `wiki-reader wiki-theme-${s.theme}` });
   const controls = el('div', { class: 'wiki-reader-controls' });
   const close = el('button', { class: 'wiki-reader-control', type: 'button', text: '✕', 'aria-label': '記事一覧へ戻る' });
-  const listButton = el('button', { class: 'wiki-reader-control wiki-list-button', type: 'button', text: '10選' });
   const title = el('div', { class: 'wiki-reader-title', text: articleMeta.title });
   const aa = el('button', { class: 'wiki-reader-control', type: 'button', text: 'Aa', onclick: () => settingsSheet({ ...s }, next => applySettings(next)) });
-  controls.append(close, listButton, title, aa);
+  controls.append(close, title, aa);
 
   const stage = el('div', { class: 'wiki-reader-stage' });
   const page = el('article', { class: 'wiki-page' });
@@ -248,8 +243,6 @@ function showReader(root, articleMeta, article, backToList) {
     configurePage(measurePage, vertical);
     await waitLayoutFrames();
 
-    // The measurement page has exactly the same bounds, font size, line height,
-    // writing mode and number styling as the visible page.
     const nextPages = paginateMeasured(articleText(article.blocks), measurePage, vertical);
     if (disposed || serial !== paginationSerial || generation !== articleGeneration) return;
 
@@ -318,7 +311,6 @@ function showReader(root, articleMeta, article, backToList) {
   };
 
   close.onclick = leaveReader;
-  listButton.onclick = leaveReader;
   window.addEventListener('resize', scheduleRepaginate, { passive: true });
   window.visualViewport?.addEventListener('resize', scheduleRepaginate, { passive: true });
   window.addEventListener('pdv2:before-navigate', cleanupReader);
