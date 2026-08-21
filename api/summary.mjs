@@ -322,7 +322,7 @@ async function maybeExtract({ url, mode, preferFullText, description, title }) {
   try {
     const extracted = await withTimeout(
       extractArticleFromUrl(url, { maxTextLength: EXTRACT_TEXT_LIMIT }),
-      mode === 'papers' ? 7000 : 4500,
+      mode === 'papers' ? 3800 : 2200,
       '本文取得'
     );
     const text = clean(extracted?.text || '', mode === 'papers' ? PAPER_INPUT_LIMIT : FAST_INPUT_LIMIT);
@@ -385,9 +385,9 @@ async function buildSummary(body) {
     const result = await generateGemini({
       prompt,
       systemInstruction: 'モバイル向けニュース編集者。本文を読んで情報を圧縮し、重複のない完結した日本語3文を返す。文の途中で切らない。事実を増やさない。',
-      maxOutputTokens: fastMode ? 420 : 560,
+      maxOutputTokens: fastMode ? 360 : 500,
       responseSchema,
-      timeoutMs: fastMode ? 6500 : 11000
+      timeoutMs: fastMode ? 4800 : 7600
     });
 
     let parsed;
