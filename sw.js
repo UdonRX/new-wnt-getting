@@ -1,8 +1,8 @@
-const CACHE_NAME = 'personal-dashboard-v2-14-19';
+const CACHE_NAME = 'personal-dashboard-v2-14-20';
 const STATIC_FETCH_TIMEOUT_MS = 5500;
 
 /*
- * v2.14.19
+ * v2.14.20
  * Reader / SNS の on-demand module graph を PWA キャッシュへ明示的に含める。
  * 存在しないファイルが1つあっても Promise.allSettled で install 自体は成功する。
  */
@@ -23,6 +23,7 @@ const APP_SHELL = [
   '/src/styles/v21416.css',
   '/src/styles/v21417.css',
   '/src/styles/v21419.css',
+  '/src/styles/v21420.css',
 
   '/src/main.js',
   '/src/app/router.js',
@@ -46,6 +47,7 @@ const APP_SHELL = [
   '/src/features/reader/reader-summary-wrap.js',
   '/src/features/reader/reader-v21417-fixes.js',
   '/src/features/reader/reader-v21419-fixes.js',
+  '/src/features/reader/reader-v21420-fixes.js',
 
   // SNS critical graph
   '/src/features/twitter/twitter.js',
@@ -74,7 +76,7 @@ async function cacheStatic(cache, request, response) {
   if (!response?.ok) return;
   try { await cache.put(request, response.clone()); } catch (_) {}
 
-  // ?v=21419 付きとクエリ無しのどちらからも復旧できるよう canonical も保存。
+  // ?v=21420 付きとクエリ無しのどちらからも復旧できるよう canonical も保存。
   const canonical = canonicalRequest(request);
   if (canonical) {
     try { await cache.put(canonical, response.clone()); } catch (_) {}
@@ -115,7 +117,7 @@ self.addEventListener('message', event => {
 });
 
 async function cachedFallback(request) {
-  // 動的 import の ?v=21419 と precache のクエリ無しURLを同一視する。
+  // 動的 import の ?v=21420 と precache のクエリ無しURLを同一視する。
   const direct = await caches.match(request, { ignoreSearch: true });
   if (direct) return direct;
 
