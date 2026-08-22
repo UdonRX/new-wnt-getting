@@ -3,10 +3,9 @@ import { el, openSheet } from '../../shared/dom.js';
 import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';
 import { iconSvg } from '../../shared/icons.js';
 import { loadReader, feedsFor } from './reader-data.js';
-import { chooseTop, requestAiRank } from './reader-rank.js';
+import { chooseTop, heuristicRank, requestAiRank } from './reader-rank.js';
 import { mountFocus } from './reader-focus.js';
 import { shortDate } from '../../shared/time.js';
-import { attachSwipe } from '../../shared/gestures.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
 let focusHandle = null;
@@ -38,6 +37,11 @@ function saveRead(mode, track, set) {
 function getSelectedFeed(mode) { return storageGet(selectedFeedKey(mode), ''); }
 function setSelectedFeed(mode, name) { storageSet(selectedFeedKey(mode), name || ''); }
 function modeLabel(mode) { return mode === 'papers' ? '論文' : mode === 'knowledge' ? '知識' : 'ニュース'; }
+
+function setReaderMode(mode) {
+  if (!READER_MODES.includes(mode)) return;
+  update('lastReaderMode', mode);
+}
 
 function creativeFamiliesOf(item) {
   const text = String(item?.description || '');
@@ -177,90 +181,224 @@ function renderBento(host, mode, track, family, items, { onOpen, onRecommend }) 
   const draw = () => {
     grid.replaceChildren();
     const q = search.value.trim().toLowerCase();
-    const filtered = items.filter(item => !q || [item?.title,item?.titleJa,item?.source,item?.feedName].filter(Boolean).join(' ').toLowerCase().includes(q));
+    const filtered = items.filter(item => !q || [item?.title, item?.titleJa, item?.source, item?.feedName]
+      .filter(Boolean).join(' ').toLowerCase().includes(q));
+
     filtered.forEach((item, filteredIndex) => {
       const unread = !read.has(item.id);
       const card = el('button', { class: `reader-bento-card ${filteredIndex === 0 ? 'is-hero' : ''}`, type: 'button' });
       const media = el('div', { class: 'reader-bento-media' });
       if (item?.image) {
-        const image = el('img', { src:item.image, alt:'', loading:filteredIndex<=2?'eager':'lazy', decoding:'async', referrerpolicy:'no-referrer' });
-        image.addEventListener('error', () => media.classList.add('image-failed'), { once:true });
+        const image = el('img', {
+          src: item.image, alt: '', loading: filteredIndex <= 2 ? 'eager' : 'lazy',
+          decoding: 'async', referrerpolicy: 'no-referrer'
+        });
+        image.addEventListener('error', () => media.classList.add('image-failed'), { once: true });
         media.append(image);
       } else media.classList.add('image-failed');
-      media.append(el('span', { class:'reader-bento-fallback', text:bentoFallbackLabel(item) }));
+      media.append(el('span', { class: 'reader-bento-fallback', text: bentoFallbackLabel(item) }));
       const meta = [];
-      if (unread) meta.push(el('span',{class:'badge',text:'NEW'}));
-      meta.push(el('span',{text:item?.source || item?.feedName || ''}), el('span',{text:shortDate(item?.pubDate)}));
-      card.append(media, el('div',{class:'reader-bento-copy'},[
-        el('div',{class:'reader-bento-meta'},meta),
-        el(filteredIndex===0?'h2':'h3',{class:'reader-bento-title',text:item?.titleJa || item?.title || '無題'})
+      if (unread) meta.push(el('span', { class: 'badge', text: 'NEW' }));
+      meta.push(el('span', { text: item?.source || item?.feedName || '' }), el('span', { text: shortDate(item?.pubDate) }));
+      card.append(media, el('div', { class: 'reader-bento-copy' }, [
+        el('div', { class: 'reader-bento-meta' }, meta),
+        el(filteredIndex === 0 ? 'h2' : 'h3', { class: 'reader-bento-title', text: item?.titleJa || item?.title || '無題' })
       ]));
       card.onclick = () => {
         read.add(item.id);
-        saveRead(mode,track,read);
-        onOpen(item);
+        saveRead(mode, track, read);
+        onOpen(item, filteredIndex, filtered);
       };
       grid.append(card);
     });
-    if (!filtered.length) grid.append(el('div',{class:'empty reader-bento-empty',text:'該当する記事がありません'}));
+    if (!filtered.length) grid.append(el('div', { class: 'empty reader-bento-empty', text: '該当する記事がありません' }));
   };
-  search.addEventListener('input',draw);
+  search.addEventListener('input', draw);
   draw();
-  wrap.append(stickyBar,search,grid);
+  wrap.append(stickyBar, search, grid);
   host.replaceChildren(wrap);
 }
 
 function interleaveRecommendationGroups(groups) {
-  const queues = groups.map(rows => [...rows]);
+  const queues = groups.filter(rows => Array.isArray(rows) && rows.length).map(rows => [...rows]);
   const result = [];
+  const seen = new Set();
   let added = true;
   while (added) {
     added = false;
     for (const queue of queues) {
-      const next = queue.shift();
-      if (next) { result.push(next); added = true; }
+      while (queue.length) {
+        const next = queue.shift();
+        const key = String(next?.id || next?.link || `${next?.feedName || ''}|${next?.title || ''}`);
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        result.push(next);
+        added = true;
+        break;
+      }
     }
   }
   return result;
 }
 
-async function loadMixedRecommendations() {
-  const jobs = await Promise.allSettled([
-    loadReader('news', { preferCache: true }),
-    loadReader('knowledge', { preferCache: true }),
-    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: true }),
-    loadReader('papers', { paperTrack: 'creative', fastOnly: true, preferCache: true })
-  ]);
-
-  const value = index => jobs[index].status === 'fulfilled' ? jobs[index].value.items : [];
-  const news = annotateItems(value(0),'news');
-  const knowledge = annotateItems(value(1),'knowledge');
-  const core = annotateItems(value(2),'papers','core');
-  const creative = annotateItems(value(3),'papers','creative','all');
-
-  const newsSelected = chooseTop(news,'news',getRead('news','core'),5,cachedAiRanking('news','core')).slice(0,6);
-  const knowledgeSelected = chooseTop(knowledge,'knowledge',getRead('knowledge','core'),5,cachedAiRanking('knowledge','core')).slice(0,5);
-  const coreSelected = chooseTop(core,'papers',getRead('papers','core'),4,cachedAiRanking('papers','core')).slice(0,4);
-  const creativeSelected = chooseTop(creative,'papers-creative-all',getRead('papers','creative'),3,cachedAiRanking('papers','creative','all')).slice(0,3);
-
-  const papers = interleaveRecommendationGroups([coreSelected,creativeSelected]);
-  return interleaveRecommendationGroups([newsSelected,knowledgeSelected,papers]).slice(0,18);
+function paperRecommendations(items, track, family) {
+  const rankMode = track === 'creative' ? creativeRankMode(family) : 'papers';
+  const unread = getRead('papers', track);
+  const heuristic = heuristicRank(items, rankMode, unread);
+  const byKey = new Map(items.map(item => [String(item?.id || ''), item]));
+  const ordered = [];
+  const used = new Set();
+  for (const row of cachedAiRanking('papers', track, family)) {
+    const item = byKey.get(String(row?.id || ''));
+    if (!item || used.has(item.id)) continue;
+    ordered.push(item);
+    used.add(item.id);
+  }
+  for (const row of heuristic) {
+    if (used.has(row.item.id)) continue;
+    ordered.push(row.item);
+    used.add(row.item.id);
+  }
+  return ordered;
 }
 
+async function loadModeRecommendations(mode, { track = 'core', family = 'all', onProgress } = {}) {
+  onProgress?.(12, `${modeLabel(mode)}の記事を取得中`);
+  if (mode === 'papers') {
+    const result = await loadReader('papers', {
+      paperTrack: track,
+      fastOnly: true,
+      preferCache: false,
+      onProgress: () => onProgress?.(52, '論文を整理中')
+    });
+    let rows = result.items;
+    if (track === 'creative') rows = filterCreativeItems(rows, family);
+    const annotated = annotateItems(rows, 'papers', track, family);
+    onProgress?.(78, '面白さを優先して並べ替え中');
+    return paperRecommendations(annotated, track, family);
+  }
+
+  const result = await loadReader(mode, {
+    selectedFeed: '',
+    preferCache: false,
+    onProgress: () => onProgress?.(52, '登録した取得先を均等に確認中')
+  });
+  const annotated = annotateItems(result.items, mode);
+  onProgress?.(78, '更新日時を優先しておすすめを選別中');
+  return chooseTop(annotated, mode, getRead(mode, 'core'), 0, cachedAiRanking(mode, 'core'));
+}
+
+async function loadMixedRecommendations(onProgress) {
+  let completed = 0;
+  const notify = text => {
+    completed += 1;
+    onProgress?.(12 + completed * 17, text);
+  };
+  const jobs = [
+    loadReader('news', { selectedFeed: '', preferCache: false }).finally(() => notify('ニュースを確認しました')),
+    loadReader('knowledge', { selectedFeed: '', preferCache: false }).finally(() => notify('知識を確認しました')),
+    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }).finally(() => notify('製品・熱研究を確認しました')),
+    loadReader('papers', { paperTrack: 'creative', fastOnly: true, preferCache: false }).finally(() => notify('独創研究を確認しました'))
+  ];
+  const results = await Promise.allSettled(jobs);
+  const value = index => results[index].status === 'fulfilled' ? results[index].value.items : [];
+
+  const news = annotateItems(value(0), 'news');
+  const knowledge = annotateItems(value(1), 'knowledge');
+  const core = annotateItems(value(2), 'papers', 'core');
+  const creative = annotateItems(value(3), 'papers', 'creative', 'all');
+
+  onProgress?.(86, '新しさと面白さで並べ替え中');
+  const newsSelected = chooseTop(news, 'news', getRead('news', 'core'), 0, cachedAiRanking('news', 'core'));
+  const knowledgeSelected = chooseTop(knowledge, 'knowledge', getRead('knowledge', 'core'), 0, cachedAiRanking('knowledge', 'core'));
+  const papers = interleaveRecommendationGroups([
+    paperRecommendations(core, 'core', 'all'),
+    paperRecommendations(creative, 'creative', 'all')
+  ]);
+
+  // No global slice/limit: keep all naturally qualified recommendations.
+  return interleaveRecommendationGroups([newsSelected, knowledgeSelected, papers]);
+}
 
 export async function warmReaderRecommendations() {
   await Promise.allSettled([
-    loadReader('news', { preferCache: false }),
-    loadReader('knowledge', { preferCache: false }),
+    loadReader('news', { selectedFeed: '', preferCache: false }),
+    loadReader('knowledge', { selectedFeed: '', preferCache: false }),
     loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }),
     loadReader('papers', { paperTrack: 'creative', fastOnly: true, preferCache: false })
   ]);
 }
 
+function installReaderModeSwipe(node, mode, onMode) {
+  let start = null;
+  let suppressUntil = 0;
+  const shouldIgnore = target => Boolean(target?.closest?.('input,textarea,select,.chips,.segmented,.reader-swipe-feed,a'));
+  const onStart = event => {
+    if (event.touches?.length !== 1 || shouldIgnore(event.target)) return;
+    const t = event.touches[0];
+    start = { x: t.clientX, y: t.clientY };
+  };
+  const onEnd = event => {
+    if (!start || !event.changedTouches?.length) { start = null; return; }
+    const t = event.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    start = null;
+    if (Math.abs(dx) < 62 || Math.abs(dx) <= Math.abs(dy) * 1.35) return;
+    const current = READER_MODES.indexOf(mode);
+    const nextIndex = dx < 0 ? current + 1 : current - 1;
+    if (nextIndex < 0 || nextIndex >= READER_MODES.length) return;
+    suppressUntil = Date.now() + 420;
+    onMode(READER_MODES[nextIndex]);
+  };
+  const blockClick = event => {
+    if (Date.now() >= suppressUntil) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  node.addEventListener('touchstart', onStart, { passive: true });
+  node.addEventListener('touchend', onEnd, { passive: true });
+  node.addEventListener('click', blockClick, true);
+  return () => {
+    node.removeEventListener('touchstart', onStart);
+    node.removeEventListener('touchend', onEnd);
+    node.removeEventListener('click', blockClick, true);
+  };
+}
+
+function recommendationLoading(host, mixed) {
+  const fill = el('div', { class: 'reader-recommend-progress-fill' });
+  const value = el('span', { class: 'reader-recommend-progress-value', text: '8%' });
+  const status = el('span', { text: mixed ? 'ニュース・知識・論文の取得先を確認中' : '登録した取得先を確認中' });
+  const progress = el('div', { class: 'reader-recommend-progress' }, [
+    status,
+    el('div', { class: 'reader-recommend-progress-track' }, [fill]),
+    value
+  ]);
+  const box = el('div', { class: 'reader-recommend-loading' }, [
+    el('strong', { text: 'おすすめを選んでいます…' }),
+    el('span', { text: mixed ? 'ニュース・知識は新しさ、論文は面白さを優先' : '登録した取得先からおすすめを選別します' }),
+    progress
+  ]);
+  host.replaceChildren(box);
+  let current = 0.08;
+  const set = (percent, text) => {
+    current = Math.max(current, Math.min(1, Number(percent || 0) / 100));
+    fill.style.setProperty('--reader-recommend-progress', String(current));
+    value.textContent = `${Math.round(current * 100)}%`;
+    if (text) status.textContent = text;
+  };
+  set(8);
+  return set;
+}
+
 export async function renderReader(root, {
   navigate,
   refresh = false,
-  readerRecommendations = false
+  readerRecommendations = false,
+  recommendationMode = '',
+  recommendationTrack = '',
+  recommendationFamily = ''
 }) {
   focusHandle?.destroy?.(); focusHandle = null;
   swipeDetach?.(); swipeDetach = null;
@@ -269,133 +407,198 @@ export async function renderReader(root, {
   const mode = state.readerMode || 'news';
   const track = mode === 'papers' ? paperTrack() : 'core';
   const family = mode === 'papers' && track === 'creative' ? creativeFamily() : 'all';
+  const scopedMode = READER_MODES.includes(recommendationMode) ? recommendationMode : '';
+  const scopedTrack = scopedMode === 'papers' ? (recommendationTrack === 'creative' ? 'creative' : 'core') : 'core';
+  const scopedFamily = scopedMode === 'papers' && scopedTrack === 'creative'
+    ? (['applied', 'general'].includes(recommendationFamily) ? recommendationFamily : 'all')
+    : 'all';
+  const mixedRecommendation = readerRecommendations && !scopedMode;
+
   const screen = el('section', { class: 'screen reader-screen' });
-  const rerender = (force = false) => renderReader(root,{navigate,refresh:force,readerRecommendations:false});
+  const rerender = (force = false) => renderReader(root, { navigate, refresh: force, readerRecommendations: false });
+  const switchMode = nextMode => {
+    if (!READER_MODES.includes(nextMode) || nextMode === mode) return;
+    setReaderMode(nextMode);
+    renderReader(root, { navigate, readerRecommendations: false });
+  };
 
   const header = topbar('読む', {
-    subtitle: readerRecommendations ? 'ニュース・知識・論文からおすすめ' : mode === 'papers' ? '論文' : modeLabel(mode),
+    subtitle: readerRecommendations
+      ? (scopedMode ? `${modeLabel(scopedMode)}からおすすめ` : 'ニュース・知識・論文からおすすめ')
+      : mode === 'papers' ? '論文' : modeLabel(mode),
     actions: [
-      { html:iconSvg('plus',{size:20}), title:'追加/編集', onClick:()=>manageFeeds(mode,rerender) },
-      { html:iconSvg('refresh',{size:20}), title:'更新', onClick:()=>rerender(true) },
-      { html:iconSvg('settings',{size:20}), title:'設定', onClick:()=>navigate('settings') }
+      { html: iconSvg('plus', { size: 20 }), title: '追加/編集', onClick: () => manageFeeds(mode, rerender) },
+      { html: iconSvg('refresh', { size: 20 }), title: '更新', onClick: () => rerender(true) },
+      { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   });
   screen.append(header);
 
-  const modeNav = el('div',{class:'reader-mode-nav'});
+  const modeNav = el('div', { class: 'reader-mode-nav' });
   modeNav.append(segmented([
-    {value:'news',label:'ニュース'},
-    {value:'knowledge',label:'知識'},
-    {value:'papers',label:'論文'}
-  ],mode,value=>{
-    if (!READER_MODES.includes(value) || value===mode) return;
-    update('lastReaderMode',value);
-    renderReader(root,{navigate,readerRecommendations:false});
-  }));
+    { value: 'news', label: 'ニュース' },
+    { value: 'knowledge', label: '知識' },
+    { value: 'papers', label: '論文' }
+  ], mode, switchMode));
   screen.append(modeNav);
-  swipeDetach = attachSwipe(modeNav,{
-    left:()=>{ const i=READER_MODES.indexOf(mode); if(i<READER_MODES.length-1){update('lastReaderMode',READER_MODES[i+1]);renderReader(root,{navigate,readerRecommendations:false});}},
-    right:()=>{ const i=READER_MODES.indexOf(mode); if(i>0){update('lastReaderMode',READER_MODES[i-1]);renderReader(root,{navigate,readerRecommendations:false});}},
-    threshold:40
-  });
 
-  if (mode==='papers') {
-    screen.append(buildPaperTrackLevel(value=>{
-      update('paperTrack',value);
-      renderReader(root,{navigate,readerRecommendations:false});
+  if (mode === 'papers') {
+    screen.append(buildPaperTrackLevel(value => {
+      update('paperTrack', value);
+      renderReader(root, { navigate, readerRecommendations: false });
     }));
   }
 
-  const stickyContext = el('div',{class:'reader-sticky-context'});
-  if (mode!=='papers') {
-    const chips = buildFeedChips(mode,()=>renderReader(root,{navigate,readerRecommendations:false}));
+  const stickyContext = el('div', { class: 'reader-sticky-context' });
+  if (mode !== 'papers') {
+    const chips = buildFeedChips(mode, () => renderReader(root, { navigate, readerRecommendations: false }));
     if (chips) stickyContext.append(chips);
-  } else if (track==='creative') {
-    stickyContext.append(buildCreativeFamilyTabs(value=>{
-      update('creativePaperFamily',value);
-      renderReader(root,{navigate,readerRecommendations:false});
+  } else if (track === 'creative') {
+    stickyContext.append(buildCreativeFamilyTabs(value => {
+      update('creativePaperFamily', value);
+      renderReader(root, { navigate, readerRecommendations: false });
     }));
   }
   screen.append(stickyContext);
-  const host = el('div',{class:'reader-content-host'});
+  const host = el('div', { class: 'reader-content-host' });
   screen.append(host);
   root.replaceChildren(screen);
 
-  const openSingleArticle = item => {
-    screen.classList.remove('reader-list-open','reader-list-compact');
-    screen.classList.add('reader-focus-open','reader-article-open');
-    window.scrollTo({top:0,behavior:'auto'});
+  if (!readerRecommendations) {
+    swipeDetach = installReaderModeSwipe(screen, mode, switchMode);
+  }
+
+  const openArticleSequence = (item, initialIndex, visibleItems) => {
+    const rows = Array.isArray(visibleItems) && visibleItems.length ? visibleItems : [item];
+    screen.classList.remove('reader-list-open', 'reader-list-motion-compact');
+    screen.classList.add('reader-focus-open', 'reader-article-open');
+    window.scrollTo({ top: 0, behavior: 'auto' });
     focusHandle?.destroy?.();
-    focusHandle = mountFocus(host,{
-      items:[item],
-      label:currentSourceLabel(mode,track,family),
-      summaryMode:item._readerMode || mode,
-      onList:()=>renderReader(root,{navigate,readerRecommendations:false})
+    focusHandle = mountFocus(host, {
+      items: rows,
+      initialIndex,
+      label: currentSourceLabel(mode, track, family),
+      summaryMode: mode,
+      onList: () => renderReader(root, { navigate, readerRecommendations: false }),
+      onIndexChange: (_, activeItem) => {
+        const r = getRead(mode, track);
+        r.add(activeItem.id);
+        saveRead(mode, track, r);
+      },
+      onPrevFeed: () => {
+        const i = READER_MODES.indexOf(mode);
+        if (i > 0) switchMode(READER_MODES[i - 1]);
+      },
+      onNextFeed: () => {
+        const i = READER_MODES.indexOf(mode);
+        if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]);
+      }
     });
   };
 
   if (readerRecommendations) {
-    screen.classList.add('reader-focus-open','reader-recommendations-open');
-    host.replaceChildren(el('div',{class:'reader-recommend-loading'},[
-      el('strong',{text:'おすすめを選んでいます'}),
-      el('span',{text:'ニュース・知識は新しさ、論文は面白さを優先'}),
-      el('div',{class:'reader-modern-loader-track'},[el('div',{class:'reader-modern-loader-fill'})])
-    ]));
+    screen.classList.add('reader-focus-open', 'reader-recommendations-open');
+    const setLoadingProgress = recommendationLoading(host, mixedRecommendation);
     try {
-      const mixed = await loadMixedRecommendations();
-      if (!mixed.length) throw new Error('おすすめ記事を準備できませんでした');
-      focusHandle = mountFocus(host,{
-        items:mixed,
-        label:'おすすめ',
-        summaryMode:'',
-        onList:()=>renderReader(root,{navigate,readerRecommendations:false}),
-        onIndexChange:(_,item)=>{
-          const m=item._readerMode || 'news';
-          const t=item._paperTrack || 'core';
-          const r=getRead(m,t); r.add(item.id); saveRead(m,t,r);
+      const recommendations = mixedRecommendation
+        ? await loadMixedRecommendations(setLoadingProgress)
+        : await loadModeRecommendations(scopedMode, {
+          track: scopedTrack,
+          family: scopedFamily,
+          onProgress: setLoadingProgress
+        });
+      if (!recommendations.length) throw new Error('おすすめ記事を準備できませんでした');
+      setLoadingProgress(100, 'おすすめを表示します');
+
+      const returnToOrigin = () => {
+        const returnMode = mixedRecommendation ? 'news' : scopedMode;
+        setReaderMode(returnMode);
+        if (returnMode === 'papers') {
+          update('paperTrack', scopedTrack);
+          if (scopedTrack === 'creative') update('creativePaperFamily', scopedFamily);
         }
+        renderReader(root, { navigate, readerRecommendations: false });
+      };
+      const recommendationSwitch = direction => {
+        if (!scopedMode) return;
+        const i = READER_MODES.indexOf(scopedMode);
+        const next = i + direction;
+        if (next < 0 || next >= READER_MODES.length) return;
+        const nextMode = READER_MODES[next];
+        setReaderMode(nextMode);
+        renderReader(root, {
+          navigate,
+          readerRecommendations: true,
+          recommendationMode: nextMode,
+          recommendationTrack: nextMode === 'papers' ? paperTrack() : '',
+          recommendationFamily: nextMode === 'papers' ? creativeFamily() : ''
+        });
+      };
+
+      requestAnimationFrame(() => {
+        focusHandle = mountFocus(host, {
+          items: recommendations,
+          label: scopedMode ? `${modeLabel(scopedMode)}おすすめ` : 'おすすめ',
+          summaryMode: scopedMode,
+          onList: returnToOrigin,
+          onPrevFeed: () => recommendationSwitch(-1),
+          onNextFeed: () => recommendationSwitch(1),
+          onIndexChange: (_, item) => {
+            const m = item._readerMode || scopedMode || 'news';
+            const t = item._paperTrack || 'core';
+            const r = getRead(m, t);
+            r.add(item.id);
+            saveRead(m, t, r);
+          }
+        });
       });
     } catch (error) {
       screen.classList.remove('reader-focus-open');
-      host.replaceChildren(el('div',{class:'error-box',text:error.message}));
+      host.replaceChildren(el('div', { class: 'error-box', text: error.message }));
     }
     return;
   }
 
   screen.classList.add('reader-list-open');
-  host.replaceChildren(el('div',{class:'card',html:'<div class="loading">記事一覧を読み込み中...</div>'}));
+  host.replaceChildren(el('div', { class: 'card', html: '<div class="loading">記事一覧を読み込み中...</div>' }));
 
   try {
     const selectedFeed = getSelectedFeed(mode);
-    const result = await loadReader(mode,{
-      force:refresh,
+    const showList = rows => {
+      const visible = mode === 'papers' && track === 'creative' ? filterCreativeItems(rows, family) : rows;
+      const annotated = annotateItems(visible, mode, track, family);
+      renderBento(host, mode, track, family, annotated, {
+        onOpen: openArticleSequence,
+        onRecommend: () => renderReader(root, {
+          navigate,
+          readerRecommendations: true,
+          recommendationMode: mode,
+          recommendationTrack: track,
+          recommendationFamily: family
+        })
+      });
+      return annotated;
+    };
+
+    const result = await loadReader(mode, {
+      force: refresh,
       selectedFeed,
-      paperTrack:track,
-      onProgress:items=>{
+      paperTrack: track,
+      onProgress: items => {
         if (!items?.length || host.querySelector('.reader-bento-view')) return;
-        const annotated = annotateItems(mode==='papers'&&track==='creative'?filterCreativeItems(items,family):items,mode,track,family);
-        renderBento(host,mode,track,family,annotated,{
-          onOpen:openSingleArticle,
-          onRecommend:()=>navigate('reader',{source:'bottom-nav'})
-        });
+        showList(items);
       }
     });
-    let items = result.items;
-    if (mode==='papers'&&track==='creative') items=filterCreativeItems(items,family);
-    const annotated=annotateItems(items,mode,track,family);
-    renderBento(host,mode,track,family,annotated,{
-      onOpen:openSingleArticle,
-      onRecommend:()=>navigate('reader',{source:'bottom-nav'})
-    });
-    compactDetach=installShrinkingHeader(screen,{threshold:56,className:'reader-list-compact'});
+    const annotated = showList(result.items);
+    compactDetach = installShrinkingHeader(screen, { threshold: 56, className: 'reader-list-motion-compact', range: 48, hysteresis: 18 });
 
     if (state.settings.rankWithAi && annotated.length) {
-      const rankMode=mode==='papers'&&track==='creative'?creativeRankMode(family):mode;
-      requestAiRank(annotated,rankMode).then(data=>{
-        if(data?.ranking?.length) storageSet(rankKey(mode,track,family),JSON.stringify({at:Date.now(),ranking:data.ranking}));
-      }).catch(()=>{});
+      const rankMode = mode === 'papers' && track === 'creative' ? creativeRankMode(family) : mode;
+      requestAiRank(annotated, rankMode).then(data => {
+        if (data?.ranking?.length) storageSet(rankKey(mode, track, family), JSON.stringify({ at: Date.now(), ranking: data.ranking }));
+      }).catch(() => {});
     }
   } catch (error) {
-    host.replaceChildren(el('div',{class:'error-box',text:error.message}));
+    host.replaceChildren(el('div', { class: 'error-box', text: error.message }));
   }
 }
