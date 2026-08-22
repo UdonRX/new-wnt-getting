@@ -32,7 +32,7 @@ function storageSet(key, value) {
   catch { return false; }
 }
 function getRead(mode, track) {
-  try { return new Set(JSON.parse(storageGet(readKey(mode, track), '[]')); }
+  try { return new Set(JSON.parse(storageGet(readKey(mode, track), '[]'))); }
   catch { return new Set(); }
 }
 function saveRead(mode, track, set) {
