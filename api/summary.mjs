@@ -1,5 +1,5 @@
 import summaryV2184 from '../lib/summary-v2184.mjs';
-import summaryBatchV2188 from '../lib/summary-batch-v2188.mjs';
+import summaryBatchV2190 from '../lib/summary-batch-v2190.mjs';
 import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 import {
   buildDevErrorSummary,
@@ -21,62 +21,33 @@ function clean(value = '') {
     .replace(/\s+/g, ' ')
     .trim();
 }
-
-function first500(value = '') {
-  return Array.from(clean(value)).slice(0, 500).join('');
-}
-
-function compact(value = '') {
-  return clean(value).replace(/[\s、。・:：\-—|｜「」『』（）()]/g, '').toLowerCase();
-}
-
+function first500(value = '') { return Array.from(clean(value)).slice(0, 500).join(''); }
+function compact(value = '') { return clean(value).replace(/[\s、。・:：\-—|｜「」『』（）()]/g, '').toLowerCase(); }
 function fingerprint(value = '') {
   let hash = 2166136261;
-  for (const ch of String(value || '')) {
-    hash ^= ch.codePointAt(0) || 0;
-    hash = Math.imul(hash, 16777619);
-  }
+  for (const ch of String(value || '')) { hash ^= ch.codePointAt(0) || 0; hash = Math.imul(hash, 16777619); }
   return (hash >>> 0).toString(36);
 }
-
 function descriptionLooksReal(title, description) {
   const text = clean(description);
   if (text.length < 70 || GENERIC_RE.test(text)) return false;
-  const t = compact(title);
-  const d = compact(text);
+  const t = compact(title), d = compact(text);
   if (t.length >= 12 && d.length < 220 && (d === t || d.startsWith(t) || d.includes(t.slice(0, Math.min(36, t.length))))) return false;
   return (text.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length >= 55;
 }
-
 function bodyOf(req) {
   if (!req?.body) return {};
-  if (typeof req.body === 'string') {
-    try { return JSON.parse(req.body); } catch { return {}; }
-  }
+  if (typeof req.body === 'string') { try { return JSON.parse(req.body); } catch { return {}; } }
   return req.body || {};
 }
-
-function withRoute(diagnostic, route) {
-  return diagnostic ? { ...diagnostic, route: route || diagnostic.route || 'single' } : null;
-}
+function withRoute(diagnostic, route) { return diagnostic ? { ...diagnostic, route: route || diagnostic.route || 'single' } : null; }
 
 async function prepareBodyValue(raw = {}, { route = 'single' } = {}) {
   const body = { ...(raw || {}) };
-  const title = clean(body.title);
-  const description = clean(body.description);
-  const url = clean(body.url || body.link);
-  const rssDiagnostic = inspectSummaryText(description, {
-    route,
-    stage: 'rss',
-    url,
-    fallbackEvidence: description || title
-  });
-
+  const title = clean(body.title), description = clean(body.description), url = clean(body.url || body.link);
+  const rssDiagnostic = inspectSummaryText(description, { route, stage: 'rss', url, fallbackEvidence: description || title });
   if (descriptionLooksReal(title, description) && !rssDiagnostic) {
-    body.description = first500(description);
-    body.preparedSource = 'rss';
-    body.summaryDevDiagnostic = null;
-    return body;
+    body.description = first500(description); body.preparedSource = body.preparedSource || 'rss'; body.summaryDevDiagnostic = null; return body;
   }
 
   let articleDiagnostic = null;
@@ -87,66 +58,27 @@ async function prepareBodyValue(raw = {}, { route = 'single' } = {}) {
         new Promise((_, reject) => setTimeout(() => reject(new Error('summary article timeout')), 8500))
       ]);
       const rawArticleText = cleanDebugText(article?.text || '', 2200);
-      const articleDiagnosticCandidate = inspectSummaryText(rawArticleText, {
-        route,
-        stage: article?.sourceType === 'pdf' ? 'pdf' : 'article',
-        url,
-        fallbackEvidence: rawArticleText || description || title
-      });
+      const stage = article?.sourceType === 'pdf' ? 'pdf' : 'article';
+      const articleDiagnosticCandidate = inspectSummaryText(rawArticleText, { route, stage, url, fallbackEvidence: rawArticleText || description || title });
       const text = first500(rawArticleText);
       if (text.length >= 70 && !GENERIC_RE.test(text) && !articleDiagnosticCandidate) {
-        body.description = text;
-        body.title = clean(article?.title || title) || title;
-        body.preparedSource = article?.sourceType === 'pdf' ? 'pdf' : 'article';
-        body.summaryDevDiagnostic = null;
-        return body;
+        body.description = text; body.title = clean(article?.title || title) || title; body.preparedSource = stage; body.summaryDevDiagnostic = null; return body;
       }
-      articleDiagnostic = articleDiagnosticCandidate || diagnosticForMissing({
-        route,
-        stage: article?.sourceType === 'pdf' ? 'pdf' : 'article',
-        url,
-        fallbackEvidence: rawArticleText || description || title
-      });
+      articleDiagnostic = articleDiagnosticCandidate || diagnosticForMissing({ route, stage, url, fallbackEvidence: rawArticleText || description || title });
     } catch (error) {
-      articleDiagnostic = diagnosticFromFetchError(error, {
-        route,
-        stage: 'article-fetch',
-        url,
-        fallbackEvidence: description || title
-      });
-      console.warn('[summary-v2189-dev] article prepare failed', {
-        route,
-        url,
-        message: error?.message || error,
-        code: articleDiagnostic?.code
-      });
+      articleDiagnostic = diagnosticFromFetchError(error, { route, stage: 'article-fetch', url, fallbackEvidence: description || title });
+      console.warn('[summary-v2190-dev] article prepare failed', { route, url, message: error?.message || error, code: articleDiagnostic?.code });
     }
   }
 
-  // Keep a short RSS fallback only when the diagnostic inspection still says it
-  // is meaningful enough. Text below the normal threshold is intentionally not
-  // sent to Gemini during this temporary debugging period.
   const shortDescription = description.length >= 45 && !GENERIC_RE.test(description) ? first500(description) : '';
-  const shortDiagnostic = shortDescription
-    ? inspectSummaryText(shortDescription, { route, stage: 'rss-short', url, fallbackEvidence: shortDescription })
-    : null;
-
+  const shortDiagnostic = shortDescription ? inspectSummaryText(shortDescription, { route, stage: 'rss-short', url, fallbackEvidence: shortDescription }) : null;
   if (shortDescription && !shortDiagnostic && shortDescription.length >= 70) {
-    body.description = shortDescription;
-    body.preparedSource = 'rss-short';
-    body.summaryDevDiagnostic = null;
-    return body;
+    body.description = shortDescription; body.preparedSource = 'rss-short'; body.summaryDevDiagnostic = null; return body;
   }
 
-  body.description = '';
-  body.preparedSource = 'missing';
-  body.summaryDevDiagnostic = withRoute(
-    articleDiagnostic
-      || shortDiagnostic
-      || rssDiagnostic
-      || diagnosticForMissing({ route, stage: url ? 'article+rss' : 'rss', url, fallbackEvidence: description || title }),
-    route
-  );
+  body.description = ''; body.preparedSource = 'missing';
+  body.summaryDevDiagnostic = withRoute(articleDiagnostic || shortDiagnostic || rssDiagnostic || diagnosticForMissing({ route, stage: url ? 'article+rss' : 'rss', url, fallbackEvidence: description || title }), route);
   return body;
 }
 
@@ -154,51 +86,27 @@ function isolateSummaryWork(body = {}) {
   const originalMode = clean(body.mode) || 'auto';
   const material = [clean(body.title), first500(body.description), clean(body.preparedSource)].join('\n');
   const { summaryDevDiagnostic, ...safeBody } = body;
-  return {
-    ...safeBody,
-    clientMode: originalMode,
-    mode: `${originalMode}#${fingerprint(material)}`.slice(0, 32)
-  };
+  return { ...safeBody, clientMode: originalMode, mode: `${originalMode}#${fingerprint(material)}`.slice(0, 32) };
 }
 
 function devErrorResult(prepared = {}, index = 0) {
-  const diagnostic = prepared.summaryDevDiagnostic || diagnosticForMissing({
-    route: 'batch',
-    stage: prepared.preparedSource || 'prepare',
-    url: prepared.url || prepared.link,
-    fallbackEvidence: prepared.description || prepared.title
-  });
+  const diagnostic = prepared.summaryDevDiagnostic || diagnosticForMissing({ route: 'batch', stage: prepared.preparedSource || 'prepare', url: prepared.url || prepared.link, fallbackEvidence: prepared.description || prepared.title });
   return {
-    index,
-    url: clean(prepared.url || prepared.link),
-    mode: clean(prepared.mode) || 'auto',
-    summary: null,
-    preparedSource: prepared.preparedSource || 'missing',
-    devError: buildDevErrorSummary({ ...diagnostic, route: 'batch' })
+    index, url: clean(prepared.url || prepared.link), mode: clean(prepared.mode) || 'auto', summary: null,
+    preparedSource: prepared.preparedSource || 'missing', devError: buildDevErrorSummary({ ...diagnostic, route: 'batch' }),
+    diagnostic: { code: `RDR-CONTENT-${diagnostic.code || 'UNKNOWN'}`, stage: diagnostic.stage || 'prepare', source: prepared.preparedSource || 'missing', chars: Number(diagnostic.charCount || 0), detail: diagnostic.fetchError || diagnostic.reason || '' }
   };
 }
 
 async function handleBatch(req, res) {
   const raw = bodyOf(req);
   const incoming = Array.isArray(raw.items) ? raw.items.slice(0, 10) : [];
-  if (!incoming.length) return summaryBatchV2188(req, res);
+  if (!incoming.length) return summaryBatchV2190(req, res);
 
-  // TEMP v2.18.9 diagnostics: inspect every future-card item before Gemini.
-  // This prevents menu/paywall/empty text from becoming a plausible-looking
-  // batch summary and preserves a structured reason for later investigation.
-  const preparedRows = await Promise.all(incoming.map((item, index) =>
-    prepareBodyValue(item, { route: 'batch' }).then(prepared => ({ index, prepared }))
-  ));
+  const preparedRows = await Promise.all(incoming.map((item, index) => prepareBodyValue(item, { route: 'batch' }).then(prepared => ({ index, prepared }))));
   const validRows = preparedRows.filter(row => !row.prepared.summaryDevDiagnostic);
-
   if (!validRows.length) {
-    return res.status(200).json({
-      results: preparedRows.map(row => devErrorResult(row.prepared, row.index)),
-      batch: 'v2188+dev-v2189',
-      generated: 0,
-      cached: 0,
-      devErrors: preparedRows.length
-    });
+    return res.status(200).json({ results: preparedRows.map(row => devErrorResult(row.prepared, row.index)), batch: 'v2190+dev', generated: 0, cached: 0, devErrors: preparedRows.length });
   }
 
   req.body = { ...raw, items: validRows.map(row => {
@@ -209,45 +117,27 @@ async function handleBatch(req, res) {
   const originalJson = res.json.bind(res);
   res.json = payload => {
     if (!Array.isArray(payload?.results)) return originalJson(payload);
-    const validResults = payload.results;
-    const merged = new Array(preparedRows.length).fill(null);
-
+    const validResults = payload.results, merged = new Array(preparedRows.length).fill(null);
     validRows.forEach((row, validIndex) => {
       const result = validResults[validIndex] || {};
-      merged[row.index] = { ...result, index: row.index };
+      merged[row.index] = { ...result, index: row.index, preparedSource: row.prepared.preparedSource || result.preparedSource || result.summary?.contentSource || 'unknown', diagnostic: result.diagnostic ? { ...result.diagnostic, source: row.prepared.preparedSource || result.diagnostic.source || 'unknown' } : result.diagnostic };
     });
-    preparedRows.forEach(row => {
-      if (row.prepared.summaryDevDiagnostic) merged[row.index] = devErrorResult(row.prepared, row.index);
-    });
-
-    return originalJson({
-      ...payload,
-      results: merged.filter(Boolean),
-      batch: `${payload.batch || 'v2188'}+dev-v2189`,
-      devErrors: preparedRows.length - validRows.length
-    });
+    preparedRows.forEach(row => { if (row.prepared.summaryDevDiagnostic) merged[row.index] = devErrorResult(row.prepared, row.index); });
+    return originalJson({ ...payload, results: merged.filter(Boolean), batch: `${payload.batch || 'v2190'}+dev`, devErrors: preparedRows.length - validRows.length });
   };
-
-  return summaryBatchV2188(req, res);
+  return summaryBatchV2190(req, res);
 }
 
 export default async function handler(req, res) {
-  if (req.method === 'POST' && String(req.query?.batch || '') === '1') {
-    return handleBatch(req, res);
-  }
-
+  if (req.method === 'POST' && String(req.query?.batch || '') === '1') return handleBatch(req, res);
   if (req.method === 'POST') {
     const prepared = await prepareBodyValue(bodyOf(req), { route: 'single' });
     res.setHeader('X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
-
-    // TEMP v2.18.9 diagnostics: return a visible, non-cacheable report instead
-    // of asking Gemini to summarize unusable input. Remove after root cause fix.
     if (prepared.summaryDevDiagnostic) {
       const diagnostic = { ...prepared.summaryDevDiagnostic, route: 'single' };
       res.setHeader('X-Summary-Dev-Error', diagnostic.code || 'UNKNOWN_EXTRACTION');
       return res.status(200).json(buildDevErrorSummary(diagnostic));
     }
-
     req.body = isolateSummaryWork(prepared);
   }
   return summaryV2184(req, res);
