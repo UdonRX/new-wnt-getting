@@ -1,4 +1,4 @@
-import { getTwitchChannelSnapshot } from '../lib/twitch.mjs';
+import { getTwitchChannelSnapshot, normalizeTwitchLogin } from '../lib/twitch.mjs';
 
 function esc(value) {
   return String(value ?? '')
@@ -56,29 +56,77 @@ function toRss(snapshot, origin) {
 </rss>`;
 }
 
+function parseChannels(value) {
+  if (Array.isArray(value)) return value;
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {}
+  return raw.split(',').map(row => row.trim()).filter(Boolean);
+}
+
+async function batchSnapshots(inputs, { force = false } = {}) {
+  const unique = [];
+  const seen = new Set();
+  for (const input of inputs) {
+    const raw = typeof input === 'object' ? String(input?.value || input?.url || input?.name || '') : String(input || '');
+    const login = normalizeTwitchLogin(raw);
+    const key = login || raw.toLowerCase();
+    if (!raw || seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ input: raw, login });
+    if (unique.length >= 24) break;
+  }
+
+  const results = [];
+  // Sequential on purpose: one serverless invocation reuses the same app token,
+  // avoiding simultaneous OAuth/Helix bursts for every configured channel.
+  for (const row of unique) {
+    try {
+      const snapshot = await getTwitchChannelSnapshot(row.input, { archiveLimit: 20, force, allowStale: true });
+      results.push({ input: row.input, login: row.login || snapshot?.broadcaster?.login || '', ok: true, snapshot });
+    } catch (error) {
+      results.push({
+        input: row.input, login: row.login || '', ok: false,
+        status: Number(error?.statusCode) || 500,
+        code: String(error?.code || ''),
+        error: String(error?.message || 'Twitch情報の取得に失敗しました。')
+      });
+    }
+  }
+  return results;
+}
+
 export default async function handler(req, res) {
   try {
-    // HobbyプランのFunction数を抑えるため、旧 /api/public-config をここへ統合。
-    // 秘密情報は返さず、ブラウザで必要なClient IDと設定有無だけを返す。
     if (String(req.query?.mode || '') === 'config') {
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({
         twitchClientId: String(process.env.TWITCH_CLIENT_ID || ''),
+        twitchConfigured: Boolean(process.env.TWITCH_CLIENT_ID && process.env.TWITCH_CLIENT_SECRET),
         youtubeConfigured: Boolean(process.env.YOUTUBE_API_KEY),
         geminiConfigured: Boolean(process.env.GEMINI_API_KEY)
       });
     }
 
-    const channel = String(req.query?.channel || '').trim();
     const format = String(req.query?.format || '').toLowerCase();
-    if (!channel) {
-      return res.status(400).json({ ok: false, error: 'channel を指定してください。' });
+    const force = String(req.query?.force || '') === '1';
+    const channels = parseChannels(req.query?.channels);
+    if (channels.length) {
+      const results = await batchSnapshots(channels, { force });
+      const okCount = results.filter(row => row.ok).length;
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ ok: okCount > 0, okCount, total: results.length, results });
     }
 
-    const snapshot = await getTwitchChannelSnapshot(channel, { archiveLimit: 20 });
+    const channel = String(req.query?.channel || '').trim();
+    if (!channel) return res.status(400).json({ ok: false, error: 'channel または channels を指定してください。' });
+    const snapshot = await getTwitchChannelSnapshot(channel, { archiveLimit: 20, force, allowStale: true });
 
     if (format === 'json' || String(req.headers.accept || '').includes('application/json')) {
-      res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+      res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ ok: true, ...snapshot });
     }
 
@@ -86,12 +134,13 @@ export default async function handler(req, res) {
     const host = req.headers.host || 'localhost';
     const origin = `${proto}://${host}`;
     res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
-    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=60');
+    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=300');
     return res.status(200).send(toRss(snapshot, origin));
   } catch (err) {
-    console.error('[twitch-feed]', err);
+    console.error('[twitch-feed-v2170]', err);
     return res.status(err?.statusCode || 500).json({
       ok: false,
+      code: String(err?.code || ''),
       error: err?.message || 'Twitch情報の取得に失敗しました。'
     });
   }
