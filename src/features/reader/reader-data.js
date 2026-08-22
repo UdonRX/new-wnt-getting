@@ -1,7 +1,32 @@
 import { state } from '../../app/store.js';
-import { fetchFeed, dedupeSort } from '../../shared/rss.js';
+import { fetchFeed, parseFeed, dedupeSort } from '../../shared/rss.js';
 
 const CACHE_TTL = 6 * 60 * 60 * 1000;
+
+async function fetchTechnologyResearch(force = false) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45_000);
+  try {
+    const target = `/api/technology-research-feed${force ? '?refresh=1' : ''}`;
+    const response = await fetch(target, {
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { Accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }
+    });
+    if (!response.ok) {
+      let detail = '';
+      try { detail = String((await response.json())?.error || ''); } catch {}
+      throw new Error(`技術リサーチ取得エラー (${response.status})${detail ? `: ${detail}` : ''}`);
+    }
+    const xml = await response.text();
+    return parseFeed(xml, '技術リサーチ');
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('技術リサーチの取得がタイムアウトしました');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function feedsFor(mode) {
   if (mode === 'papers') return state.paperFeeds;
@@ -187,7 +212,7 @@ export async function loadReader(mode, {
     const label = normalizedTrack === 'creative' ? '独創研究' : '製品・熱研究';
     const researchLabel = '技術リサーチ';
     const researchPromise = normalizedTrack === 'core'
-      ? fetchFeed({ name: researchLabel, url: `/api/technology-research-feed${force ? '?refresh=1' : ''}` })
+      ? fetchTechnologyResearch(force)
       : Promise.resolve([]);
 
     try {
