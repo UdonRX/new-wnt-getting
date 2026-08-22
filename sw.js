@@ -1,4 +1,4 @@
-const CACHE_NAME='personal-dashboard-v2-17-0';
+const CACHE_NAME='personal-dashboard-v2-18-0';
 const STATIC_FETCH_TIMEOUT_MS=5500;
 const APP_SHELL=[
   '/','/index.html','/manifest.webmanifest',
