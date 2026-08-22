@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#090b0e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dashboard V2" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <title>Personal Dashboard V2</title>
+  <link rel="stylesheet" href="/src/styles/tokens.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/base.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/navigation.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/screens.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/app.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/motion.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/v2181.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/v2182.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/v2189.css?v=2194" />
+  <link rel="stylesheet" href="/src/styles/v2194.css?v=2194" />
+</head>
+<body>
+  <div id="edge-mask" aria-hidden="true"></div>
+  <div id="edge-frame" aria-hidden="true"></div>
+  <div id="app-shell">
+    <main id="app-main" tabindex="-1"></main>
+    <nav id="bottom-nav" class="bottom-nav" aria-label="メインナビゲーション"></nav>
+  </div>
+  <div id="overlay-root"></div>
+  <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
+  <script>
+    (()=>{
+      const BUILD='2194';
+      const RECOVERY_KEY='pdv2:startup-recovery:2194';
+      let capturedError='';
+      const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
+      window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
+      window.addEventListener('unhandledrejection',event=>remember(event?.reason?.message||event?.reason||'Promise rejection'));
+      const booted=()=>document.documentElement.dataset.pdv2Booted==='1'||Boolean(document.getElementById('app-main')?.childElementCount||document.getElementById('bottom-nav')?.childElementCount);
+      const clearOld=async()=>{
+        if('serviceWorker'in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.allSettled(regs.map(r=>r.unregister()));}
+        if('caches'in window){const keys=await caches.keys();await Promise.allSettled(keys.filter(k=>k.startsWith('personal-dashboard-')).map(k=>caches.delete(k)));}
+      };
+      setTimeout(async()=>{
+        if(booted()){sessionStorage.removeItem(RECOVERY_KEY);return;}
+        if(sessionStorage.getItem(RECOVERY_KEY)!=='1'){
+          sessionStorage.setItem(RECOVERY_KEY,'1');try{await clearOld();}catch{}location.replace(`/?v=${BUILD}&recovery=1`);return;
+        }
+        const main=document.getElementById('app-main');
+        if(!main||main.childElementCount)return;
+        main.innerHTML=`<section class="screen pd-startup-error"><div class="error-box"><strong>アプリを起動できませんでした</strong><br><small>${capturedError||'最新デプロイの読み込みに失敗しています。'}</small><br><br><button type="button" class="soft-button" data-reload>再読み込み</button></div></section>`;
+        main.querySelector('[data-reload]')?.addEventListener('click',()=>location.reload());
+      },6500);
+    })();
+  </script>
+  <script type="module" src="/src/main.js?v=2194"></script>
+</body>
+</html>
