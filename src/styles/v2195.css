@@ -1,0 +1,48 @@
+/* Personal Dashboard v2.19.5 — stable Reader swipe + unified YouTube/Twitch landscape */
+
+.reader-swipe-progress-indicator { transition: opacity .12s ease !important; }
+.reader-swipe-progress-active > .reader-swipe-progress-indicator { transition: none !important; }
+.reader-feed-chips,
+.reader-mode-nav .segmented,
+.paper-track-level .segmented { scroll-behavior: auto !important; }
+
+.reader-source-scroll,
+.reader-feed-chips {
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+  -webkit-mask: none !important;
+  mask: none !important;
+  padding-right: 0 !important;
+}
+.reader-source-scroll::after,
+.reader-feed-chips::after,
+.reader-source-dock::after {
+  content: none !important;
+  display: none !important;
+}
+
+.twitch-inline-player.youtube-css-landscape {
+  position: static !important;
+  inset: auto !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+  rotate: none !important;
+  background: #000 !important;
+}
+.twitch-inline-player.youtube-css-landscape > .twitch-comment-lane,
+.twitch-inline-player.youtube-css-landscape > .twitch-inline-info { display: none !important; }
+.twitch-inline-player.youtube-css-landscape .youtube-landscape-viewport,
+.twitch-inline-player.youtube-css-landscape .youtube-inline-stage,
+.twitch-inline-player.youtube-css-landscape .twitch-embed-min,
+.twitch-inline-player.youtube-css-landscape iframe {
+  transform: none !important;
+  rotate: none !important;
+}
+.twitch-inline-player:not(.twitch-css-landscape) { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-swipe-progress-indicator { transition-duration: .01ms !important; }
+}

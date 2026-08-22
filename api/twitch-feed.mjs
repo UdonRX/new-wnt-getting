@@ -12,7 +12,6 @@ function esc(value) {
 function toRss(snapshot, origin) {
   const name = snapshot.broadcaster.displayName;
   const items = [];
-
   if (snapshot.live.isLive) {
     items.push(`
       <item>
@@ -27,7 +26,6 @@ function toRss(snapshot, origin) {
         <twitch:status>live</twitch:status>
       </item>`);
   }
-
   snapshot.archives.forEach(video => {
     items.push(`
       <item>
@@ -42,7 +40,6 @@ function toRss(snapshot, origin) {
         <twitch:status>archive</twitch:status>
       </item>`);
   });
-
   const selfUrl = `${origin}/api/twitch-feed?channel=${encodeURIComponent(snapshot.broadcaster.login)}`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:twitch="https://www.twitch.tv/">
@@ -60,10 +57,7 @@ function parseChannels(value) {
   if (Array.isArray(value)) return value;
   const raw = String(value || '').trim();
   if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-  } catch {}
+  try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) return parsed; } catch {}
   return raw.split(',').map(row => row.trim()).filter(Boolean);
 }
 
@@ -81,11 +75,9 @@ async function batchSnapshots(inputs, { force = false } = {}) {
   }
 
   const results = [];
-  // Sequential on purpose: one serverless invocation reuses the same app token,
-  // avoiding simultaneous OAuth/Helix bursts for every configured channel.
   for (const row of unique) {
     try {
-      const snapshot = await getTwitchChannelSnapshot(row.input, { archiveLimit: 20, force, allowStale: true });
+      const snapshot = await getTwitchChannelSnapshot(row.input, { archiveLimit: 50, force, allowStale: true });
       results.push({ input: row.input, login: row.login || snapshot?.broadcaster?.login || '', ok: true, snapshot });
     } catch (error) {
       results.push({
@@ -123,7 +115,7 @@ export default async function handler(req, res) {
 
     const channel = String(req.query?.channel || '').trim();
     if (!channel) return res.status(400).json({ ok: false, error: 'channel または channels を指定してください。' });
-    const snapshot = await getTwitchChannelSnapshot(channel, { archiveLimit: 20, force, allowStale: true });
+    const snapshot = await getTwitchChannelSnapshot(channel, { archiveLimit: 50, force, allowStale: true });
 
     if (format === 'json' || String(req.headers.accept || '').includes('application/json')) {
       res.setHeader('Cache-Control', 'no-store');
@@ -134,14 +126,10 @@ export default async function handler(req, res) {
     const host = req.headers.host || 'localhost';
     const origin = `${proto}://${host}`;
     res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
-    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=300');
+    res.setHeader('Cache-Control', 's-maxage=30, stale-while-revalidate=120');
     return res.status(200).send(toRss(snapshot, origin));
   } catch (err) {
-    console.error('[twitch-feed-v2170]', err);
-    return res.status(err?.statusCode || 500).json({
-      ok: false,
-      code: String(err?.code || ''),
-      error: err?.message || 'Twitch情報の取得に失敗しました。'
-    });
+    console.error('[twitch-feed-v2195]', err);
+    return res.status(err?.statusCode || 500).json({ ok: false, code: String(err?.code || ''), error: err?.message || 'Twitch情報の取得に失敗しました。' });
   }
 }

@@ -8,7 +8,7 @@ const RIGOR_SIGNAL = /実験|測定|検証|モデル|シミュレーション|�
 const PAPER_NOVELTY_SIGNAL = /新規|新しい|初めて|世界初|意外|予想外|独創|提案|発見|novel|novelty|new approach|first|unexpected|counterintuitive|discovery|propose[ds]?/i;
 const PAPER_CROSS_SIGNAL = /異分野|融合|横断|転用|応用|組み合わせ|interdisciplinary|cross[- ]disciplinary|cross[- ]domain|transfer|analogy|integration|hybrid|bio[- ]?inspired|biomimetic/i;
 const PAPER_PRACTICAL_SIGNAL = /実装|試作|プロトタイプ|実証|現場|製造|省エネ|高効率|低コスト|改善|prototype|demonstrat|implementation|manufactur|energy efficien|low[- ]cost|improv/i;
-const SIX_HOUR_WINDOW = 6 * 60 * 60 * 1000;
+const TWELVE_HOUR_WINDOW = 12 * 60 * 60 * 1000;
 
 function isPaperMode(mode) { return String(mode || '').startsWith('papers'); }
 function paperInterestScore(item) {
@@ -66,9 +66,9 @@ function interleaveBuckets(buckets) {
 
 /*
  * News / Knowledge recommendation freshness rule:
- * - If at least one fetched item was published within the last 6 hours, only
- *   those <=6h items are eligible for recommendation.
- * - Only when there are zero <=6h items do we fall back to the previous
+ * - If at least one fetched item was published within the last 12 hours, only
+ *   those <=12h items are eligible for recommendation.
+ * - Only when there are zero <=12h items do we fall back to the previous
  *   36h / 72h source-balancing behavior.
  * This file only selects fetched items; AI-summary generation is untouched.
  */
@@ -77,9 +77,9 @@ export function chooseBalancedRecentRecommendations(items, mode = 'news', unread
   const allRows = heuristicRank(items, activeMode, unreadSet);
   if (!allRows.length) return [];
   const now = Date.now();
-  const sixHourRows = allRows.filter(row => { const time = itemTime(row.item); return time > 0 && now - time <= SIX_HOUR_WINDOW; });
-  const strictSixHour = sixHourRows.length > 0;
-  const rows = strictSixHour ? sixHourRows : allRows;
+  const twelveHourRows = allRows.filter(row => { const time = itemTime(row.item); return time > 0 && now - time <= TWELVE_HOUR_WINDOW; });
+  const strictTwelveHour = twelveHourRows.length > 0;
+  const rows = strictTwelveHour ? twelveHourRows : allRows;
 
   const aiOrder = new Map(); const aiScore = new Map();
   (Array.isArray(aiRanking) ? aiRanking : []).forEach((row, index) => { const id = String(row?.id || ''); if (!id || aiOrder.has(id)) return; aiOrder.set(id, index); aiScore.set(id, Number(row?.score) || 0); });
@@ -105,9 +105,8 @@ export function chooseBalancedRecentRecommendations(items, mode = 'news', unread
     });
 
     let recent;
-    if (strictSixHour) {
-      recent = sorted;
-    } else {
+    if (strictTwelveHour) recent = sorted;
+    else {
       recent = sorted.filter(row => { const time = itemTime(row.item); return time > 0 && now - time <= PRIMARY_WINDOW; });
       if (!recent.length) recent = sorted.filter(row => { const time = itemTime(row.item); return time > 0 && now - time <= FALLBACK_WINDOW; }).slice(0, 1);
     }
