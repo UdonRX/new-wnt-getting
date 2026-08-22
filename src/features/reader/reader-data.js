@@ -185,11 +185,26 @@ export async function loadReader(mode, {
   if (mode === 'papers') {
     const base = normalizedTrack === 'creative' ? '/api/creative-papers-feed' : '/api/papers-feed';
     const label = normalizedTrack === 'creative' ? '独創研究' : '製品・熱研究';
+    const researchLabel = '技術リサーチ';
+    const researchPromise = normalizedTrack === 'core'
+      ? fetchFeed({ name: researchLabel, url: `/api/technology-research-feed${force ? '?refresh=1' : ''}` })
+      : Promise.resolve([]);
+
     try {
       const fast = await fetchFeed({ name: label, url: `${base}?mode=fast` });
       collected.push(...fast);
       onProgress?.(dedupeSort(collected), { stage: 'fast', paperTrack: normalizedTrack });
     } catch (error) { failures.push({ feed: label, error }); }
+
+    if (normalizedTrack === 'core') {
+      try {
+        const research = await researchPromise;
+        collected.push(...research);
+        onProgress?.(dedupeSort(collected), { stage: 'technology-research', paperTrack: normalizedTrack });
+      } catch (error) {
+        failures.push({ feed: researchLabel, error });
+      }
+    }
 
     if (!fastOnly) {
       try {
