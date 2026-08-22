@@ -29,16 +29,115 @@ async function loadDaily(force = false) {
   return data;
 }
 
+const WIKI_SKIP_HEADINGS = /^(脚注|注釈|出典|参考文献|参考資料|関連項目|外部リンク|参考|文献|ギャラリー|一覧)$/;
+
+function cleanWikiText(value = '') {
+  return String(value || '')
+    .replace(/\[[0-9０-９]+\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function articleFromHtml(title, html, canonicalUrl = '') {
+  const doc = new DOMParser().parseFromString(`<main>${html || ''}</main>`, 'text/html');
+  doc.querySelectorAll('script,style,table,figure,.thumb,.mw-editsection,.navbox,.infobox,.sidebar,.metadata,.hatnote,sup.reference,.reflist').forEach(node => node.remove());
+  const blocks = [];
+  let totalChars = 0;
+  let skip = false;
+
+  for (const node of doc.querySelectorAll('h2,h3,p,li')) {
+    if (/^H[23]$/.test(node.tagName)) {
+      const heading = cleanWikiText(node.textContent).replace(/\[編集\]$/, '').trim();
+      skip = WIKI_SKIP_HEADINGS.test(heading);
+      if (!skip && heading) {
+        blocks.push({ type: 'heading', text: heading });
+        totalChars += heading.length;
+      }
+      continue;
+    }
+    if (skip) continue;
+    const value = cleanWikiText(node.textContent);
+    if (value.length < 18) continue;
+    blocks.push({ type: node.tagName === 'LI' ? 'list' : 'paragraph', text: value });
+    totalChars += value.length;
+    if (totalChars > 65000) break;
+  }
+  if (!blocks.length) throw new Error('Wikipedia本文を解析できませんでした');
+  return {
+    title: cleanWikiText(title),
+    blocks,
+    text: blocks.map(block => block.text).join('\n\n'),
+    url: canonicalUrl || `https://ja.wikipedia.org/wiki/${encodeURIComponent(String(title).replace(/ /g, '_'))}`
+  };
+}
+
+async function fetchWikipediaRestArticle(title) {
+  const pageTitle = String(title).replace(/ /g, '_');
+  const url = `https://ja.wikipedia.org/w/rest.php/v1/page/${encodeURIComponent(pageTitle)}/with_html`;
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'Api-User-Agent': 'PersonalDashboardWikipedia/2.17 (https://github.com/UdonRX/new-wnt-getting)'
+    },
+    cache: 'no-store'
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data?.html) throw new Error(`Wikipedia REST HTTP ${response.status}`);
+  const resolvedTitle = data?.title || data?.name || title;
+  return articleFromHtml(resolvedTitle, data.html, `https://ja.wikipedia.org/wiki/${encodeURIComponent(String(resolvedTitle).replace(/ /g, '_'))}`);
+}
+
+async function fetchWikipediaActionArticle(title) {
+  const url = new URL('https://ja.wikipedia.org/w/api.php');
+  Object.entries({
+    action: 'parse', page: title, prop: 'text|displaytitle', redirects: '1',
+    format: 'json', formatversion: '2', origin: '*'
+  }).forEach(([key, value]) => url.searchParams.set(key, String(value)));
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'Api-User-Agent': 'PersonalDashboardWikipedia/2.17 (https://github.com/UdonRX/new-wnt-getting)'
+    },
+    cache: 'no-store'
+  });
+  const data = await response.json().catch(() => ({}));
+  const html = data?.parse?.text || '';
+  if (!response.ok || !html) throw new Error(`Wikipedia API HTTP ${response.status}`);
+  const displayTitle = cleanWikiText(String(data?.parse?.displaytitle || title).replace(/<[^>]+>/g, ''));
+  return articleFromHtml(displayTitle, html);
+}
+
 async function loadArticle(title) {
   const key = `${ARTICLE_PREFIX}${title}`;
   const cached = readJson(key);
   if (cached?.blocks?.length && Date.now() - Number(cached.at || 0) < 7 * 24 * 60 * 60 * 1000) return cached;
-  const response = await fetch(`/api/wikipedia?mode=article&title=${encodeURIComponent(title)}`, { cache: 'no-store' });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Wikipedia本文取得エラー (${response.status})`);
-  const result = { ...data, at: Date.now() };
-  saveJson(key, result);
-  return result;
+
+  let serverError = null;
+  try {
+    const response = await fetch(`/api/wikipedia?mode=article&title=${encodeURIComponent(title)}`, { cache: 'no-store' });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data?.blocks?.length) {
+      const result = { ...data, at: Date.now() };
+      saveJson(key, result);
+      return result;
+    }
+    serverError = new Error(data.error || `Wikipedia本文取得エラー (${response.status})`);
+  } catch (error) {
+    serverError = error;
+  }
+
+  // Vercel -> Wikimedia が403になる環境では、ブラウザから公式RESTへ直接フォールバック。
+  for (const loader of [fetchWikipediaRestArticle, fetchWikipediaActionArticle]) {
+    try {
+      const data = await loader(title);
+      const result = { ...data, at: Date.now(), fallback: 'wikimedia-direct' };
+      saveJson(key, result);
+      return result;
+    } catch (error) {
+      console.warn('[wikipedia-v2170] direct fallback failed', error?.message || error);
+    }
+  }
+  throw serverError || new Error('Wikipedia本文を取得できませんでした');
 }
 
 /*
