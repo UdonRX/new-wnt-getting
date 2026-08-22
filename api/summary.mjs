@@ -32,6 +32,53 @@ function fingerprint(value = '') {
   return (hash >>> 0).toString(36);
 }
 
+function rawBody(req) {
+  if (typeof req.body === 'string') {
+    try { return JSON.parse(req.body); } catch { return {}; }
+  }
+  return req.body || {};
+}
+
+function researchField(description, label, nextLabels = []) {
+  const source = clean(description);
+  const marker = `${label}:`;
+  const start = source.indexOf(marker);
+  if (start < 0) return '';
+  const valueStart = start + marker.length;
+  let end = source.length;
+  for (const nextLabel of nextLabels) {
+    const index = source.indexOf(`｜ ${nextLabel}:`, valueStart);
+    if (index >= 0 && index < end) end = index;
+  }
+  return source.slice(valueStart, end).replace(/^\s+|\s+$/g, '').trim();
+}
+
+function researchSummaryFromBody(body = {}) {
+  const description = clean(body.description);
+  if (!/技術リサーチ:\s*Web調査済み/.test(description)) return null;
+  const organization = researchField(description, '対象企業/組織名', ['カテゴリ', '概要', '応用着眼点', '媒体']);
+  const category = researchField(description, 'カテゴリ', ['概要', '応用着眼点', '媒体']);
+  const overview = researchField(description, '概要', ['応用着眼点', '媒体']);
+  const application = researchField(description, '応用着眼点', ['媒体']);
+  if (!organization || !category || !overview || !application) return null;
+  const sentence = value => /[。！？!?]$/.test(value) ? value : `${value}。`;
+  return {
+    headline: clean(body.title) || '技術リサーチ',
+    lines: [
+      { label: '対象企業/組織名', text: sentence(`${organization}を対象にした情報です`) },
+      { label: 'カテゴリ・概要', text: sentence(`［${category}］${overview}`) },
+      { label: '応用着眼点', text: sentence(application) }
+    ],
+    short: sentence(`${organization}を対象にした情報です`),
+    points: [sentence(`［${category}］${overview}`), sentence(application)],
+    provider: 'gemini-grounded-research-v2195',
+    model: 'grounded-search',
+    contentSource: 'web-research',
+    cacheable: true,
+    fastPath: 'technology-research-prepared'
+  };
+}
+
 function descriptionLooksReal(title, description) {
   const text = clean(description);
   if (text.length < 70 || GENERIC_RE.test(text)) return false;
@@ -42,9 +89,7 @@ function descriptionLooksReal(title, description) {
 }
 
 async function prepareBody(req) {
-  const raw = typeof req.body === 'string'
-    ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })()
-    : (req.body || {});
+  const raw = rawBody(req);
   const body = { ...raw };
   const title = clean(body.title);
   const description = clean(body.description);
@@ -95,6 +140,13 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
+    const preparedResearch = researchSummaryFromBody(rawBody(req));
+    if (preparedResearch) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Summary-Prepared-Source', 'web-research');
+      return res.status(200).json(preparedResearch);
+    }
+
     const prepared = await prepareBody(req);
     req.body = isolateSummaryWork(prepared);
     res.setHeader('X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
