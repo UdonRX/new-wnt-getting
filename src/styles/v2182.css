@@ -63,14 +63,14 @@
   background: color-mix(in srgb, var(--bg) 86%, transparent) !important;
   -webkit-backdrop-filter: blur(18px) saturate(1.16);
   backdrop-filter: blur(18px) saturate(1.16);
-  box-shadow: 0 calc(8px * var(--v2182-sticky-progress,0)) calc(24px * var(--v2182-sticky-progress,0)) rgba(0,0,0,.14);
+  box-shadow: 0 8px 24px rgba(0,0,0,.14);
   transform: translate3d(0,var(--v2182-sticky-y,0px),0) scale(var(--v2182-sticky-scale,1)) !important;
   transform-origin: top right !important;
 }
 .media-screen-twitch > .topbar .topbar-copy,
 .twitter-list-screen > .topbar .topbar-copy {
   opacity: calc(1 - var(--v2182-sticky-progress,0)) !important;
-  transform: translate3d(calc(-10px * var(--v2182-sticky-progress,0)),0,0) !important;
+  transform: translate3d(0,0,0) !important;
   pointer-events: none;
 }
 .media-screen-twitch > .topbar .topbar-actions,
@@ -107,7 +107,7 @@
   transform-origin: top left !important;
 }
 .twitter-list-screen > .twitter-list-chips .chip:not(.active) {
-  opacity: calc(1 - .76 * var(--v2182-sticky-progress,0)) !important;
+  opacity: calc(1 - var(--v2182-sticky-progress,0)) !important;
 }
 .twitter-list-screen > .twitter-list-chips .chip.active {
   opacity: 1 !important;
