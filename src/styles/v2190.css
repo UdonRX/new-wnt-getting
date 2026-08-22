@@ -1,0 +1,21 @@
+/* TEMP v2.19.0 Reader AI summary diagnostics. Remove after root cause is fixed. */
+.reader-summary-diagnostic {
+  width: calc(100% - 4px);
+  margin: 0 2px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 159, 10, .28);
+  border-radius: 10px;
+  background: rgba(255, 159, 10, .07);
+  color: rgba(255, 205, 140, .92);
+  font: 600 9.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.reader-summary-diagnostic:active { background: rgba(255, 159, 10, .13); }
+.reader-summary-diagnostic[data-copied="1"]::after {
+  content: '  コピー済み';
+  color: rgba(255,255,255,.82);
+}
