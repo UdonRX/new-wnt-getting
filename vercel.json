@@ -7,6 +7,12 @@
       "includeFiles": "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
     }
   },
+  "rewrites": [
+    {
+      "source": "/api/paper-titles",
+      "destination": "/api/summary?paperTitles=1"
+    }
+  ],
   "headers": [
     {
       "source": "/sw.js",
