@@ -1,6 +1,6 @@
-/* Personal Dashboard v2.16.0 — physical-bottom navigation */
+/* Personal Dashboard v2.18.0 — physical-bottom navigation, slightly larger labels/icons */
 :root {
-  --nav-height: 58px;
+  --nav-height: 64px;
   --nav-total: calc(var(--nav-height) + env(safe-area-inset-bottom));
 }
 
@@ -41,16 +41,16 @@
   height: var(--nav-total);
   min-height: var(--nav-total);
   margin: 0;
-  padding: 6px 2px env(safe-area-inset-bottom);
+  padding: 6px 1px env(safe-area-inset-bottom);
   background: transparent;
   color: var(--muted-2);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 3px;
+  gap: 4px;
   cursor: pointer;
-  transition: color .16s ease, opacity .16s ease;
+  transition: color .16s ease, opacity .16s ease, transform .16s ease;
 }
 
 .nav-item::before {
@@ -59,16 +59,17 @@
 }
 
 .nav-item:active {
-  opacity: .62;
+  opacity: .68;
+  transform: scale(.97);
 }
 
 .nav-item svg {
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.85;
+  stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -78,13 +79,22 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 8.5px;
+  font-size: 10px;
   line-height: 1;
-  font-weight: 690;
-  letter-spacing: .01em;
+  font-weight: 720;
+  letter-spacing: 0;
 }
 
 .nav-item.active { color: var(--feature-color); }
+
+@media (max-width: 365px) {
+  .nav-item svg {
+    width: 22px;
+    height: 22px;
+    flex-basis: 22px;
+  }
+  .nav-item span { font-size: 9.3px; }
+}
 
 /* iOS VisualViewport / keyboard changes must never translate the nav layer. */
 html.sheet-open .bottom-nav,
