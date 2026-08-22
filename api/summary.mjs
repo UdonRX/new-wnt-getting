@@ -1,4 +1,5 @@
 import summaryV2184 from '../lib/summary-v2184.mjs';
+import summaryBatchV2188 from '../lib/summary-batch-v2188.mjs';
 import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
@@ -81,14 +82,14 @@ function isolateSummaryWork(body = {}) {
   return {
     ...body,
     clientMode: originalMode,
-    // summary-v2184 uses mode only as part of its memory/in-flight key.  Adding
-    // a content fingerprint prevents an empty Safari prefetch from sharing the
-    // result of a later request that contains the real RSS/article text.
     mode: `${originalMode}#${fingerprint(material)}`.slice(0, 32)
   };
 }
 
 export default async function handler(req, res) {
+  if (req.method === 'POST' && String(req.query?.batch || '') === '1') {
+    return summaryBatchV2188(req, res);
+  }
   if (req.method === 'POST') {
     const prepared = await prepareBody(req);
     req.body = isolateSummaryWork(prepared);
