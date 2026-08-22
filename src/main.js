@@ -1,8 +1,8 @@
-import './runtime-v2192.js';
+import './runtime-v2193.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2192';
+const BUILD='2193';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
