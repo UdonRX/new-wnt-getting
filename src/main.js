@@ -1,8 +1,8 @@
-import './runtime-v2184.js';
+import './runtime-v2185.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2184';
+const BUILD='2185';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -75,13 +75,7 @@ export async function navigate(screen,options={}){
   try{
     const {renderer}=await loadRenderer(screen,{force:Boolean(options.forceModuleReload)});
     if(serial!==renderSerial)return;
-    await renderer(root,{
-      navigate,
-      refresh:Boolean(options.refresh),
-      navigationSource:options.source||'',
-      readerRecommendations:screen==='reader'&&options.source==='bottom-nav',
-      ...options
-    });
+    await renderer(root,{navigate,refresh:Boolean(options.refresh),navigationSource:options.source||'',readerRecommendations:screen==='reader'&&options.source==='bottom-nav',...options});
     if(serial===renderSerial&&root&&!root.childElementCount)throw new Error(`${SCREEN[screen].label} の描画結果が空です`);
   }catch(error){console.error('[pdv2] render failed:',screen,error);if(serial===renderSerial)renderScreenError(screen,error,options);}
 }
@@ -91,53 +85,21 @@ function preloadFeature(screen,{warm=false}={}){
   const config=SCREEN[screen];if(!config)return;
   loadModule(config.path).then(module=>{if(screen==='reader'&&warm)return module.warmReaderRecommendations?.();if(screen==='twitter'&&warm)return module.warmTwitterFeeds?.();}).catch(error=>console.warn(`[${screen}-preload]`,error));
 }
-
 function jstDay(){return new Date(Date.now()+9*60*60*1000).toISOString().slice(0,10);}
 async function warmWikipediaDaily(){
   const key='pdv2:wikipediaDaily:v213';
+  try{const cached=JSON.parse(localStorage.getItem(key)||'null');if(cached?.date===jstDay()&&Array.isArray(cached?.items)&&cached.items.length)return cached;}catch{}
   try{
-    const cached=JSON.parse(localStorage.getItem(key)||'null');
-    if(cached?.date===jstDay()&&Array.isArray(cached?.items)&&cached.items.length)return cached;
-  }catch{}
-  try{
-    const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),12_000);
-    try{
-      const response=await fetch('/api/wikipedia?mode=daily',{cache:'no-store',signal:controller.signal});
-      const data=await response.json().catch(()=>null);
-      if(response.ok&&data?.date===jstDay()&&Array.isArray(data?.items)&&data.items.length){
-        try{localStorage.setItem(key,JSON.stringify(data));}catch{}
-        return data;
-      }
-    }finally{clearTimeout(timer);}
+    const response=await fetch('/api/wikipedia?mode=daily',{cache:'no-store',signal:AbortSignal.timeout(9000)});
+    const data=await response.json().catch(()=>null);
+    if(response.ok&&data?.date===jstDay()&&Array.isArray(data?.items)&&data.items.length){try{localStorage.setItem(key,JSON.stringify(data));}catch{}return data;}
   }catch(error){console.warn('[wikipedia-prewarm]',error?.message||error);}
   return null;
 }
-
-async function warmYouTubeApis(){
-  const channels=Array.isArray(state.youtubeChannels)?state.youtubeChannels.slice(0,8):[];
-  if(!channels.length)return;
-  const queue=[...channels];
-  const worker=async()=>{
-    while(queue.length){
-      const channel=queue.shift();
-      const value=String(channel?.value||channel?.url||channel?.name||'').trim();
-      if(!value)continue;
-      const controller=new AbortController();
-      const timer=setTimeout(()=>controller.abort(),11_000);
-      try{await fetch(`/api/youtube-feed?channel=${encodeURIComponent(value)}`,{cache:'no-store',signal:controller.signal});}
-      catch{}
-      finally{clearTimeout(timer);}
-    }
-  };
-  await Promise.allSettled([worker(),worker()]);
-}
-
 function startBackgroundJobs(){
   idle(()=>warmWikipediaDaily(),20);
   idle(()=>preloadFeature('reader',{warm:true}),80);
   idle(()=>preloadFeature('twitter',{warm:true}),180);
-  idle(()=>warmYouTubeApis(),260);
   idle(()=>preloadFeature('wikipedia'),320);
   idle(()=>preloadFeature('weather'),450);
   idle(()=>preloadFeature('media'),700);
