@@ -1,7 +1,7 @@
 /*
- * Motion / sticky UI layer.
- * Durable override loaded after app.css.
- * Keep scroll animations on compositor-friendly transform/opacity only.
+ * Personal Dashboard v2.18.0 — compositor-first motion layer
+ * Loaded after app.css.
+ * Scroll-linked UI changes transform / opacity only; layout box dimensions stay fixed.
  */
 
 :root { --pdv2-smooth-ease: cubic-bezier(0.25, 1, 0.5, 1); }
@@ -15,9 +15,10 @@
 .shrink-header .icon-button,
 .weather-shrink-header .weather-location-tabs,
 .weather-shrink-header .weather-location-tabs .chip,
-.reader-list-sticky-bar,
-.reader-list-current-source,
-.reader-list-recommend,
+.reader-source-dock,
+.reader-source-scroll,
+.reader-source-active-compact,
+.reader-recommend-overlay,
 .reader-list-open > .topbar,
 .reader-list-open > .reader-mode-nav,
 .reader-list-open > .paper-track-level,
@@ -32,13 +33,13 @@
   transform: translateZ(0);
   will-change: transform, opacity;
   transition-property: transform, opacity, background-color, box-shadow, filter !important;
-  transition-duration: 280ms !important;
+  transition-duration: 300ms !important;
   transition-timing-function: var(--pdv2-smooth-ease) !important;
 }
 
-
-/* Home uses the same compositor-only shrink model so the shared helper does not
-   reintroduce a layout jump on that screen. */
+/* ---------------------------------------------------------------------- */
+/* Home — fixed dimensions + scale/translate only.                         */
+/* ---------------------------------------------------------------------- */
 .home-shrink-header.shrink-header,
 .home-shrink-header.shrink-header.is-compact {
   padding: 5px 7px !important;
@@ -53,17 +54,22 @@
   transform-origin: top center;
 }
 .home-shrink-header .topbar-copy h1,
-.home-shrink-header.is-compact .topbar-copy h1 { font-size: 28px !important; line-height: 1.1 !important; }
+.home-shrink-header.is-compact .topbar-copy h1 {
+  font-size: 28px !important;
+  line-height: 1.1 !important;
+}
 .home-shrink-header .icon-button,
 .home-shrink-header.is-compact .icon-button {
-  width: auto !important; height: auto !important;
-  min-width: 44px !important; min-height: 44px !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
   padding: 0 !important;
   transform: scale(var(--pdv2-shrink-scale, 1)) translateZ(0) !important;
 }
 
 /* ---------------------------------------------------------------------- */
-/* Weather: dimensions stay constant; only the rendered layer scales.      */
+/* Weather — no height/width/font-size animation while scrolling.          */
 /* ---------------------------------------------------------------------- */
 .weather-shrink-header.shrink-header {
   position: sticky !important;
@@ -97,7 +103,6 @@
 .weather-shrink-header.is-compact .topbar-copy h1 {
   font-size: 28px !important;
   line-height: 1.1 !important;
-  transform-origin: left center;
 }
 .weather-shrink-header .subtitle,
 .weather-shrink-header.is-compact .subtitle {
@@ -135,27 +140,126 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* Reader list: natural document flow scrolls old rows away. Sticky row    */
-/* never changes its layout box; active controls only scale/translate.     */
+/* Reader list — source tabs + recommendation button share one dock.       */
 /* ---------------------------------------------------------------------- */
-.reader-list-sticky-bar,
-.reader-list-motion-compact .reader-list-sticky-bar {
-  min-height: 44px !important;
-  margin: 0 -2px 4px !important;
-  padding: 4px 2px !important;
-  border-radius: 14px !important;
+.reader-source-dock,
+.reader-list-open > .reader-sticky-context.reader-source-dock {
+  position: sticky !important;
+  z-index: 86 !important;
+  top: max(3px, calc(env(safe-area-inset-top) + 3px)) !important;
+  width: 100% !important;
+  height: 50px !important;
+  min-height: 50px !important;
+  max-height: 50px !important;
+  margin: 0 0 7px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border-radius: 16px !important;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.12);
+  backdrop-filter: blur(16px) saturate(1.12);
+  isolation: isolate;
   transform: translate3d(0, var(--pdv2-shrink-y, 0px), 0) !important;
 }
-.reader-list-current-source,
-.reader-list-motion-compact .reader-list-current-source,
-.reader-list-recommend,
-.reader-list-motion-compact .reader-list-recommend {
-  min-height: 36px !important;
-  padding: 0 13px !important;
-  font-size: inherit !important;
-  transform-origin: center;
-  transform: scale(var(--pdv2-shrink-scale, 1)) translateZ(0) !important;
+
+.reader-source-dock::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 142px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--bg) 22%, transparent) 18%,
+    color-mix(in srgb, var(--bg) 72%, transparent) 42%,
+    color-mix(in srgb, var(--bg) 96%, transparent) 68%,
+    var(--bg) 100%);
 }
+
+.reader-source-scroll,
+.reader-list-open > .reader-sticky-context .reader-source-scroll {
+  position: absolute !important;
+  z-index: 1;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 50px !important;
+  min-height: 50px !important;
+  max-height: 50px !important;
+  margin: 0 !important;
+  padding: 6px 126px 6px 2px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  -webkit-mask-image: linear-gradient(90deg,
+    #000 0%,
+    #000 calc(100% - 176px),
+    rgba(0,0,0,.82) calc(100% - 158px),
+    rgba(0,0,0,.48) calc(100% - 136px),
+    rgba(0,0,0,.12) calc(100% - 116px),
+    transparent calc(100% - 102px),
+    transparent 100%);
+  mask-image: linear-gradient(90deg,
+    #000 0%,
+    #000 calc(100% - 176px),
+    rgba(0,0,0,.82) calc(100% - 158px),
+    rgba(0,0,0,.48) calc(100% - 136px),
+    rgba(0,0,0,.12) calc(100% - 116px),
+    transparent calc(100% - 102px),
+    transparent 100%);
+  transform-origin: left center;
+}
+.reader-source-scroll::-webkit-scrollbar { display: none; }
+.reader-source-scroll .chip {
+  flex: 0 0 auto;
+  min-height: 38px !important;
+  padding: 0 13px !important;
+  transform: translateZ(0);
+  transition: opacity 260ms var(--pdv2-smooth-ease), transform 300ms var(--pdv2-smooth-ease), background-color 220ms ease !important;
+}
+
+.reader-recommend-overlay {
+  position: absolute !important;
+  z-index: 5 !important;
+  top: 6px !important;
+  right: 2px !important;
+  min-width: 108px !important;
+  min-height: 38px !important;
+  height: 38px !important;
+  margin: 0 !important;
+  padding: 0 13px !important;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--surface-2) 94%, var(--bg)) !important;
+  border-color: color-mix(in srgb, var(--feature-color) 22%, var(--line)) !important;
+  box-shadow: -12px 0 24px color-mix(in srgb, var(--bg) 68%, transparent);
+  transform-origin: right center;
+}
+
+.reader-source-active-compact {
+  position: absolute !important;
+  z-index: 6 !important;
+  top: 6px !important;
+  left: 2px !important;
+  max-width: calc(100% - 126px) !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 0 13px !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform-origin: left center;
+  transform: translate3d(-8px,0,0) scale(.94) !important;
+}
+
+/* app.css contains older max-height/padding transitions. Neutralize them here. */
 .reader-list-open > .topbar,
 .reader-list-open > .reader-mode-nav,
 .reader-list-open > .paper-track-level,
@@ -165,19 +269,50 @@
 .reader-list-open.reader-list-motion-compact > .paper-track-level,
 .reader-list-open.reader-list-motion-compact > .reader-sticky-context {
   max-height: none !important;
-  pointer-events: auto !important;
-}
-.reader-list-open.reader-list-motion-compact > .topbar { margin-bottom: 10px !important; }
-.reader-list-open.reader-list-motion-compact > .reader-mode-nav { margin-bottom: 8px !important; }
-.reader-list-open.reader-list-motion-compact > .topbar,
-.reader-list-open.reader-list-motion-compact > .reader-mode-nav,
-.reader-list-open.reader-list-motion-compact > .paper-track-level,
-.reader-list-open.reader-list-motion-compact > .reader-sticky-context {
-  opacity: .18 !important;
-  transform: translate3d(0,-14px,0) scale(.985) !important;
+  transition-property: transform, opacity, background-color, box-shadow, filter !important;
+  pointer-events: auto;
 }
 
-/* Recommendation cards: more breathing room in the 3-point summary. */
+.reader-list-open.reader-list-motion-compact > .topbar,
+.reader-list-open.reader-list-motion-compact > .reader-mode-nav,
+.reader-list-open.reader-list-motion-compact > .paper-track-level {
+  opacity: 0 !important;
+  transform: translate3d(0,-14px,0) scale(.985) !important;
+  pointer-events: none !important;
+}
+
+.reader-list-motion-compact .reader-source-dock {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  box-shadow: 0 8px 24px rgba(0,0,0,.14);
+}
+.reader-list-motion-compact .reader-source-scroll {
+  opacity: 0 !important;
+  transform: translate3d(-14px,-1px,0) scale(.985) !important;
+  pointer-events: none !important;
+}
+.reader-list-motion-compact .reader-source-scroll .chip {
+  opacity: 0 !important;
+  transform: translate3d(-8px,0,0) scale(.94) !important;
+}
+.reader-list-motion-compact .reader-source-active-compact {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transform: translate3d(0,0,0) scale(.90) !important;
+}
+.reader-list-motion-compact .reader-recommend-overlay {
+  transform: translate3d(0,0,0) scale(.90) !important;
+}
+
+/* Recommendation / article card vertical TikTok-style paging. */
+.reader-swipe-feed {
+  scroll-snap-type: y mandatory !important;
+  overscroll-behavior-y: contain !important;
+  touch-action: pan-y pinch-zoom;
+}
+.reader-swipe-card {
+  scroll-snap-align: start !important;
+  scroll-snap-stop: always !important;
+}
 .reader-story-summary.reader-ai-summary {
   gap: clamp(12px, 1.7dvh, 18px) !important;
   align-content: center !important;
@@ -187,14 +322,14 @@
   -webkit-line-clamp: 3 !important;
   line-clamp: 3 !important;
 }
-.reader-swipe-feed {
-  scroll-snap-type: y mandatory !important;
-  overscroll-behavior-y: contain !important;
-  touch-action: pan-y pinch-zoom;
+.reader-story-summary.is-pending .reader-story-summary-row {
+  opacity: .72;
 }
-.reader-swipe-card {
-  scroll-snap-align: start !important;
-  scroll-snap-stop: always !important;
+.reader-story-summary.is-pending .reader-story-summary-text {
+  color: rgba(163,163,163,.72) !important;
+}
+.reader-story-summary.is-unavailable .reader-story-summary-row {
+  border-color: color-mix(in srgb, #ff9f0a 22%, rgba(148,163,184,.075));
 }
 
 /* Recommendation chooser progress bar. */
@@ -228,7 +363,7 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* YouTube list sticky motion cleanup (same no-reflow rule).                */
+/* YouTube list sticky motion cleanup (preserve v2.17 behaviour).          */
 /* ---------------------------------------------------------------------- */
 .youtube-primary-tabs,
 .youtube-scroll-compact .youtube-primary-tabs {
@@ -251,7 +386,9 @@
 .youtube-list-screen.youtube-scroll-compact .media-warning {
   max-height: none !important;
 }
-.youtube-list-screen.youtube-scroll-compact > .topbar { margin-bottom: 10px !important; }
+.youtube-list-screen.youtube-scroll-compact > .topbar {
+  margin-bottom: 10px !important;
+}
 .youtube-list-screen.youtube-scroll-compact > .topbar,
 .youtube-list-screen.youtube-scroll-compact > .media-mode-nav,
 .youtube-list-screen.youtube-scroll-compact .youtube-channel-picker,
@@ -262,7 +399,7 @@
 }
 
 /* ---------------------------------------------------------------------- */
-/* YouTube landscape: rotate the actual video+controls surface 90 degrees. */
+/* YouTube landscape — preserve the actual 90° rotated player surface.     */
 /* ---------------------------------------------------------------------- */
 html.youtube-landscape-open,
 html.youtube-landscape-open body,
@@ -364,6 +501,9 @@ html.youtube-landscape-open .bottom-nav { display: none !important; }
 
 @media (prefers-reduced-motion: reduce) {
   .shrink-header *, .shrink-header,
-  .reader-list-sticky-bar, .reader-list-sticky-bar *,
+  .reader-source-dock, .reader-source-dock *,
+  .reader-list-open > .topbar,
+  .reader-list-open > .reader-mode-nav,
+  .reader-list-open > .paper-track-level,
   .youtube-primary-tabs { transition-duration: .001ms !important; }
 }
