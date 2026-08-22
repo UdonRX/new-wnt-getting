@@ -19,11 +19,19 @@ export function topbar(title, { subtitle='', actions=[] } = {}) {
 export function installShrinkingHeader(target, {
   threshold = 44,
   className = 'is-compact',
-  scrollRoot = window
+  scrollRoot = window,
+  range = 42,
+  hysteresis = 14
 } = {}) {
   if (!target) return () => {};
+
   let raf = 0;
   let destroyed = false;
+  let compact = target.classList.contains(className);
+  let lastProgress = -1;
+  const enterAt = Math.max(0, Number(threshold) || 0);
+  const exitAt = Math.max(0, enterAt - Math.max(4, Number(hysteresis) || 0));
+  const motionRange = Math.max(16, Number(range) || 42);
 
   const scrollTop = () => {
     if (scrollRoot === window) {
@@ -32,10 +40,37 @@ export function installShrinkingHeader(target, {
     return Math.max(0, Number(scrollRoot?.scrollTop || 0));
   };
 
+  const easeOut = value => {
+    const p = Math.max(0, Math.min(1, value));
+    // Close to cubic-bezier(.25,1,.5,1), but calculated once per animation frame.
+    return 1 - Math.pow(1 - p, 3);
+  };
+
   const paint = () => {
     raf = 0;
     if (destroyed || !target.isConnected) return;
-    target.classList.toggle(className, scrollTop() > threshold);
+
+    const top = scrollTop();
+    const raw = (top - Math.max(0, enterAt - motionRange)) / motionRange;
+    const progress = easeOut(raw);
+
+    // Only custom properties consumed by transform/opacity are changed here.
+    // This avoids layout/reflow work during scrolling on iOS Safari.
+    if (Math.abs(progress - lastProgress) > 0.002) {
+      target.style.setProperty('--pdv2-shrink-progress', progress.toFixed(4));
+      target.style.setProperty('--pdv2-shrink-scale', (1 - progress * 0.14).toFixed(4));
+      target.style.setProperty('--pdv2-shrink-y', `${(-progress * 5).toFixed(2)}px`);
+      target.style.setProperty('--pdv2-shrink-fade', (1 - progress * 0.64).toFixed(4));
+      lastProgress = progress;
+    }
+
+    if (!compact && top >= enterAt) {
+      compact = true;
+      target.classList.add(className);
+    } else if (compact && top <= exitAt) {
+      compact = false;
+      target.classList.remove(className);
+    }
   };
 
   const onScroll = () => {
@@ -51,6 +86,10 @@ export function installShrinkingHeader(target, {
     destroyed = true;
     if (raf) cancelAnimationFrame(raf);
     scrollRoot.removeEventListener('scroll', onScroll);
+    target.style.removeProperty('--pdv2-shrink-progress');
+    target.style.removeProperty('--pdv2-shrink-scale');
+    target.style.removeProperty('--pdv2-shrink-y');
+    target.style.removeProperty('--pdv2-shrink-fade');
     window.removeEventListener('pdv2:before-navigate', cleanup);
   };
   window.addEventListener('pdv2:before-navigate', cleanup, { once: true });
