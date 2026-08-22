@@ -3,9 +3,8 @@
  * Loaded by src/main.js before the application boots.
  *
  * - Serializes reader summary requests so a fast swipe cannot burst Gemini.
- * - Routes summaries to the v2.18.1 endpoint with per-request retry.
  * - Avoids a duplicate paper-title Gemini call while a summary is in flight.
- * - Replaces only Wikipedia's "today" rows with Wikipedia:今日は何の日 data.
+ * - Replaces only Wikipedia's "today" rows from Wikipedia:今日は何の日.
  * - Makes Reader list chrome fade continuously with scroll distance.
  * - Reverses Reader list horizontal swipe semantics:
  *     left swipe => move right / next source, then next major category.
@@ -14,6 +13,8 @@
 
 const nativeFetch = window.fetch.bind(window);
 const BUILD_KEY = 'pdv2:runtime:v2181';
+const WIKI_API = 'https://ja.wikipedia.org/w/api.php';
+const WIKI_HUB = 'Wikipedia:今日は何の日';
 let activeSummaryRequests = 0;
 const summaryWaiters = [];
 
@@ -24,14 +25,6 @@ function pathOf(input) {
   } catch {
     return null;
   }
-}
-
-function rewriteInput(input, pathname) {
-  const url = pathOf(input);
-  if (!url) return input;
-  url.pathname = pathname;
-  if (input instanceof Request) return new Request(url.href, input);
-  return url.href;
 }
 
 async function withSummarySlot(task) {
@@ -54,37 +47,202 @@ function jsonResponse(value, status = 200, extraHeaders = {}) {
   });
 }
 
+function jstParts() {
+  const now = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const iso = now.toISOString();
+  return { date: iso.slice(0, 10), month: Number(iso.slice(5, 7)), day: Number(iso.slice(8, 10)) };
+}
+
+function cleanWiki(value = '') {
+  return String(value || '').replace(/\[[0-9０-９]+\]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+async function wikiApi(params) {
+  const url = new URL(WIKI_API);
+  Object.entries({ action: 'query', format: 'json', formatversion: '2', origin: '*', ...params })
+    .forEach(([key, value]) => url.searchParams.set(key, String(value)));
+  const response = await nativeFetch(url.href, { cache: 'no-store', headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Wikipedia API HTTP ${response.status}`);
+  return response.json();
+}
+
+async function wikiParse(page) {
+  const data = await wikiApi({ action: 'parse', page, prop: 'text', redirects: '1' });
+  const html = data?.parse?.text || '';
+  if (!html) throw new Error(`${page} を取得できませんでした`);
+  return new DOMParser().parseFromString(`<main>${html}</main>`, 'text/html');
+}
+
+function wikiHeadingText(node) {
+  return cleanWiki(node?.textContent).replace(/\[編集\]$/, '').trim();
+}
+
+function wikiSectionNodes(start) {
+  if (!start) return [];
+  const block = start.closest('.mw-heading') || start;
+  const out = [];
+  const isHeading = node =>
+    /^H[23]$/.test(node?.tagName || '')
+    || Boolean(node?.matches?.('.mw-heading') && node.querySelector('h2,h3'));
+  let cursor = block.nextElementSibling;
+  while (cursor && !isHeading(cursor)) {
+    out.push(cursor);
+    cursor = cursor.nextElementSibling;
+  }
+  return out;
+}
+
+function validWikiTarget(title) {
+  const value = cleanWiki(title);
+  if (!value || value.includes('#')) return false;
+  if (/^(?:紀元前)?\d{1,4}年$/.test(value)) return false;
+  if (/^\d{1,2}月\d{1,2}日$/.test(value)) return false;
+  if (/^(?:Help|Wikipedia|Template|Category|Portal|File|Special):/i.test(value)) return false;
+  return true;
+}
+
+function wikiCandidates(nodes, month, day, sourcePage) {
+  const rows = [];
+  for (const node of nodes) {
+    const items = node.matches?.('ul,ol')
+      ? Array.from(node.querySelectorAll(':scope > li'))
+      : Array.from(node.querySelectorAll?.('li') || []);
+
+    for (const li of items) {
+      const eventText = cleanWiki(li.textContent);
+      if (eventText.length < 7) continue;
+      const anchors = Array.from(li.querySelectorAll('a[title]'))
+        .map(a => ({ title: cleanWiki(a.getAttribute('title')), text: cleanWiki(a.textContent) }))
+        .filter(row => validWikiTarget(row.title) && row.text.length);
+      if (!anchors.length) continue;
+      const target = [...anchors]
+        .sort((a, b) => Math.min(b.text.length, 24) - Math.min(a.text.length, 24))[0]?.title;
+      if (!target) continue;
+      rows.push({
+        title: target,
+        reason: `${month}月${day}日 — ${eventText.slice(0, 150)}`,
+        sourcePage
+      });
+    }
+  }
+
+  const seen = new Set();
+  return rows.filter(row => {
+    const key = row.title.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function wikiTodayCandidates(month, day) {
+  try {
+    const hub = await wikiParse(WIKI_HUB);
+    const heading = Array.from(hub.querySelectorAll('h2,h3'))
+      .find(node => wikiHeadingText(node) === 'テンプレート');
+    if (heading) {
+      const nodes = wikiSectionNodes(heading);
+      const sectionText = cleanWiki(nodes.map(node => node.textContent || '').join(' '));
+      const rendered = sectionText.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+      if (!rendered || (Number(rendered[2]) === month && Number(rendered[3]) === day)) {
+        const rows = wikiCandidates(nodes, month, day, WIKI_HUB);
+        if (rows.length) return { rows, sourcePage: WIKI_HUB };
+      }
+    }
+  } catch (error) {
+    console.warn('[wikipedia-v2181] hub fallback:', error?.message || error);
+  }
+
+  const page = `${WIKI_HUB} ${month}月`;
+  const monthly = await wikiParse(page);
+  const wanted = `${month}月${day}日`;
+  const heading = Array.from(monthly.querySelectorAll('h2,h3'))
+    .find(node => wikiHeadingText(node) === wanted);
+  if (!heading) throw new Error(`${wanted} の節が見つかりませんでした`);
+  return { rows: wikiCandidates(wikiSectionNodes(heading), month, day, page), sourcePage: page };
+}
+
+function wikiTitleResolver(query = {}) {
+  const map = new Map();
+  for (const row of query.normalized || []) map.set(row.from, row.to);
+  for (const row of query.redirects || []) map.set(row.from, row.to);
+  return title => {
+    let current = title;
+    for (let i = 0; i < 6 && map.has(current); i += 1) current = map.get(current);
+    return current;
+  };
+}
+
+async function loadWikipediaTodayDirect() {
+  const { date, month, day } = jstParts();
+  const { rows, sourcePage } = await wikiTodayCandidates(month, day);
+  const wanted = rows.slice(0, 30);
+
+  const data = await wikiApi({
+    action: 'query',
+    prop: 'extracts|pageimages|info',
+    titles: wanted.map(row => row.title).join('|'),
+    redirects: '1',
+    exintro: '1',
+    explaintext: '1',
+    exchars: '420',
+    piprop: 'thumbnail',
+    pithumbsize: '720',
+    inprop: 'url'
+  });
+
+  const resolve = wikiTitleResolver(data.query || {});
+  const pages = new Map(
+    (data.query?.pages || []).filter(page => !page.missing).map(page => [page.title, page])
+  );
+  const items = [];
+  const used = new Set();
+
+  for (const candidate of wanted) {
+    if (items.length >= 10) break;
+    const page = pages.get(resolve(candidate.title));
+    if (!page || used.has(page.title)) continue;
+    used.add(page.title);
+    items.push({
+      id: `${date}:today:${page.pageid || items.length}`,
+      date,
+      kind: 'today',
+      category: '今日の出来事',
+      categoryShort: '今日',
+      title: page.title,
+      reason: candidate.reason,
+      extract: String(page.extract || '').trim(),
+      thumbnail: page.thumbnail?.source || '',
+      url: page.fullurl || `https://ja.wikipedia.org/wiki/${encodeURIComponent(page.title.replace(/ /g, '_'))}`
+    });
+  }
+
+  return { date, dateLabel: `${month}月${day}日`, todaySource: sourcePage, items };
+}
+
 async function mergedWikipediaDaily(input, init) {
   const baseInput = input instanceof Request ? new Request(input) : input;
-  const [baseResult, todayResult] = await Promise.allSettled([
-    nativeFetch(baseInput, init),
-    nativeFetch('/api/wikipedia-today-v2181', { cache: 'no-store' })
-  ]);
-
-  if (baseResult.status !== 'fulfilled') throw baseResult.reason;
-  const baseResponse = baseResult.value;
-  if (!baseResponse.ok || todayResult.status !== 'fulfilled' || !todayResult.value.ok) {
-    return baseResponse;
-  }
+  const baseResponse = await nativeFetch(baseInput, init);
+  if (!baseResponse.ok) return baseResponse;
 
   try {
     const [base, today] = await Promise.all([
       baseResponse.clone().json(),
-      todayResult.value.json()
+      loadWikipediaTodayDirect()
     ]);
-    if (!Array.isArray(base?.items) || !Array.isArray(today?.items)) return baseResponse;
+    if (!Array.isArray(base?.items) || !Array.isArray(today?.items) || !today.items.length) return baseResponse;
 
-    const nonToday = base.items.filter(item => item?.kind !== 'today');
     const merged = {
       ...base,
       date: today.date || base.date,
       dateLabel: today.dateLabel || base.dateLabel,
       counts: { ...(base.counts || {}), today: today.items.length },
-      todaySource: today.todaySource || 'Wikipedia:今日は何の日',
-      items: [...today.items, ...nonToday]
+      todaySource: today.todaySource,
+      items: [...today.items, ...base.items.filter(item => item?.kind !== 'today')]
     };
     return jsonResponse(merged, 200, { 'Cache-Control': 'no-store' });
-  } catch {
+  } catch (error) {
+    console.warn('[wikipedia-v2181] direct today fallback failed:', error?.message || error);
     return baseResponse;
   }
 }
@@ -94,7 +252,7 @@ window.fetch = async function pdv2181Fetch(input, init) {
   if (!url || url.origin !== location.origin) return nativeFetch(input, init);
 
   if (url.pathname === '/api/summary') {
-    return withSummarySlot(() => nativeFetch(rewriteInput(input, '/api/summary-v2181'), init));
+    return withSummarySlot(() => nativeFetch(input, init));
   }
 
   if (url.pathname === '/api/paper-titles' && activeSummaryRequests > 0) {
