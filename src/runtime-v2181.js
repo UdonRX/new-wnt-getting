@@ -3,6 +3,7 @@
  * Loaded by src/main.js before the application boots.
  *
  * - Serializes reader summary requests so a fast swipe cannot burst Gemini.
+ * - Lets an article-scoped retry finish instead of being cut off by the old 15/20s client abort.
  * - Avoids a duplicate paper-title Gemini call while a summary is in flight.
  * - Replaces only Wikipedia's "today" rows from Wikipedia:今日は何の日.
  * - Makes Reader list chrome fade continuously with scroll distance.
@@ -15,6 +16,7 @@ const nativeFetch = window.fetch.bind(window);
 const BUILD_KEY = 'pdv2:runtime:v2181';
 const WIKI_API = 'https://ja.wikipedia.org/w/api.php';
 const WIKI_HUB = 'Wikipedia:今日は何の日';
+const SUMMARY_REQUEST_TIMEOUT_MS = 32_000;
 let activeSummaryRequests = 0;
 const summaryWaiters = [];
 
@@ -37,6 +39,19 @@ async function withSummarySlot(task) {
   } finally {
     activeSummaryRequests = Math.max(0, activeSummaryRequests - 1);
     summaryWaiters.shift()?.();
+  }
+}
+
+async function fetchSummaryReliably(input, init) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SUMMARY_REQUEST_TIMEOUT_MS);
+  try {
+    // reader-focus.js v2.18.0 aborts at 15/20 seconds.  v2.18.1 may perform
+    // one article-scoped Gemini retry, so replace that old signal with a
+    // bounded 32-second signal rather than letting the old timer kill it.
+    return await nativeFetch(input, { ...(init || {}), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -252,7 +267,7 @@ window.fetch = async function pdv2181Fetch(input, init) {
   if (!url || url.origin !== location.origin) return nativeFetch(input, init);
 
   if (url.pathname === '/api/summary') {
-    return withSummarySlot(() => nativeFetch(input, init));
+    return withSummarySlot(() => fetchSummaryReliably(input, init));
   }
 
   if (url.pathname === '/api/paper-titles' && activeSummaryRequests > 0) {
