@@ -40,6 +40,28 @@ function orientationButtonHtml(landscape) {
   return `<svg class="youtube-orientation-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span>`;
 }
 
+function autoNextIconHtml() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 6.5H8.8a5.3 5.3 0 0 0-5.3 5.3v.4a5.3 5.3 0 0 0 5.3 5.3h7.7"/><path d="m14.5 3.5 3 3-3 3"/><path d="m9.5 20.5-3-3 3-3"/></svg>';
+}
+
+function syncAutoNextButtons(panel) {
+  if (!panel) return;
+  const enabled = autoNext();
+  panel.querySelectorAll('[data-youtube-auto-next]').forEach(button => {
+    button.classList.toggle('is-on', enabled);
+    button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    button.setAttribute('aria-label', `連続再生 ${enabled ? 'ON' : 'OFF'}`);
+    button.title = `連続再生 ${enabled ? 'ON' : 'OFF'}`;
+    if (button.classList.contains('youtube-auto-next-btn')) button.textContent = `連続再生 ${enabled ? 'ON' : 'OFF'}`;
+  });
+}
+
+function toggleAutoNext(panel) {
+  localStorage.setItem('pdv2:youtubeAutoNext', autoNext() ? '0' : '1');
+  syncAutoNextButtons(panel);
+  showToast(`連続再生 ${autoNext() ? 'ON' : 'OFF'}`);
+}
+
 function setLandscape(panel,on) {
   if(!panel) return;
   const enabled=Boolean(on);
@@ -151,26 +173,45 @@ function mountInlinePlayer({host,queue,index=0}={}) {
   const kicker=el('div',{class:'twitch-inline-kicker'});
   const channel=el('strong',{class:'youtube-player-channel'});
   const close=el('button',{class:'icon-button twitch-close',type:'button','aria-label':'プレイヤーを閉じる',text:'✕',onclick:cleanupYouTubePlayer});
-  const head=el('div',{class:'twitch-inline-head youtube-player-head'},[el('div',{class:'youtube-player-channel-copy'},[kicker,channel]),close]);
+  const head=el('div',{class:'twitch-inline-head youtube-player-head'},[
+    el('div',{class:'youtube-player-channel-copy'},[kicker,channel]),close
+  ]);
+
   const stage=el('div',{class:'twitch-inline-stage youtube-inline-stage'});
-  const holderId=`yt-v2160-player-${Date.now()}`;
+  const holderId=`yt-v2170-player-${Date.now()}`;
   stage.append(el('div',{id:holderId,class:'youtube-inline-embed'}));
   const titleNode=el('div',{class:'player-title'});
 
   const prev=el('button',{class:'player-soft',type:'button',text:'‹ 前へ'});
   const next=el('button',{class:'player-soft',type:'button',text:'次へ ›'});
-  const landscape=el('button',{class:'player-soft youtube-orientation-btn',type:'button',html:orientationButtonHtml(false),'aria-label':'横表示にする',title:'横表示にする',onclick:()=>toggleLandscape(panel)});
+  const landscape=el('button',{
+    class:'player-soft youtube-orientation-btn',type:'button',html:orientationButtonHtml(false),
+    'aria-label':'横表示にする',title:'横表示にする',onclick:()=>toggleLandscape(panel)
+  });
   const external=el('a',{class:'player-soft',target:'_blank',rel:'noopener noreferrer',text:'YouTubeで開く ↗'});
-  const auto=el('button',{class:'player-soft youtube-auto-next-btn',type:'button',onclick:event=>{localStorage.setItem('pdv2:youtubeAutoNext',autoNext()?'0':'1');event.currentTarget.textContent=`連続再生 ${autoNext()?'ON':'OFF'}`;}});
+  const auto=el('button',{
+    class:'player-soft youtube-auto-next-btn',type:'button','data-youtube-auto-next':'1',
+    onclick:()=>toggleAutoNext(panel)
+  });
   const controls=el('div',{class:'twitch-inline-controls youtube-inline-controls'},[prev,next,landscape,external,auto]);
   const info=el('div',{class:'twitch-inline-info youtube-inline-info'},[titleNode,controls]);
 
-  const landscapePrev=el('button',{class:'youtube-landscape-action',type:'button',text:'‹ 前'});
-  const portrait=el('button',{class:'youtube-landscape-action youtube-orientation-btn',type:'button',html:orientationButtonHtml(true),'aria-label':'縦表示に戻す',onclick:()=>setLandscape(panel,false)});
-  const landscapeNext=el('button',{class:'youtube-landscape-action',type:'button',text:'次 ›'});
-  const landscapeControls=el('footer',{class:'youtube-landscape-controls'},[landscapePrev,portrait,landscapeNext]);
+  const landscapePrev=el('button',{class:'youtube-landscape-action',type:'button',text:'‹ 前','aria-label':'前の動画'});
+  const portrait=el('button',{
+    class:'youtube-landscape-action youtube-orientation-btn',type:'button',html:orientationButtonHtml(true),
+    'aria-label':'縦表示に戻す',title:'縦表示に戻す',onclick:()=>setLandscape(panel,false)
+  });
+  const landscapeNext=el('button',{class:'youtube-landscape-action',type:'button',text:'次 ›','aria-label':'次の動画'});
+  const landscapeAuto=el('button',{
+    class:'youtube-landscape-action youtube-landscape-auto',type:'button',html:autoNextIconHtml(),
+    'data-youtube-auto-next':'1','aria-label':'連続再生','aria-pressed':'false',onclick:()=>toggleAutoNext(panel)
+  });
+  const landscapeControls=el('footer',{class:'youtube-landscape-controls'},[
+    landscapePrev,portrait,landscapeNext,landscapeAuto
+  ]);
+  const landscapeViewport=el('div',{class:'youtube-landscape-viewport'},[stage,landscapeControls]);
 
-  panel.append(head,stage,info,landscapeControls);
+  panel.append(head,landscapeViewport,info);
   activeHost.replaceChildren(panel);
 
   const updateUi=()=>{
@@ -181,34 +222,70 @@ function mountInlinePlayer({host,queue,index=0}={}) {
     external.href=`https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId||'')}`;
     prev.disabled=landscapePrev.disabled=current<=0;
     next.disabled=landscapeNext.disabled=current>=queue.length-1;
-    auto.textContent=`連続再生 ${autoNext()?'ON':'OFF'}`;
-    clearPlayingTitle(); watchPlayingTitle(stage,item.title||'YouTube');
+    syncAutoNextButtons(panel);
+    clearPlayingTitle();
+    watchPlayingTitle(stage,item.title||'YouTube');
   };
+
   const loadIndex=(nextIndex,{autoplay=true}={})=>{
     if(nextIndex<0||nextIndex>=queue.length) return false;
-    current=nextIndex; advancing=false; updateUi();
+    current=nextIndex;
+    advancing=false;
+    updateUi();
     const item=queue[current];
-    if(ready&&player?.loadVideoById){try{player.loadVideoById({videoId:item.videoId,startSeconds:0});if(autoplay)player.playVideo?.();}catch{}}
+    if(ready&&player?.loadVideoById){
+      try{
+        player.loadVideoById({videoId:item.videoId,startSeconds:0});
+        if(autoplay) player.playVideo?.();
+      }catch{}
+    }
     return true;
   };
+
   const advanceFromEnd=()=>{
     if(!autoNext()||advancing||current>=queue.length-1)return;
     advancing=true;
-    endedTimer=setTimeout(()=>{endedTimer=null;if(!loadIndex(current+1,{autoplay:true}))advancing=false;},100);
+    endedTimer=setTimeout(()=>{
+      endedTimer=null;
+      if(!loadIndex(current+1,{autoplay:true}))advancing=false;
+    },100);
   };
+
   prev.onclick=landscapePrev.onclick=()=>loadIndex(current-1,{autoplay:true});
   next.onclick=landscapeNext.onclick=()=>loadIndex(current+1,{autoplay:true});
-  panel.addEventListener('touchmove',event=>{if(panel.classList.contains('youtube-css-landscape')&&event.cancelable)event.preventDefault();},{passive:false});
+
+  const preventLandscapeScroll=event=>{
+    if(panel.classList.contains('youtube-css-landscape')&&event.cancelable) event.preventDefault();
+  };
+  panel.addEventListener('touchmove',preventLandscapeScroll,{passive:false});
+  panel.addEventListener('wheel',preventLandscapeScroll,{passive:false});
+
   updateUi();
   requestAnimationFrame(()=>activeHost?.scrollIntoView({behavior:'smooth',block:'start'}));
 
   ensureApi().then(YT=>{
     if(myGeneration!==generation||!panel.isConnected)return;
-    player=new YT.Player(holderId,{videoId:queue[current].videoId,playerVars:{autoplay:1,playsinline:1,rel:0,cc_load_policy:0},events:{
-      onReady:event=>{ready=true;try{event.target.playVideo();}catch{} endedMonitor=setInterval(()=>{if(myGeneration!==generation||!panel.isConnected||!autoNext())return;try{if(player?.getPlayerState?.()===YT.PlayerState.ENDED)advanceFromEnd();}catch{}},650);},
-      onStateChange:event=>{if(event.data===YT.PlayerState.PLAYING)advancing=false;if(event.data===YT.PlayerState.ENDED)advanceFromEnd();}
-    }});
-  }).catch(error=>{if(panel.isConnected)info.append(el('div',{class:'error-box',text:`YouTubeプレイヤーを読み込めませんでした: ${error.message}`}));});
+    player=new YT.Player(holderId,{
+      videoId:queue[current].videoId,
+      playerVars:{autoplay:1,playsinline:1,rel:0,cc_load_policy:0},
+      events:{
+        onReady:event=>{
+          ready=true;
+          try{event.target.playVideo();}catch{}
+          endedMonitor=setInterval(()=>{
+            if(myGeneration!==generation||!panel.isConnected||!autoNext())return;
+            try{if(player?.getPlayerState?.()===YT.PlayerState.ENDED)advanceFromEnd();}catch{}
+          },650);
+        },
+        onStateChange:event=>{
+          if(event.data===YT.PlayerState.PLAYING)advancing=false;
+          if(event.data===YT.PlayerState.ENDED)advanceFromEnd();
+        }
+      }
+    });
+  }).catch(error=>{
+    if(panel.isConnected)info.append(el('div',{class:'error-box',text:`YouTubeプレイヤーを読み込めませんでした: ${error.message}`}));
+  });
   return {close:cleanupYouTubePlayer};
 }
 
