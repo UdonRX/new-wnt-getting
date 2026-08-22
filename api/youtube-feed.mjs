@@ -1,30 +1,25 @@
 const API = 'https://www.googleapis.com/youtube/v3';
 const EXACT_CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+const DETAIL_LIMIT = 40;
+const STRICT_PROBE_LIMIT = 16;
+const SHORTS_PROBE_CONCURRENCY = 4;
 const SHORTS_PROBE_TTL_MS = 12 * 60 * 60 * 1000;
-const SHORTS_PROBE_CACHE_MAX = 600;
-const SHORTS_PROBE_CONCURRENCY = 6;
+const SHORTS_PROBE_CACHE_MAX = 500;
 const shortsProbeCache = new Map();
 
 function apiKey() { return String(process.env.YOUTUBE_API_KEY || '').trim(); }
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-function apiReason(data = {}) {
-  return String(data?.error?.errors?.[0]?.reason || data?.error?.status || 'youtubeApiError');
-}
+function apiReason(data = {}) { return String(data?.error?.errors?.[0]?.reason || data?.error?.status || 'youtubeApiError'); }
 function quotaLike(reason = '', status = 0) {
-  return status === 429 || /quotaExceeded|dailyLimitExceeded|rateLimitExceeded|userRateLimitExceeded/i.test(String(reason));
+  return Number(status) === 429 || /quotaExceeded|dailyLimitExceeded|rateLimitExceeded|userRateLimitExceeded/i.test(String(reason));
 }
-function transientApiError(status = 0, reason = '') {
-  if ([408, 425, 429, 500, 502, 503, 504].includes(Number(status))) return true;
-  return /backendError|internalError|rateLimitExceeded|userRateLimitExceeded/i.test(String(reason));
+function transient(status = 0, reason = '') {
+  return [408,425,429,500,502,503,504].includes(Number(status)) || /backendError|internalError|rateLimitExceeded|userRateLimitExceeded/i.test(String(reason));
 }
 
 async function yt(path, params) {
   const key = apiKey();
-  if (!key) throw Object.assign(new Error('YOUTUBE_API_KEY がVercelに設定されていません'), {
-    statusCode: 500, code: 'NO_API_KEY', reason: 'keyMissing'
-  });
-
+  if (!key) throw Object.assign(new Error('YOUTUBE_API_KEY がVercelに設定されていません'), { statusCode: 500, code: 'NO_API_KEY', reason: 'keyMissing' });
   const url = new URL(`${API}/${path}`);
   Object.entries({ ...params, key }).forEach(([name, value]) => {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(name, String(value));
@@ -33,10 +28,9 @@ async function yt(path, params) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      const response = await fetch(url, { signal: AbortSignal.timeout(8_000) });
       const data = await response.json().catch(() => ({}));
       if (response.ok) return data;
-
       const reason = apiReason(data);
       const error = Object.assign(new Error(data?.error?.message || `YouTube API ${response.status}`), {
         statusCode: response.status,
@@ -45,15 +39,15 @@ async function yt(path, params) {
         apiData: data
       });
       lastError = error;
-      if (attempt === 0 && transientApiError(response.status, reason) && !/quotaExceeded|dailyLimitExceeded/i.test(reason)) {
-        await sleep(450);
+      if (attempt === 0 && transient(response.status, reason) && !/quotaExceeded|dailyLimitExceeded/i.test(reason)) {
+        await sleep(350);
         continue;
       }
       throw error;
     } catch (error) {
       lastError = error;
       if (attempt === 0 && (error?.name === 'TimeoutError' || error?.name === 'AbortError' || /fetch failed|network/i.test(String(error?.message || '')))) {
-        await sleep(300);
+        await sleep(250);
         continue;
       }
       throw error;
@@ -81,11 +75,11 @@ async function resolveChannel(input) {
   if (EXACT_CHANNEL_ID.test(query)) {
     return (await yt('channels', { part: 'snippet,contentDetails', id: query })).items?.[0] || null;
   }
-
   const handle = query.replace(/^@/, '');
   let data = await yt('channels', { part: 'snippet,contentDetails', forHandle: handle });
   if (data.items?.[0]) return data.items[0];
 
+  // search.list はクォータ消費が大きいので、handle解決できなかった時だけ使う。
   data = await yt('search', { part: 'snippet', type: 'channel', q: query, maxResults: 1 });
   const id = data.items?.[0]?.snippet?.channelId || data.items?.[0]?.id?.channelId;
   if (!id) return null;
@@ -109,23 +103,19 @@ function liveClassification(video) {
 function cacheProbe(videoId, value) {
   shortsProbeCache.delete(videoId);
   shortsProbeCache.set(videoId, { at: Date.now(), value });
-  while (shortsProbeCache.size > SHORTS_PROBE_CACHE_MAX) {
-    shortsProbeCache.delete(shortsProbeCache.keys().next().value);
-  }
+  while (shortsProbeCache.size > SHORTS_PROBE_CACHE_MAX) shortsProbeCache.delete(shortsProbeCache.keys().next().value);
 }
 
-async function requestShortsUrl(videoId) {
-  const url = `https://www.youtube.com/shorts/${encodeURIComponent(videoId)}`;
-  const response = await fetch(url, {
-    method: 'GET',
+async function shortsRequest(videoId, method = 'HEAD') {
+  const response = await fetch(`https://www.youtube.com/shorts/${encodeURIComponent(videoId)}`, {
+    method,
     redirect: 'manual',
     headers: {
       'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1',
-      'Accept': 'text/html,application/xhtml+xml',
-      'Accept-Language': 'ja,en-US;q=0.7,en;q=0.5',
-      'Cache-Control': 'no-cache'
+      'Accept': method === 'HEAD' ? '*/*' : 'text/html,application/xhtml+xml',
+      'Accept-Language': 'ja,en-US;q=0.7,en;q=0.5'
     },
-    signal: AbortSignal.timeout(5_000)
+    signal: AbortSignal.timeout(method === 'HEAD' ? 1_900 : 2_800)
   });
   try { await response.body?.cancel?.(); } catch {}
   return response.status;
@@ -135,99 +125,80 @@ async function probeShorts(videoId) {
   const cached = shortsProbeCache.get(videoId);
   if (cached && Date.now() - cached.at < SHORTS_PROBE_TTL_MS) return cached.value;
 
-  let lastError = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const status = await requestShortsUrl(videoId);
-      if (status === 200) {
-        const value = { kind: 'short', liveType: '', method: 'shorts-url-200', status };
-        cacheProbe(videoId, value);
-        return value;
-      }
-      if (status >= 300 && status < 400) {
-        const value = { kind: 'long', liveType: '', method: 'shorts-url-redirect', status };
-        cacheProbe(videoId, value);
-        return value;
-      }
-      lastError = new Error(`Shorts判定 HTTP ${status}`);
-      lastError.statusCode = status;
-      if (attempt === 0 && [408, 425, 429, 500, 502, 503, 504].includes(status)) {
-        await sleep(350);
-        continue;
-      }
-      break;
-    } catch (error) {
-      lastError = error;
-      if (attempt === 0 && (error?.name === 'TimeoutError' || error?.name === 'AbortError' || /fetch failed|network/i.test(String(error?.message || '')))) {
-        await sleep(300);
-        continue;
-      }
-      break;
-    }
+  let status = 0;
+  let errorMessage = '';
+  try {
+    status = await shortsRequest(videoId, 'HEAD');
+    // 一部のエッジではHEADが拒否されるので、その場合だけGETを1回使う。
+    if ([403,405,501].includes(status)) status = await shortsRequest(videoId, 'GET');
+  } catch (error) {
+    errorMessage = String(error?.message || error);
   }
 
-  return {
-    kind: 'unknown',
-    liveType: '',
-    method: 'shorts-url-error',
-    status: Number(lastError?.statusCode || 0),
-    error: String(lastError?.message || 'Shorts判定に失敗しました')
-  };
+  if (status === 200) {
+    const value = { kind: 'short', liveType: '', method: 'shorts-url-200', status };
+    cacheProbe(videoId, value);
+    return value;
+  }
+  if (status >= 300 && status < 400) {
+    const value = { kind: 'long', liveType: '', method: 'shorts-url-redirect', status };
+    cacheProbe(videoId, value);
+    return value;
+  }
+  return { kind: 'unknown', liveType: '', method: 'shorts-url-unresolved', status, error: errorMessage || `HTTP ${status || 'error'}` };
 }
 
 async function mapConcurrent(values, limit, worker) {
   const result = new Array(values.length);
   let cursor = 0;
-  const jobs = Array.from({ length: Math.min(limit, values.length) }, async () => {
+  const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
     while (true) {
       const index = cursor++;
       if (index >= values.length) return;
-      result[index] = await worker(values[index], index);
+      try { result[index] = await worker(values[index], index); }
+      catch (error) { result[index] = { kind: 'unknown', liveType: '', method: 'probe-error', status: 0, error: String(error?.message || error) }; }
     }
   });
-  await Promise.all(jobs);
+  await Promise.all(workers);
   return result;
 }
 
 async function classifyVideos(videos) {
-  const classified = new Map();
+  const classifications = new Map();
   const nonLive = [];
   for (const video of videos) {
     const live = liveClassification(video);
-    if (live) classified.set(video.id, live);
-    else nonLive.push(video);
+    if (live) classifications.set(video.id, live);
+    else if (nonLive.length < STRICT_PROBE_LIMIT) nonLive.push(video);
+    else classifications.set(video.id, { kind: 'unknown', liveType: '', method: 'probe-budget' });
   }
-
-  const probeResults = await mapConcurrent(nonLive, SHORTS_PROBE_CONCURRENCY, video => probeShorts(video.id));
-  nonLive.forEach((video, index) => classified.set(video.id, probeResults[index]));
-  return classified;
+  const results = await mapConcurrent(nonLive, SHORTS_PROBE_CONCURRENCY, video => probeShorts(video.id));
+  nonLive.forEach((video, index) => classifications.set(video.id, results[index]));
+  return classifications;
 }
 
 async function dataApiSnapshot(input) {
   const channel = await resolveChannel(input);
   if (!channel) throw Object.assign(new Error('YouTubeチャンネルを特定できませんでした'), { statusCode: 404, reason: 'channelNotFound' });
-
   const uploads = channel.contentDetails?.relatedPlaylists?.uploads;
   if (!uploads) throw Object.assign(new Error('アップロード一覧を取得できませんでした'), { statusCode: 502, reason: 'uploadsPlaylistMissing' });
 
-  const playlist = await yt('playlistItems', { part: 'snippet,contentDetails', playlistId: uploads, maxResults: 40 });
+  const playlist = await yt('playlistItems', { part: 'snippet,contentDetails', playlistId: uploads, maxResults: DETAIL_LIMIT });
   const ids = (playlist.items || []).map(item => item.contentDetails?.videoId).filter(Boolean);
   if (!ids.length) return { channel: { id: channel.id, name: channel.snippet?.title || '' }, items: [], classificationWarnings: [] };
 
-  const details = await yt('videos', {
-    part: 'snippet,contentDetails,liveStreamingDetails',
-    id: ids.join(',')
-  });
-  const videos = details.items || [];
+  // 必須要件: videos.list + snippet,contentDetails,liveStreamingDetails
+  const detailData = await yt('videos', { part: 'snippet,contentDetails,liveStreamingDetails', id: ids.join(',') });
+  const videos = detailData.items || [];
   const byId = new Map(videos.map(video => [video.id, video]));
-  const classifications = await classifyVideos(videos);
+  const classifications = await classifyVideos(ids.map(id => byId.get(id)).filter(Boolean));
   const warnings = [];
 
   const items = ids.map(id => {
     const video = byId.get(id);
     if (!video) return null;
     const c = classifications.get(id) || { kind: 'unknown', liveType: '', method: 'missing-classification' };
-    if (c.kind === 'unknown') warnings.push(`${video.snippet?.title || id}: Shorts判定に失敗したため一覧から除外`);
+    if (c.kind === 'unknown') warnings.push(`${video.snippet?.title || id}: 厳密分類を完了できませんでした`);
     return {
       videoId: video.id,
       title: video.snippet?.title || '無題',
@@ -239,9 +210,7 @@ async function dataApiSnapshot(input) {
       liveType: c.liveType,
       classificationMethod: c.method,
       classificationStatus: c.status || 0,
-      url: c.kind === 'short'
-        ? `https://www.youtube.com/shorts/${video.id}`
-        : `https://www.youtube.com/watch?v=${video.id}`
+      url: c.kind === 'short' ? `https://www.youtube.com/shorts/${video.id}` : `https://www.youtube.com/watch?v=${video.id}`
     };
   }).filter(Boolean);
 
@@ -256,21 +225,20 @@ async function dataApiSnapshot(input) {
 export default async function handler(req, res) {
   const input = String(req.query?.channel || '').trim();
   if (!input) return res.status(400).json({ ok: false, error: 'channel を指定してください。' });
-
   try {
     const data = await dataApiSnapshot(input);
-    res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=600');
-    return res.status(200).json({ ok: true, source: 'data-api-v2182', ...data });
-  } catch (err) {
-    console.error('[youtube-feed:v2182]', err);
-    const isQuota = err?.code === 'YOUTUBE_QUOTA' || quotaLike(err?.reason, err?.statusCode);
-    return res.status(err?.statusCode || (isQuota ? 429 : 500)).json({
+    res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900');
+    return res.status(200).json({ ok: true, source: 'data-api-v2183', ...data });
+  } catch (error) {
+    console.error('[youtube-feed:v2183]', error);
+    const isQuota = error?.code === 'YOUTUBE_QUOTA' || quotaLike(error?.reason, error?.statusCode);
+    return res.status(isQuota ? 429 : (error?.statusCode || 500)).json({
       ok: false,
       error: isQuota
-        ? 'YouTube Data APIのクォータ上限のため更新できません。保存済みの正確な分類結果を表示します。'
+        ? 'YouTube Data APIのクォータ上限のため更新できません。保存済み一覧があればそちらを表示します。'
         : 'YouTube情報を現在取得できません。保存済み一覧があればそちらを表示します。',
-      reason: err?.reason || err?.code || '',
-      detail: err?.apiData?.error?.message || err?.message || '',
+      reason: error?.reason || error?.code || '',
+      detail: error?.apiData?.error?.message || error?.message || '',
       retryable: !isQuota
     });
   }
