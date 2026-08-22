@@ -7,7 +7,7 @@ async function fetchTechnologyResearch(force = false) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45_000);
   try {
-    const target = `/api/technology-research-feed${force ? '?refresh=1' : ''}`;
+    const target = `/api/summary?technologyResearch=1${force ? '&refresh=1' : ''}`;
     const response = await fetch(target, {
       cache: 'no-store',
       signal: controller.signal,
