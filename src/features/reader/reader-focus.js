@@ -4,7 +4,7 @@ import { shortDate } from '../../shared/time.js';
 const summaryCache = new Map();
 const summaryPromises = new Map();
 const summaryProgress = new WeakMap();
-const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2160';
+const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2170';
 const SUMMARY_STORAGE_LIMIT = 72;
 const IMPORTANT_RE = /(?:[+＋\-−]?\d[\d,.]*(?:\.\d+)?\s*(?:%|％|倍|兆円|億円|万円|円|ドル|人|件|台|社|年|か月|ヶ月|日|時間|分|秒|nm|μm|mm|cm|km|℃|°C|GW|MW|kW|GWh|MWh|kWh|Wh|TB|GB|MB)|世界初|国内初|業界初|史上初|世界最大|国内最大|世界最小|国内最小|過去最高|過去最低|最高値|最安値|初めて|新記録|首位|No\.?\s*1|突破|倍増|半減)/giu;
 
@@ -88,7 +88,7 @@ function categoryHeaderLabel(item, fallback = 'おすすめ') {
 }
 
 function summaryKey(item, mode = '') {
-  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2160`;
+  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2170`;
 }
 
 function descriptionLooksThin(item, description, mode) {
@@ -106,16 +106,65 @@ function sentenceCandidates(value = '') {
 
 function compactHeadline(item) {
   const original = plainText(item?.titleJa || item?.title || '記事');
-  if (Array.from(original).length <= 48) return original;
-  const split = original.split(/\s*[｜|：:]\s*|\s+[—–-]\s+/).map(v => v.trim()).filter(Boolean);
-  const natural = split.find(v => Array.from(v).length >= 12 && Array.from(v).length <= 48);
+  if (looksMostlyEnglish(original) && !plainText(item?.titleJa)) return '日本語タイトルを要約中';
+  if (Array.from(original).length <= 46) return original;
+
+  const split = original.split(/\s*[｜|：:]\s*|\s+[—–-]\s+|[。！？!?]/)
+    .map(v => v.trim()).filter(Boolean);
+  const natural = split.find(v => Array.from(v).length >= 12 && Array.from(v).length <= 46);
   if (natural) return natural;
-  const descriptionSentence = sentenceCandidates(item?.description)[0]?.replace(/[。！？!?]+$/, '');
-  if (descriptionSentence && Array.from(descriptionSentence).length <= 48) return descriptionSentence;
+
+  const descriptionSentence = sentenceCandidates(item?.description)
+    .map(row => row.replace(/[。！？!?]+$/, '').trim())
+    .find(row => !looksMostlyEnglish(row) && Array.from(row).length >= 12 && Array.from(row).length <= 46);
+  if (descriptionSentence) return descriptionSentence;
+
   const bracketless = original.replace(/[（(][^）)]{1,40}[）)]\s*$/, '').trim();
-  if (Array.from(bracketless).length <= 52) return bracketless;
-  const punctuation = Array.from(original).slice(0, 58).join('').match(/^.{24,52}?[、。！？!?]/)?.[0];
-  return punctuation ? punctuation.replace(/[、。！？!?]+$/, '') : '記事の要点を整理中';
+  if (Array.from(bracketless).length <= 50) return bracketless;
+  const punctuation = Array.from(original).slice(0, 56).join('').match(/^.{20,48}?[、。！？!?]/)?.[0];
+  return punctuation ? punctuation.replace(/[、。！？!?]+$/, '') : '記事の要点をわかりやすく整理';
+}
+
+const translatedTitleCache = new Map();
+function translatedTitleStorage() {
+  try { return JSON.parse(localStorage.getItem('pdv2:readerTitleJa:v2170') || '{}'); }
+  catch { return {}; }
+}
+async function translateTitleToJapanese(item) {
+  const original = plainText(item?.title || '');
+  if (!looksMostlyEnglish(original)) return plainText(item?.titleJa || original);
+  if (plainText(item?.titleJa) && !looksMostlyEnglish(item.titleJa)) return plainText(item.titleJa);
+  if (translatedTitleCache.has(original)) return translatedTitleCache.get(original);
+
+  const stored = translatedTitleStorage();
+  if (stored[original]) {
+    translatedTitleCache.set(original, stored[original]);
+    return stored[original];
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5200);
+  try {
+    const response = await fetch('/api/paper-titles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ titles: [original] })
+    });
+    const data = await response.json().catch(() => ({}));
+    const row = Array.isArray(data?.translations) ? data.translations[0] : null;
+    const translated = plainText(row?.ja || '');
+    if (!response.ok || !translated || looksMostlyEnglish(translated)) return '';
+    translatedTitleCache.set(original, translated);
+    stored[original] = translated;
+    const entries = Object.entries(stored).slice(-700);
+    try { localStorage.setItem('pdv2:readerTitleJa:v2170', JSON.stringify(Object.fromEntries(entries))); } catch {}
+    return translated;
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function instantSummary(item) {
@@ -185,14 +234,29 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
     })
   }).then(async response => {
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !isUsableSummary(data)) return instantSummary(item);
+    if (!response.ok || !isUsableSummary(data)) {
+      const fallback = instantSummary(item);
+      const translated = await translateTitleToJapanese(item);
+      if (translated) fallback.headline = compactHeadline({ ...item, titleJa: translated });
+      return fallback;
+    }
+
+    if (looksMostlyEnglish(data.headline || '')) {
+      const translated = await translateTitleToJapanese(item);
+      if (translated) data.headline = compactHeadline({ ...item, titleJa: translated });
+    }
     if (data.cacheable !== false) {
       summaryCache.set(key, data);
       persistSummary(key, data, activeMode);
       while (summaryCache.size > SUMMARY_STORAGE_LIMIT) summaryCache.delete(summaryCache.keys().next().value);
     }
     return data;
-  }).catch(() => instantSummary(item)).finally(() => {
+  }).catch(async () => {
+    const fallback = instantSummary(item);
+    const translated = await translateTitleToJapanese(item);
+    if (translated) fallback.headline = compactHeadline({ ...item, titleJa: translated });
+    return fallback;
+  }).finally(() => {
     clearTimeout(timeout);
     if (summaryPromises.get(key) === request) summaryPromises.delete(key);
   });
