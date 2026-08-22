@@ -100,26 +100,6 @@ function centerActiveChip(chips) {
   if (active) centerScrollItem(chips, active, { behavior: 'smooth' });
 }
 
-function buildFeedChips(mode, onChange) {
-  if (mode === 'papers') return null;
-  const feeds = feedsFor(mode);
-  if (feeds.length <= 1) return null;
-  const selected = getSelectedFeed(mode);
-  const chips = el('div', { class: 'chips reader-feed-chips' });
-  chips.append(el('button', {
-    class: `chip ${!selected ? 'active' : ''}`,
-    type: 'button', text: 'All',
-    onclick: () => { setSelectedFeed(mode, ''); onChange(); }
-  }));
-  feeds.forEach(feed => chips.append(el('button', {
-    class: `chip ${selected === feed.name ? 'active' : ''}`,
-    type: 'button', text: feed.name,
-    onclick: () => { setSelectedFeed(mode, feed.name); onChange(); }
-  })));
-  centerActiveChip(chips);
-  return chips;
-}
-
 function buildPaperTrackLevel(onChange) {
   const wrap = el('div', { class: 'paper-track-level' });
   wrap.append(segmented([
@@ -127,22 +107,6 @@ function buildPaperTrackLevel(onChange) {
     { value: 'creative', label: '独創研究' }
   ], paperTrack(), onChange));
   return wrap;
-}
-
-function buildCreativeFamilyTabs(onChange) {
-  const family = creativeFamily();
-  const row = el('div', { class: 'paper-family-row chips' });
-  [
-    { value: 'all', label: 'すべて' },
-    { value: 'applied', label: '応用発想' },
-    { value: 'general', label: '一般独創' }
-  ].forEach(item => row.append(el('button', {
-    class: `chip ${family === item.value ? 'active' : ''}`,
-    type: 'button', text: item.label,
-    onclick: () => onChange(item.value)
-  })));
-  centerActiveChip(row);
-  return row;
 }
 
 function currentSourceLabel(mode, track, family) {
@@ -155,6 +119,59 @@ function currentSourceLabel(mode, track, family) {
   return getSelectedFeed(mode) || 'All';
 }
 
+function buildSourceDock(mode, track, family, { onSourceChange, onRecommend }) {
+  const dock = el('div', { class: 'reader-source-dock reader-sticky-context' });
+  const rail = el('div', { class: 'chips reader-source-scroll reader-feed-chips' });
+
+  if (mode === 'papers') {
+    if (track === 'core') {
+      rail.append(el('button', { class: 'chip active', type: 'button', text: '製品・熱研究' }));
+    } else {
+      [
+        { value: 'all', label: 'すべて' },
+        { value: 'applied', label: '応用発想' },
+        { value: 'general', label: '一般独創' }
+      ].forEach(item => rail.append(el('button', {
+        class: `chip ${family === item.value ? 'active' : ''}`,
+        type: 'button',
+        text: item.label,
+        onclick: () => onSourceChange?.({ family: item.value })
+      })));
+    }
+  } else {
+    const selected = getSelectedFeed(mode);
+    rail.append(el('button', {
+      class: `chip ${!selected ? 'active' : ''}`,
+      type: 'button',
+      text: 'All',
+      onclick: () => onSourceChange?.({ feed: '' })
+    }));
+    feedsFor(mode).forEach(feed => rail.append(el('button', {
+      class: `chip ${selected === feed.name ? 'active' : ''}`,
+      type: 'button',
+      text: feed.name,
+      onclick: () => onSourceChange?.({ feed: feed.name })
+    })));
+  }
+
+  const compactActive = el('button', {
+    class: 'chip active reader-source-active-compact',
+    type: 'button',
+    text: currentSourceLabel(mode, track, family),
+    onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' })
+  });
+  const recommend = el('button', {
+    class: 'soft-button reader-recommend-overlay',
+    type: 'button',
+    text: 'おすすめへ',
+    onclick: onRecommend
+  });
+
+  dock.append(rail, compactActive, recommend);
+  centerActiveChip(rail);
+  return dock;
+}
+
 function bentoFallbackLabel(item) {
   if (item?._readerMode === 'papers') {
     if (item?._paperTrack === 'core') return '製品熱研究';
@@ -164,17 +181,9 @@ function bentoFallbackLabel(item) {
   return item?.feedName || item?.source || modeLabel(item?._readerMode);
 }
 
-function renderBento(host, mode, track, family, items, { onOpen, onRecommend }) {
+function renderBento(host, mode, track, family, items, { onOpen }) {
   const read = getRead(mode, track);
   const wrap = el('div', { class: 'reader-bento-view' });
-  const stickyBar = el('div', { class: 'reader-list-sticky-bar' }, [
-    el('button', {
-      class: 'chip active reader-list-current-source',
-      type: 'button', text: currentSourceLabel(mode, track, family),
-      onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' })
-    }),
-    el('button', { class: 'soft-button reader-list-recommend', type: 'button', text: 'おすすめへ', onclick: onRecommend })
-  ]);
   const search = el('input', { class: 'reader-bento-search', placeholder: 'タイトル・媒体を検索' });
   const grid = el('div', { class: 'reader-bento-grid' });
 
@@ -190,16 +199,23 @@ function renderBento(host, mode, track, family, items, { onOpen, onRecommend }) 
       const media = el('div', { class: 'reader-bento-media' });
       if (item?.image) {
         const image = el('img', {
-          src: item.image, alt: '', loading: filteredIndex <= 2 ? 'eager' : 'lazy',
-          decoding: 'async', referrerpolicy: 'no-referrer'
+          src: item.image,
+          alt: '',
+          loading: filteredIndex <= 2 ? 'eager' : 'lazy',
+          decoding: 'async',
+          referrerpolicy: 'no-referrer'
         });
         image.addEventListener('error', () => media.classList.add('image-failed'), { once: true });
         media.append(image);
       } else media.classList.add('image-failed');
       media.append(el('span', { class: 'reader-bento-fallback', text: bentoFallbackLabel(item) }));
+
       const meta = [];
       if (unread) meta.push(el('span', { class: 'badge', text: 'NEW' }));
-      meta.push(el('span', { text: item?.source || item?.feedName || '' }), el('span', { text: shortDate(item?.pubDate) }));
+      meta.push(
+        el('span', { text: item?.source || item?.feedName || '' }),
+        el('span', { text: shortDate(item?.pubDate) })
+      );
       card.append(media, el('div', { class: 'reader-bento-copy' }, [
         el('div', { class: 'reader-bento-meta' }, meta),
         el(filteredIndex === 0 ? 'h2' : 'h3', { class: 'reader-bento-title', text: item?.titleJa || item?.title || '無題' })
@@ -211,11 +227,13 @@ function renderBento(host, mode, track, family, items, { onOpen, onRecommend }) 
       };
       grid.append(card);
     });
+
     if (!filtered.length) grid.append(el('div', { class: 'empty reader-bento-empty', text: '該当する記事がありません' }));
   };
+
   search.addEventListener('input', draw);
   draw();
-  wrap.append(stickyBar, search, grid);
+  wrap.append(search, grid);
   host.replaceChildren(wrap);
 }
 
@@ -248,6 +266,7 @@ function paperRecommendations(items, track, family) {
   const byKey = new Map(items.map(item => [String(item?.id || ''), item]));
   const ordered = [];
   const used = new Set();
+
   for (const row of cachedAiRanking('papers', track, family)) {
     const item = byKey.get(String(row?.id || ''));
     if (!item || used.has(item.id)) continue;
@@ -316,7 +335,6 @@ async function loadMixedRecommendations(onProgress) {
     paperRecommendations(creative, 'creative', 'all')
   ]);
 
-  // No global slice/limit: keep all naturally qualified recommendations.
   return interleaveRecommendationGroups([newsSelected, knowledgeSelected, papers]);
 }
 
@@ -327,43 +345,6 @@ export async function warmReaderRecommendations() {
     loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }),
     loadReader('papers', { paperTrack: 'creative', fastOnly: true, preferCache: false })
   ]);
-}
-
-function installReaderModeSwipe(node, mode, onMode) {
-  let start = null;
-  let suppressUntil = 0;
-  const shouldIgnore = target => Boolean(target?.closest?.('input,textarea,select,.chips,.segmented,.reader-swipe-feed,a'));
-  const onStart = event => {
-    if (event.touches?.length !== 1 || shouldIgnore(event.target)) return;
-    const t = event.touches[0];
-    start = { x: t.clientX, y: t.clientY };
-  };
-  const onEnd = event => {
-    if (!start || !event.changedTouches?.length) { start = null; return; }
-    const t = event.changedTouches[0];
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    start = null;
-    if (Math.abs(dx) < 62 || Math.abs(dx) <= Math.abs(dy) * 1.35) return;
-    const current = READER_MODES.indexOf(mode);
-    const nextIndex = dx < 0 ? current + 1 : current - 1;
-    if (nextIndex < 0 || nextIndex >= READER_MODES.length) return;
-    suppressUntil = Date.now() + 420;
-    onMode(READER_MODES[nextIndex]);
-  };
-  const blockClick = event => {
-    if (Date.now() >= suppressUntil) return;
-    event.preventDefault();
-    event.stopPropagation();
-  };
-  node.addEventListener('touchstart', onStart, { passive: true });
-  node.addEventListener('touchend', onEnd, { passive: true });
-  node.addEventListener('click', blockClick, true);
-  return () => {
-    node.removeEventListener('touchstart', onStart);
-    node.removeEventListener('touchend', onEnd);
-    node.removeEventListener('click', blockClick, true);
-  };
 }
 
 function recommendationLoading(host, mixed) {
@@ -381,6 +362,7 @@ function recommendationLoading(host, mixed) {
     progress
   ]);
   host.replaceChildren(box);
+
   let current = 0.08;
   const set = (percent, text) => {
     current = Math.max(current, Math.min(1, Number(percent || 0) / 100));
@@ -390,6 +372,120 @@ function recommendationLoading(host, mixed) {
   };
   set(8);
   return set;
+}
+
+function paperContextStates() {
+  return [
+    { track: 'core', family: 'all' },
+    { track: 'creative', family: 'all' },
+    { track: 'creative', family: 'applied' },
+    { track: 'creative', family: 'general' }
+  ];
+}
+
+function sourceStates(mode) {
+  if (mode === 'papers') return paperContextStates();
+  return ['', ...feedsFor(mode).map(feed => feed.name)];
+}
+
+function applyModeBoundary(nextMode, direction) {
+  setReaderMode(nextMode);
+  if (nextMode === 'papers') {
+    const target = direction > 0 ? paperContextStates()[0] : paperContextStates().at(-1);
+    update('paperTrack', target.track);
+    if (target.track === 'creative') update('creativePaperFamily', target.family);
+    return;
+  }
+  const states = sourceStates(nextMode);
+  setSelectedFeed(nextMode, direction > 0 ? states[0] : states.at(-1));
+}
+
+function stepReaderContext(mode, direction, rerender) {
+  if (![-1, 1].includes(direction)) return;
+
+  if (mode === 'papers') {
+    const states = paperContextStates();
+    const track = paperTrack();
+    const family = track === 'creative' ? creativeFamily() : 'all';
+    let current = states.findIndex(row => row.track === track && row.family === family);
+    if (current < 0 && track === 'creative') current = 1;
+    if (current < 0) current = 0;
+    const next = current + direction;
+    if (next >= 0 && next < states.length) {
+      const target = states[next];
+      update('paperTrack', target.track);
+      if (target.track === 'creative') update('creativePaperFamily', target.family);
+      rerender();
+      return;
+    }
+    if (direction < 0) {
+      applyModeBoundary('knowledge', -1);
+      rerender();
+    }
+    return;
+  }
+
+  const states = sourceStates(mode);
+  const selected = getSelectedFeed(mode);
+  let current = states.indexOf(selected);
+  if (current < 0) current = 0;
+  const next = current + direction;
+  if (next >= 0 && next < states.length) {
+    setSelectedFeed(mode, states[next]);
+    rerender();
+    return;
+  }
+
+  const modeIndex = READER_MODES.indexOf(mode);
+  const nextModeIndex = modeIndex + direction;
+  if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;
+  applyModeBoundary(READER_MODES[nextModeIndex], direction);
+  rerender();
+}
+
+function installReaderListSwipe(node, mode, rerender) {
+  let start = null;
+  let suppressUntil = 0;
+
+  const shouldIgnore = target => Boolean(target?.closest?.(
+    'input,textarea,select,a,.reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search'
+  ));
+
+  const onStart = event => {
+    if (event.touches?.length !== 1 || shouldIgnore(event.target)) return;
+    const touch = event.touches[0];
+    start = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const onEnd = event => {
+    if (!start || !event.changedTouches?.length) { start = null; return; }
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    start = null;
+    if (Math.abs(dx) < 64 || Math.abs(dx) <= Math.abs(dy) * 1.35) return;
+
+    // User request: swiping toward the right advances through source tabs and,
+    // after the last source, through News -> Knowledge -> Papers.
+    const direction = dx > 0 ? 1 : -1;
+    suppressUntil = Date.now() + 430;
+    stepReaderContext(mode, direction, rerender);
+  };
+
+  const blockClick = event => {
+    if (Date.now() >= suppressUntil) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  node.addEventListener('touchstart', onStart, { passive: true });
+  node.addEventListener('touchend', onEnd, { passive: true });
+  node.addEventListener('click', blockClick, true);
+  return () => {
+    node.removeEventListener('touchstart', onStart);
+    node.removeEventListener('touchend', onEnd);
+    node.removeEventListener('click', blockClick, true);
+  };
 }
 
 export async function renderReader(root, {
@@ -445,28 +541,40 @@ export async function renderReader(root, {
   if (mode === 'papers') {
     screen.append(buildPaperTrackLevel(value => {
       update('paperTrack', value);
+      if (value === 'creative' && !['all', 'applied', 'general'].includes(state.creativePaperFamily)) {
+        update('creativePaperFamily', 'all');
+      }
       renderReader(root, { navigate, readerRecommendations: false });
     }));
   }
 
-  const stickyContext = el('div', { class: 'reader-sticky-context' });
-  if (mode !== 'papers') {
-    const chips = buildFeedChips(mode, () => renderReader(root, { navigate, readerRecommendations: false }));
-    if (chips) stickyContext.append(chips);
-  } else if (track === 'creative') {
-    stickyContext.append(buildCreativeFamilyTabs(value => {
-      update('creativePaperFamily', value);
-      renderReader(root, { navigate, readerRecommendations: false });
-    }));
-  }
-  screen.append(stickyContext);
   const host = el('div', { class: 'reader-content-host' });
-  screen.append(host);
-  root.replaceChildren(screen);
+
+  const openRecommendation = () => renderReader(root, {
+    navigate,
+    readerRecommendations: true,
+    recommendationMode: mode,
+    recommendationTrack: track,
+    recommendationFamily: family
+  });
 
   if (!readerRecommendations) {
-    swipeDetach = installReaderModeSwipe(screen, mode, switchMode);
+    const sourceDock = buildSourceDock(mode, track, family, {
+      onSourceChange: next => {
+        if (mode === 'papers') {
+          if (track === 'creative' && next?.family) update('creativePaperFamily', next.family);
+        } else {
+          setSelectedFeed(mode, next?.feed || '');
+        }
+        renderReader(root, { navigate, readerRecommendations: false });
+      },
+      onRecommend: openRecommendation
+    });
+    screen.append(sourceDock);
   }
+
+  screen.append(host);
+  root.replaceChildren(screen);
 
   const openArticleSequence = (item, initialIndex, visibleItems) => {
     const rows = Array.isArray(visibleItems) && visibleItems.length ? visibleItems : [item];
@@ -519,6 +627,7 @@ export async function renderReader(root, {
         }
         renderReader(root, { navigate, readerRecommendations: false });
       };
+
       const recommendationSwitch = direction => {
         if (!scopedMode) return;
         const i = READER_MODES.indexOf(scopedMode);
@@ -560,6 +669,7 @@ export async function renderReader(root, {
   }
 
   screen.classList.add('reader-list-open');
+  swipeDetach = installReaderListSwipe(screen, mode, () => renderReader(root, { navigate, readerRecommendations: false }));
   host.replaceChildren(el('div', { class: 'card', html: '<div class="loading">記事一覧を読み込み中...</div>' }));
 
   try {
@@ -567,16 +677,7 @@ export async function renderReader(root, {
     const showList = rows => {
       const visible = mode === 'papers' && track === 'creative' ? filterCreativeItems(rows, family) : rows;
       const annotated = annotateItems(visible, mode, track, family);
-      renderBento(host, mode, track, family, annotated, {
-        onOpen: openArticleSequence,
-        onRecommend: () => renderReader(root, {
-          navigate,
-          readerRecommendations: true,
-          recommendationMode: mode,
-          recommendationTrack: track,
-          recommendationFamily: family
-        })
-      });
+      renderBento(host, mode, track, family, annotated, { onOpen: openArticleSequence });
       return annotated;
     };
 
@@ -590,7 +691,12 @@ export async function renderReader(root, {
       }
     });
     const annotated = showList(result.items);
-    compactDetach = installShrinkingHeader(screen, { threshold: 56, className: 'reader-list-motion-compact', range: 48, hysteresis: 18 });
+    compactDetach = installShrinkingHeader(screen, {
+      threshold: 72,
+      className: 'reader-list-motion-compact',
+      range: 58,
+      hysteresis: 20
+    });
 
     if (state.settings.rankWithAi && annotated.length) {
       const rankMode = mode === 'papers' && track === 'creative' ? creativeRankMode(family) : mode;
