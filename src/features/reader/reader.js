@@ -4,13 +4,17 @@ import { topbar, segmented, collectionManager, centerScrollItem, installShrinkin
 import { iconSvg } from '../../shared/icons.js';
 import { loadReader, feedsFor } from './reader-data.js';
 import { chooseTop, heuristicRank, requestAiRank } from './reader-rank.js';
-import { mountFocus } from './reader-focus.js';
+import { mountFocus, prewarmSummaryChunk } from './reader-focus.js';
 import { shortDate } from '../../shared/time.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
+const MIXED_WARM_TTL = 5 * 60 * 1000;
 let focusHandle = null;
 let swipeDetach = null;
 let compactDetach = null;
+let mixedWarmPromise = null;
+let mixedWarmItems = [];
+let mixedWarmAt = 0;
 
 const paperTrack = () => state.paperTrack === 'creative' ? 'creative' : 'core';
 const creativeFamily = () => ['applied', 'general'].includes(state.creativePaperFamily) ? state.creativePaperFamily : 'all';
@@ -28,7 +32,7 @@ function storageSet(key, value) {
   catch { return false; }
 }
 function getRead(mode, track) {
-  try { return new Set(JSON.parse(storageGet(readKey(mode, track), '[]'))); }
+  try { return new Set(JSON.parse(storageGet(readKey(mode, track), '[]')); }
   catch { return new Set(); }
 }
 function saveRead(mode, track, set) {
@@ -212,10 +216,7 @@ function renderBento(host, mode, track, family, items, { onOpen }) {
 
       const meta = [];
       if (unread) meta.push(el('span', { class: 'badge', text: 'NEW' }));
-      meta.push(
-        el('span', { text: item?.source || item?.feedName || '' }),
-        el('span', { text: shortDate(item?.pubDate) })
-      );
+      meta.push(el('span', { text: item?.source || item?.feedName || '' }), el('span', { text: shortDate(item?.pubDate) }));
       card.append(media, el('div', { class: 'reader-bento-copy' }, [
         el('div', { class: 'reader-bento-meta' }, meta),
         el(filteredIndex === 0 ? 'h2' : 'h3', { class: 'reader-bento-title', text: item?.titleJa || item?.title || '無題' })
@@ -338,13 +339,27 @@ async function loadMixedRecommendations(onProgress) {
   return interleaveRecommendationGroups([newsSelected, knowledgeSelected, papers]);
 }
 
+function warmCacheFresh() {
+  return mixedWarmItems.length > 0 && Date.now() - mixedWarmAt < MIXED_WARM_TTL;
+}
+
+function ensureMixedRecommendationsWarm() {
+  if (warmCacheFresh()) return Promise.resolve(mixedWarmItems);
+  if (mixedWarmPromise) return mixedWarmPromise;
+  mixedWarmPromise = loadMixedRecommendations().then(items => {
+    mixedWarmItems = items;
+    mixedWarmAt = Date.now();
+    return items;
+  }).finally(() => { mixedWarmPromise = null; });
+  return mixedWarmPromise;
+}
+
 export async function warmReaderRecommendations() {
-  await Promise.allSettled([
-    loadReader('news', { selectedFeed: '', preferCache: false }),
-    loadReader('knowledge', { selectedFeed: '', preferCache: false }),
-    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }),
-    loadReader('papers', { paperTrack: 'creative', fastOnly: true, preferCache: false })
-  ]);
+  const recommendations = await ensureMixedRecommendationsWarm();
+  if (recommendations.length > 1) {
+    await prewarmSummaryChunk(recommendations, { startIndex: 1, count: Math.min(9, recommendations.length - 1) });
+  }
+  return recommendations;
 }
 
 function recommendationLoading(host, mixed) {
@@ -446,17 +461,12 @@ function stepReaderContext(mode, direction, rerender) {
 function installReaderListSwipe(node, mode, rerender) {
   let start = null;
   let suppressUntil = 0;
-
-  const shouldIgnore = target => Boolean(target?.closest?.(
-    'input,textarea,select,a,.reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search'
-  ));
-
+  const shouldIgnore = target => Boolean(target?.closest?.('input,textarea,select,a,.reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search'));
   const onStart = event => {
     if (event.touches?.length !== 1 || shouldIgnore(event.target)) return;
     const touch = event.touches[0];
     start = { x: touch.clientX, y: touch.clientY };
   };
-
   const onEnd = event => {
     if (!start || !event.changedTouches?.length) { start = null; return; }
     const touch = event.changedTouches[0];
@@ -464,20 +474,14 @@ function installReaderListSwipe(node, mode, rerender) {
     const dy = touch.clientY - start.y;
     start = null;
     if (Math.abs(dx) < 64 || Math.abs(dx) <= Math.abs(dy) * 1.35) return;
-
-    // User request: swiping toward the right advances through source tabs and,
-    // after the last source, through News -> Knowledge -> Papers.
-    const direction = dx > 0 ? 1 : -1;
     suppressUntil = Date.now() + 430;
-    stepReaderContext(mode, direction, rerender);
+    stepReaderContext(mode, dx > 0 ? 1 : -1, rerender);
   };
-
   const blockClick = event => {
     if (Date.now() >= suppressUntil) return;
     event.preventDefault();
     event.stopPropagation();
   };
-
   node.addEventListener('touchstart', onStart, { passive: true });
   node.addEventListener('touchend', onEnd, { passive: true });
   node.addEventListener('click', blockClick, true);
@@ -541,21 +545,14 @@ export async function renderReader(root, {
   if (mode === 'papers') {
     screen.append(buildPaperTrackLevel(value => {
       update('paperTrack', value);
-      if (value === 'creative' && !['all', 'applied', 'general'].includes(state.creativePaperFamily)) {
-        update('creativePaperFamily', 'all');
-      }
+      if (value === 'creative' && !['all', 'applied', 'general'].includes(state.creativePaperFamily)) update('creativePaperFamily', 'all');
       renderReader(root, { navigate, readerRecommendations: false });
     }));
   }
 
   const host = el('div', { class: 'reader-content-host' });
-
   const openRecommendation = () => renderReader(root, {
-    navigate,
-    readerRecommendations: true,
-    recommendationMode: mode,
-    recommendationTrack: track,
-    recommendationFamily: family
+    navigate, readerRecommendations: true, recommendationMode: mode, recommendationTrack: track, recommendationFamily: family
   });
 
   if (!readerRecommendations) {
@@ -563,9 +560,7 @@ export async function renderReader(root, {
       onSourceChange: next => {
         if (mode === 'papers') {
           if (track === 'creative' && next?.family) update('creativePaperFamily', next.family);
-        } else {
-          setSelectedFeed(mode, next?.feed || '');
-        }
+        } else setSelectedFeed(mode, next?.feed || '');
         renderReader(root, { navigate, readerRecommendations: false });
       },
       onRecommend: openRecommendation
@@ -609,13 +604,16 @@ export async function renderReader(root, {
     const setLoadingProgress = recommendationLoading(host, mixedRecommendation);
     try {
       const recommendations = mixedRecommendation
-        ? await loadMixedRecommendations(setLoadingProgress)
+        ? await ensureMixedRecommendationsWarm()
         : await loadModeRecommendations(scopedMode, {
           track: scopedTrack,
           family: scopedFamily,
           onProgress: setLoadingProgress
         });
       if (!recommendations.length) throw new Error('おすすめ記事を準備できませんでした');
+      if (mixedRecommendation && recommendations.length > 1) {
+        prewarmSummaryChunk(recommendations, { startIndex: 1, count: Math.min(9, recommendations.length - 1) }).catch(() => {});
+      }
       setLoadingProgress(100, 'おすすめを表示します');
 
       const returnToOrigin = () => {
