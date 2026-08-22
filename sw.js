@@ -1,9 +1,9 @@
-const CACHE_NAME='personal-dashboard-v2-18-1';
+const CACHE_NAME='personal-dashboard-v2-18-2';
 const STATIC_FETCH_TIMEOUT_MS=5500;
 const APP_SHELL=[
   '/','/index.html','/manifest.webmanifest',
-  '/src/styles/tokens.css','/src/styles/base.css','/src/styles/navigation.css','/src/styles/screens.css','/src/styles/app.css','/src/styles/motion.css','/src/styles/v2181.css',
-  '/src/main.js','/src/runtime-v2181.js','/src/app/router.js','/src/app/store.js',
+  '/src/styles/tokens.css','/src/styles/base.css','/src/styles/navigation.css','/src/styles/screens.css','/src/styles/app.css','/src/styles/motion.css','/src/styles/v2181.css','/src/styles/v2182.css',
+  '/src/main.js','/src/runtime-v2182.js','/src/app/router.js','/src/app/store.js',
   '/src/shared/components.js','/src/shared/dom.js','/src/shared/gestures.js','/src/shared/icons.js','/src/shared/playing-title.js','/src/shared/rss.js','/src/shared/storage.js','/src/shared/time.js',
   '/src/features/home/home.js','/src/features/weather/weather.js','/src/features/weather/weather-api.js','/src/features/weather/weather-icons.js',
   '/src/features/reader/reader.js','/src/features/reader/reader-data.js','/src/features/reader/reader-focus.js','/src/features/reader/reader-rank.js',
