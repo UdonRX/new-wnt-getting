@@ -1,8 +1,8 @@
 const API = 'https://www.googleapis.com/youtube/v3';
 const EXACT_CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
-const DETAIL_LIMIT = 40;
-const STRICT_PROBE_LIMIT = 16;
-const SHORTS_PROBE_CONCURRENCY = 4;
+const DETAIL_LIMIT = 18;
+const STRICT_PROBE_LIMIT = 18;
+const SHORTS_PROBE_CONCURRENCY = 6;
 const SHORTS_PROBE_TTL_MS = 12 * 60 * 60 * 1000;
 const SHORTS_PROBE_CACHE_MAX = 500;
 const shortsProbeCache = new Map();
@@ -28,7 +28,7 @@ async function yt(path, params) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+      const response = await fetch(url, { signal: AbortSignal.timeout(6_000) });
       const data = await response.json().catch(() => ({}));
       if (response.ok) return data;
       const reason = apiReason(data);
@@ -40,14 +40,14 @@ async function yt(path, params) {
       });
       lastError = error;
       if (attempt === 0 && transient(response.status, reason) && !/quotaExceeded|dailyLimitExceeded/i.test(reason)) {
-        await sleep(350);
+        await sleep(250);
         continue;
       }
       throw error;
     } catch (error) {
       lastError = error;
       if (attempt === 0 && (error?.name === 'TimeoutError' || error?.name === 'AbortError' || /fetch failed|network/i.test(String(error?.message || '')))) {
-        await sleep(250);
+        await sleep(180);
         continue;
       }
       throw error;
@@ -79,7 +79,7 @@ async function resolveChannel(input) {
   let data = await yt('channels', { part: 'snippet,contentDetails', forHandle: handle });
   if (data.items?.[0]) return data.items[0];
 
-  // search.list はクォータ消費が大きいので、handle解決できなかった時だけ使う。
+  // search.list has a much larger quota cost; only use it when a saved value is not a handle/channel id.
   data = await yt('search', { part: 'snippet', type: 'channel', q: query, maxResults: 1 });
   const id = data.items?.[0]?.snippet?.channelId || data.items?.[0]?.id?.channelId;
   if (!id) return null;
@@ -115,7 +115,7 @@ async function shortsRequest(videoId, method = 'HEAD') {
       'Accept': method === 'HEAD' ? '*/*' : 'text/html,application/xhtml+xml',
       'Accept-Language': 'ja,en-US;q=0.7,en;q=0.5'
     },
-    signal: AbortSignal.timeout(method === 'HEAD' ? 1_900 : 2_800)
+    signal: AbortSignal.timeout(method === 'HEAD' ? 1_200 : 1_700)
   });
   try { await response.body?.cancel?.(); } catch {}
   return response.status;
@@ -129,7 +129,6 @@ async function probeShorts(videoId) {
   let errorMessage = '';
   try {
     status = await shortsRequest(videoId, 'HEAD');
-    // 一部のエッジではHEADが拒否されるので、その場合だけGETを1回使う。
     if ([403,405,501].includes(status)) status = await shortsRequest(videoId, 'GET');
   } catch (error) {
     errorMessage = String(error?.message || error);
@@ -178,6 +177,7 @@ async function classifyVideos(videos) {
 }
 
 async function dataApiSnapshot(input) {
+  const startedAt = Date.now();
   const channel = await resolveChannel(input);
   if (!channel) throw Object.assign(new Error('YouTubeチャンネルを特定できませんでした'), { statusCode: 404, reason: 'channelNotFound' });
   const uploads = channel.contentDetails?.relatedPlaylists?.uploads;
@@ -185,9 +185,9 @@ async function dataApiSnapshot(input) {
 
   const playlist = await yt('playlistItems', { part: 'snippet,contentDetails', playlistId: uploads, maxResults: DETAIL_LIMIT });
   const ids = (playlist.items || []).map(item => item.contentDetails?.videoId).filter(Boolean);
-  if (!ids.length) return { channel: { id: channel.id, name: channel.snippet?.title || '' }, items: [], classificationWarnings: [] };
+  if (!ids.length) return { channel: { id: channel.id, name: channel.snippet?.title || '' }, items: [], classificationWarnings: [], serverTimingMs: Date.now() - startedAt };
 
-  // 必須要件: videos.list + snippet,contentDetails,liveStreamingDetails
+  // Required classification source: videos.list with snippet,contentDetails,liveStreamingDetails.
   const detailData = await yt('videos', { part: 'snippet,contentDetails,liveStreamingDetails', id: ids.join(',') });
   const videos = detailData.items || [];
   const byId = new Map(videos.map(video => [video.id, video]));
@@ -218,7 +218,8 @@ async function dataApiSnapshot(input) {
     channel: { id: channel.id, name: channel.snippet?.title || '' },
     items,
     classificationWarnings: warnings.slice(0, 8),
-    classificationComplete: warnings.length === 0
+    classificationComplete: warnings.length === 0,
+    serverTimingMs: Date.now() - startedAt
   };
 }
 
@@ -227,10 +228,11 @@ export default async function handler(req, res) {
   if (!input) return res.status(400).json({ ok: false, error: 'channel を指定してください。' });
   try {
     const data = await dataApiSnapshot(input);
-    res.setHeader('Cache-Control', 's-maxage=180, stale-while-revalidate=900');
-    return res.status(200).json({ ok: true, source: 'data-api-v2183', ...data });
+    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=1800');
+    res.setHeader('Server-Timing', `youtube;dur=${Number(data.serverTimingMs || 0)}`);
+    return res.status(200).json({ ok: true, source: 'data-api-v2184', ...data });
   } catch (error) {
-    console.error('[youtube-feed:v2183]', error);
+    console.error('[youtube-feed:v2184]', error);
     const isQuota = error?.code === 'YOUTUBE_QUOTA' || quotaLike(error?.reason, error?.statusCode);
     return res.status(isQuota ? 429 : (error?.statusCode || 500)).json({
       ok: false,
