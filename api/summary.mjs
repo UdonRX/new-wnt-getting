@@ -22,6 +22,15 @@ function compact(value = '') {
   return clean(value).replace(/[\s、。・:：\-—|｜「」『』（）()]/g, '').toLowerCase();
 }
 
+function fingerprint(value = '') {
+  let hash = 2166136261;
+  for (const ch of String(value || '')) {
+    hash ^= ch.codePointAt(0) || 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function descriptionLooksReal(title, description) {
   const text = clean(description);
   if (text.length < 70 || GENERIC_RE.test(text)) return false;
@@ -38,6 +47,7 @@ async function prepareBody(req) {
   const description = clean(body.description);
   if (descriptionLooksReal(title, description)) {
     body.description = first500(description);
+    body.preparedSource = 'rss';
     return body;
   }
 
@@ -56,7 +66,7 @@ async function prepareBody(req) {
         return body;
       }
     } catch (error) {
-      console.warn('[summary-v2185] article prepare failed', error?.message || error);
+      console.warn('[summary-v2187] article prepare failed', error?.message || error);
     }
   }
 
@@ -65,10 +75,24 @@ async function prepareBody(req) {
   return body;
 }
 
+function isolateSummaryWork(body = {}) {
+  const originalMode = clean(body.mode) || 'auto';
+  const material = [clean(body.title), first500(body.description), clean(body.preparedSource)].join('\n');
+  return {
+    ...body,
+    clientMode: originalMode,
+    // summary-v2184 uses mode only as part of its memory/in-flight key.  Adding
+    // a content fingerprint prevents an empty Safari prefetch from sharing the
+    // result of a later request that contains the real RSS/article text.
+    mode: `${originalMode}#${fingerprint(material)}`.slice(0, 32)
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     const prepared = await prepareBody(req);
-    req.body = prepared;
+    req.body = isolateSummaryWork(prepared);
+    res.setHeader('X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
   }
   return summaryV2184(req, res);
 }
