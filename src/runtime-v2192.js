@@ -1,5 +1,5 @@
 /* Personal Dashboard v2.19.2
- * Reader summary cleanup:
+ * Reader summary cleanup (final active path):
  * - retain pre-v2187 runtime behavior needed by other screens
  * - remove v2187/v2188/v2189/v2190/v2191 Reader DOM helpers
  * - send every /api/summary request directly to the server
