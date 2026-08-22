@@ -3,37 +3,96 @@ import { el, openSheet } from '../../shared/dom.js';
 import { collectionManager } from '../../shared/components.js';
 import { cleanupTwitchPlayer, mountTwitchPlayer } from './twitch-player.js';
 
-const CACHE_KEY='pdv2:twitchCache:v2160';
+const CACHE_KEY='pdv2:twitchCache:v2170';
 let selected=localStorage.getItem('pdv2:twitchSelected')||'all';
 let cache=[];
 let loadErrors=[];
 function channelKey(channel){return String(channel.value||channel.url||channel.name||'').trim().toLowerCase();}
 
-async function loadOne(channel){
+async function loadOne(channel,{force=false}={}){
   const value=channel.value||channel.url||channel.name;
-  const response=await fetch(`/api/twitch-feed?channel=${encodeURIComponent(value)}&format=json`,{headers:{Accept:'application/json'},cache:'no-store'});
+  const params=new URLSearchParams({channel:String(value||''),format:'json'});
+  if(force)params.set('force','1');
+  const response=await fetch(`/api/twitch-feed?${params}`,{headers:{Accept:'application/json'},cache:'no-store'});
   const data=await response.json().catch(()=>({}));
-  if(!response.ok)throw Object.assign(new Error(data.error||'Twitch取得エラー'),{sourceKey:channelKey(channel)});
+  if(!response.ok||data?.ok===false)throw Object.assign(new Error(data.error||'Twitch取得エラー'),{sourceKey:channelKey(channel),code:data?.code||''});
   return {...data,_sourceKey:channelKey(channel),_configuredName:channel.name||''};
 }
 
 function readCache(){try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'null');}catch{return null;}}
+
+async function loadBatch(channels,{force=false}={}){
+  const inputs=channels.map(channel=>String(channel.value||channel.url||channel.name||'').trim()).filter(Boolean);
+  const params=new URLSearchParams({channels:JSON.stringify(inputs),format:'json'});
+  if(force)params.set('force','1');
+  const response=await fetch(`/api/twitch-feed?${params}`,{headers:{Accept:'application/json'},cache:'no-store'});
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok||!Array.isArray(data?.results))throw new Error(data?.error||`Twitch一括取得エラー (${response.status})`);
+  return data.results;
+}
+
+async function serialFallback(channels,{force=false}={}){
+  const results=[];
+  for(const channel of channels){
+    try{results.push({channel,ok:true,snapshot:await loadOne(channel,{force})});}
+    catch(error){results.push({channel,ok:false,error});}
+  }
+  return results;
+}
+
 async function loadAll(force=false){
   const previous=readCache();
   if(!force&&previous&&Date.now()-Number(previous.at||0)<5*60*1000){cache=previous.rows||[];loadErrors=[];return cache;}
   const staleByKey=new Map((previous?.rows||[]).map(row=>[String(row?._sourceKey||''),row]));
-  const settled=await Promise.allSettled(state.twitchChannels.map(loadOne));
-  const rows=[]; const errors=[];
-  settled.forEach((result,index)=>{
-    const key=channelKey(state.twitchChannels[index]);
-    if(result.status==='fulfilled'){rows.push(result.value);return;}
-    const stale=staleByKey.get(key);
-    if(stale){rows.push({...stale,_stale:true});return;}
-    errors.push(`${state.twitchChannels[index]?.name||'Twitch'}: 現在取得できません`);
-  });
-  cache=rows; loadErrors=errors;
+  const rows=[];
+  const errors=[];
+  let batchResults=[];
+
+  try{
+    batchResults=await loadBatch(state.twitchChannels,{force});
+    const configuredByInput=new Map(state.twitchChannels.map(channel=>[
+      String(channel.value||channel.url||channel.name||'').trim().toLowerCase(),channel
+    ]));
+    for(const result of batchResults){
+      const channel=configuredByInput.get(String(result?.input||'').trim().toLowerCase())||null;
+      const key=channel?channelKey(channel):String(result?.login||result?.input||'').trim().toLowerCase();
+      if(result?.ok&&result?.snapshot){
+        rows.push({...result.snapshot,_sourceKey:key,_configuredName:channel?.name||'',_stale:Boolean(result.snapshot?._stale)});
+        continue;
+      }
+      const stale=staleByKey.get(key);
+      if(stale){rows.push({...stale,_stale:true});continue;}
+      errors.push(`${channel?.name||result?.login||'Twitch'}: ${result?.error||'現在取得できません'}`);
+    }
+  }catch(batchError){
+    console.warn('[twitch-v2170] batch failed, serial fallback',batchError);
+    const serial=await serialFallback(state.twitchChannels,{force});
+    serial.forEach(result=>{
+      const key=channelKey(result.channel);
+      if(result.ok){rows.push(result.snapshot);return;}
+      const stale=staleByKey.get(key);
+      if(stale){rows.push({...stale,_stale:true});return;}
+      errors.push(`${result.channel?.name||'Twitch'}: ${result.error?.message||'現在取得できません'}`);
+    });
+  }
+
+  // A duplicate configured URL/name should never create duplicate cards.
+  const deduped=[];
+  const seen=new Set();
+  for(const row of rows){
+    const key=String(row?._sourceKey||row?.broadcaster?.id||row?.broadcaster?.login||'');
+    if(key&&seen.has(key))continue;
+    if(key)seen.add(key);
+    deduped.push(row);
+  }
+
+  cache=deduped;
+  loadErrors=errors;
   try{localStorage.setItem(CACHE_KEY,JSON.stringify({at:Date.now(),rows:cache}));}catch{}
-  if(!cache.length&&errors.length)throw new Error('Twitch一覧を現在取得できません。少し後で更新してください。');
+  if(!cache.length&&errors.length){
+    const detail=errors.slice(0,2).join(' / ');
+    throw new Error(detail||'Twitch一覧を取得できませんでした。');
+  }
   return cache;
 }
 
