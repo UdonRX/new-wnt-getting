@@ -1,8 +1,8 @@
-import './runtime-v2182.js';
+import './runtime-v2183.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2182';
+const BUILD='2183';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -19,7 +19,7 @@ const SCREEN={
 };
 
 function versioned(path){return `${path}?v=${BUILD}`;}
-function safeMessage(error){return String(error?.message||error||'不明なエラー').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
+function safeMessage(error){return String(error?.message||error||'不明なエラー').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[ch]));}
 function timeoutPromise(promise,timeoutMs,label){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`${label} の読み込みがタイムアウトしました`)),timeoutMs);})]).finally(()=>clearTimeout(timer));}
 async function importAttempt(path,url,timeoutMs){return timeoutPromise(import(url),timeoutMs,path);}
 async function importResilient(path){
