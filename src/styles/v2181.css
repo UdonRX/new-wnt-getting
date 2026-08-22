@@ -1,0 +1,23 @@
+/* Personal Dashboard v2.18.1 final Reader list motion overrides.
+   Loaded after motion.css so old binary compact opacity cannot interrupt
+   the scroll-linked fade. */
+
+.reader-list-open > .topbar,
+.reader-list-open > .reader-mode-nav,
+.reader-list-open > .paper-track-level,
+.reader-list-open.reader-list-motion-compact > .topbar,
+.reader-list-open.reader-list-motion-compact > .reader-mode-nav,
+.reader-list-open.reader-list-motion-compact > .paper-track-level {
+  opacity: calc(1 - var(--pdv2-shrink-progress, 0)) !important;
+}
+
+.reader-list-open .reader-source-scroll,
+.reader-list-open.reader-list-motion-compact .reader-source-scroll {
+  opacity: calc(1 - var(--pdv2-shrink-progress, 0)) !important;
+}
+
+/* Fade the rail as a whole; do not make each source chip disappear suddenly
+   when the compact class crosses its threshold. */
+.reader-list-open.reader-list-motion-compact .reader-source-scroll .chip {
+  opacity: 1 !important;
+}
