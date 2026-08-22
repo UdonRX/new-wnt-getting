@@ -4,9 +4,11 @@ import { shortDate } from '../../shared/time.js';
 const summaryCache = new Map();
 const summaryPromises = new Map();
 const summaryProgress = new WeakMap();
-const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2170';
-const SUMMARY_STORAGE_LIMIT = 72;
+const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2180';
+const SUMMARY_STORAGE_LIMIT = 84;
 const IMPORTANT_RE = /(?:[+＋\-−]?\d[\d,.]*(?:\.\d+)?\s*(?:%|％|倍|兆円|億円|万円|円|ドル|人|件|台|社|年|か月|ヶ月|日|時間|分|秒|nm|μm|mm|cm|km|℃|°C|GW|MW|kW|GWh|MWh|kWh|Wh|TB|GB|MB)|世界初|国内初|業界初|史上初|世界最大|国内最大|世界最小|国内最小|過去最高|過去最低|最高値|最安値|初めて|新記録|首位|No\.?\s*1|突破|倍増|半減)/giu;
+const GENERIC_SUMMARY_RE = /(?:についての記事です|について紹介(?:する|しています)|背景や特徴.*(?:整理|確認)|影響や今後.*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?で確認|要約を(?:取得|作成)できません|詳しくは元記事|続報の確認が必要)/i;
+const BROKEN_EDGE_RE = /^(?:[」』）】〉》]|[\s]*[!?！？])|[「『（【〈《]\s*$/;
 
 function summaryTtl(mode = '') {
   return mode === 'papers' ? 14 * 24 * 60 * 60 * 1000 : 36 * 60 * 60 * 1000;
@@ -20,13 +22,14 @@ function readStoredSummaries() {
       if (!entry?.value || !entry?.ts || entry.value?.cacheable === false) continue;
       const mode = String(entry.mode || '');
       if (now - Number(entry.ts) > summaryTtl(mode)) continue;
+      if (!isUsableSummary(entry.value)) continue;
       summaryCache.set(key, entry.value);
     }
   } catch {}
 }
 
 function persistSummary(key, value, mode = '') {
-  if (!value || value.cacheable === false) return;
+  if (!value || value.cacheable === false || !isUsableSummary(value)) return;
   try {
     const raw = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '{}');
     raw[key] = { value, ts: Date.now(), mode };
@@ -36,20 +39,18 @@ function persistSummary(key, value, mode = '') {
     localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
   } catch {}
 }
-readStoredSummaries();
 
 function stripHtml(value = '') {
   const d = document.createElement('div');
   d.innerHTML = String(value || '');
-  return (d.textContent || '').replace(/\s+/g, ' ').trim();
+  return (d.textContent || '').replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
 }
-
 function plainText(value = '') { return stripHtml(String(value || '').replace(/\*\*/g, '')); }
 function looksMostlyEnglish(value = '') {
   const text = String(value || '').replace(/https?:\/\/\S+/g, ' ');
   const latin = (text.match(/[A-Za-z]/g) || []).length;
   const ja = (text.match(/[\u3040-\u30ff\u3400-\u9fff]/g) || []).length;
-  return latin >= 24 && latin > ja * 1.4;
+  return latin >= 24 && latin > ja * 1.35;
 }
 function summaryModeOf(item, fallback = '') { return String(item?._readerMode || fallback || '').trim(); }
 function focusItemKey(item) { return String(item?.id || item?.link || item?.url || `${item?.source || ''}|${item?.title || ''}`); }
@@ -88,25 +89,40 @@ function categoryHeaderLabel(item, fallback = 'おすすめ') {
 }
 
 function summaryKey(item, mode = '') {
-  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2170`;
-}
-
-function descriptionLooksThin(item, description, mode) {
-  if (mode === 'papers' || description.length < 420) return true;
-  const title = plainText(item?.title).slice(0, 100).replace(/[\s、。・:：\-—|｜]/g, '');
-  const desc = plainText(description).slice(0, 500).replace(/[\s、。・:：\-—|｜]/g, '');
-  return title.length >= 16 && desc.includes(title.slice(0, Math.min(36, title.length)));
+  return `${item?.link || item?.id || item?.title || ''}::${summaryModeOf(item, mode) || 'auto'}::v2180`;
 }
 
 function sentenceCandidates(value = '') {
+  const text = plainText(value)
+    .replace(/([。！？!?])(?=[^」』）】〉》])/g, '$1\n');
+  return (text.split(/\n+/).flatMap(row => row.match(/[^。！？!?]+[。！？!?]+(?:[」』）】〉》])?/g) || []))
+    .map(row => row.trim())
+    .filter(row => row.length >= 12)
+    .slice(0, 30);
+}
+
+function meaningfulCandidate(value = '') {
   const text = plainText(value);
-  const completed = text.match(/[^。！？!?]+[。！？!?]+/g) || [];
-  return completed.map(row => row.trim()).filter(row => row.length >= 8).slice(0, 20);
+  if (text.length < 12 || GENERIC_SUMMARY_RE.test(text) || BROKEN_EDGE_RE.test(text)) return false;
+  if (!/[。！？!?][」』）】〉》]?$/.test(text)) return false;
+  const contentChars = (text.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length;
+  return contentChars >= 10;
+}
+
+function descriptionNeedsFullText(item, description, mode) {
+  if (mode === 'papers') return true;
+  const text = plainText(description);
+  if (text.length < 620) return true;
+  const good = sentenceCandidates(text).filter(meaningfulCandidate);
+  if (good.length < 3) return true;
+  const title = plainText(item?.title).replace(/[\s、。・:：\-—|｜]/g, '');
+  const compact = text.replace(/[\s、。・:：\-—|｜]/g, '');
+  return title.length >= 14 && compact.includes(title.slice(0, Math.min(36, title.length)));
 }
 
 function compactHeadline(item) {
   const original = plainText(item?.titleJa || item?.title || '記事');
-  if (looksMostlyEnglish(original) && !plainText(item?.titleJa)) return '日本語タイトルを要約中';
+  if (looksMostlyEnglish(original) && !plainText(item?.titleJa)) return '日本語タイトルを生成中…';
   if (Array.from(original).length <= 46) return original;
 
   const split = original.split(/\s*[｜|：:]\s*|\s+[—–-]\s+|[。！？!?]/)
@@ -115,19 +131,18 @@ function compactHeadline(item) {
   if (natural) return natural;
 
   const descriptionSentence = sentenceCandidates(item?.description)
-    .map(row => row.replace(/[。！？!?]+$/, '').trim())
-    .find(row => !looksMostlyEnglish(row) && Array.from(row).length >= 12 && Array.from(row).length <= 46);
+    .map(row => row.replace(/[。！？!?]+[」』）】〉》]?$/, '').trim())
+    .find(row => meaningfulCandidate(`${row}。`) && !looksMostlyEnglish(row) && Array.from(row).length >= 12 && Array.from(row).length <= 46);
   if (descriptionSentence) return descriptionSentence;
 
   const bracketless = original.replace(/[（(][^）)]{1,40}[）)]\s*$/, '').trim();
   if (Array.from(bracketless).length <= 50) return bracketless;
-  const punctuation = Array.from(original).slice(0, 56).join('').match(/^.{20,48}?[、。！？!?]/)?.[0];
-  return punctuation ? punctuation.replace(/[、。！？!?]+$/, '') : '記事の要点をわかりやすく整理';
+  return '記事の要点を整理中…';
 }
 
 const translatedTitleCache = new Map();
 function translatedTitleStorage() {
-  try { return JSON.parse(localStorage.getItem('pdv2:readerTitleJa:v2170') || '{}'); }
+  try { return JSON.parse(localStorage.getItem('pdv2:readerTitleJa:v2180') || '{}'); }
   catch { return {}; }
 }
 async function translateTitleToJapanese(item) {
@@ -143,7 +158,7 @@ async function translateTitleToJapanese(item) {
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5200);
+  const timer = setTimeout(() => controller.abort(), 7000);
   try {
     const response = await fetch('/api/paper-titles', {
       method: 'POST',
@@ -152,13 +167,13 @@ async function translateTitleToJapanese(item) {
       body: JSON.stringify({ titles: [original] })
     });
     const data = await response.json().catch(() => ({}));
-    const row = Array.isArray(data?.translations) ? data.translations[0] : null;
+    const row = Array.isArray(data?.translations) ? data.translations.find(entry => entry?.original === original) || data.translations[0] : null;
     const translated = plainText(row?.ja || '');
     if (!response.ok || !translated || looksMostlyEnglish(translated)) return '';
     translatedTitleCache.set(original, translated);
     stored[original] = translated;
     const entries = Object.entries(stored).slice(-700);
-    try { localStorage.setItem('pdv2:readerTitleJa:v2170', JSON.stringify(Object.fromEntries(entries))); } catch {}
+    try { localStorage.setItem('pdv2:readerTitleJa:v2180', JSON.stringify(Object.fromEntries(entries))); } catch {}
     return translated;
   } catch {
     return '';
@@ -167,22 +182,28 @@ async function translateTitleToJapanese(item) {
   }
 }
 
-function instantSummary(item) {
-  const rows = sentenceCandidates(item?.description);
-  const title = compactHeadline(item);
-  const fallback = [
-    rows[0] || `${title}についての記事です。`,
-    rows[1] || '背景や特徴を記事本文から整理しています。',
-    rows[2] || '影響や今後の動きを記事本文から確認できます。'
-  ];
+function pendingSummary(item) {
   return {
-    headline: title,
+    headline: compactHeadline(item),
     lines: [
-      { label: '結論/事実', text: fallback[0] },
-      { label: '背景/特徴', text: fallback[1] },
-      { label: '影響/展望', text: fallback[2] }
+      { label: '結論/事実', text: '本文から重要な事実を抽出しています…' },
+      { label: '背景/特徴', text: '背景・方法・特徴を確認しています…' },
+      { label: '影響/展望', text: '影響や今後の意味を整理しています…' }
     ],
-    provider: 'instant',
+    provider: 'pending',
+    cacheable: false
+  };
+}
+
+function unavailableSummary(item, serverResult = null) {
+  return {
+    headline: plainText(serverResult?.headline) || compactHeadline(item),
+    lines: [
+      { label: '結論/事実', text: '本文を十分に取得できず、正確な要約を作成できませんでした。' },
+      { label: '背景/特徴', text: 'タイトルだけから内容を推測する表示は行わないようにしています。' },
+      { label: '影響/展望', text: '元記事を開くと、取得できていない詳細を確認できます。' }
+    ],
+    provider: 'unavailable',
     cacheable: false
   };
 }
@@ -201,9 +222,12 @@ function summaryLines(summary) {
 }
 
 function isUsableSummary(summary) {
-  const lines = summaryLines(summary).map(row => plainText(row.text)).filter(Boolean);
-  if (lines.length !== 3 || lines.some(text => text.length < 7)) return false;
+  if (!summary || ['pending', 'instant', 'insufficient', 'unavailable'].includes(String(summary.provider || ''))) return false;
+  const lines = summaryLines(summary).map(row => plainText(row.text));
+  if (lines.length !== 3 || lines.some(text => text.length < 12)) return false;
+  if (lines.some(text => GENERIC_SUMMARY_RE.test(text) || BROKEN_EDGE_RE.test(text))) return false;
   if (lines.some(text => /(?:…|\.{3})\s*$/.test(text))) return false;
+  if (lines.some(text => !/[。！？!?][」』）】〉》]?$/.test(text))) return false;
   return new Set(lines.map(text => text.replace(/[。、，,.!！?？\s]/g, '').toLowerCase())).size === 3;
 }
 
@@ -213,9 +237,12 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
   if (!force && summaryCache.has(key)) return summaryCache.get(key);
   if (!force && summaryPromises.has(key)) return summaryPromises.get(key);
 
-  const description = stripHtml(item?.description).slice(0, 14000);
+  const description = stripHtml(item?.description).slice(0, 16_000);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), activeMode === 'papers' ? 8500 : 5600);
+  // Server can spend time on article extraction + Gemini. Keep the client timeout
+  // longer than the server's own maximum instead of aborting a valid response early.
+  const timeout = setTimeout(() => controller.abort(), activeMode === 'papers' ? 20_000 : 15_000);
+
   const request = fetch('/api/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -227,39 +254,31 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
       source: item?.source || item?.feedName,
       category: categoryHeaderLabel(item),
       mode: activeMode,
-      preferFullText: descriptionLooksThin(item, description, activeMode),
+      preferFullText: descriptionNeedsFullText(item, description, activeMode),
       forceJapanese: looksMostlyEnglish(`${item?.title || ''}\n${description}`),
       allowAi: true,
       fast: activeMode !== 'papers'
     })
   }).then(async response => {
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !isUsableSummary(data)) {
-      const fallback = instantSummary(item);
-      const translated = await translateTitleToJapanese(item);
-      if (translated) fallback.headline = compactHeadline({ ...item, titleJa: translated });
-      return fallback;
-    }
+    if (!response.ok || !isUsableSummary(data)) return unavailableSummary(item, data);
 
     if (looksMostlyEnglish(data.headline || '')) {
       const translated = await translateTitleToJapanese(item);
       if (translated) data.headline = compactHeadline({ ...item, titleJa: translated });
     }
+
     if (data.cacheable !== false) {
       summaryCache.set(key, data);
       persistSummary(key, data, activeMode);
       while (summaryCache.size > SUMMARY_STORAGE_LIMIT) summaryCache.delete(summaryCache.keys().next().value);
     }
     return data;
-  }).catch(async () => {
-    const fallback = instantSummary(item);
-    const translated = await translateTitleToJapanese(item);
-    if (translated) fallback.headline = compactHeadline({ ...item, titleJa: translated });
-    return fallback;
-  }).finally(() => {
+  }).catch(() => unavailableSummary(item)).finally(() => {
     clearTimeout(timeout);
     if (summaryPromises.get(key) === request) summaryPromises.delete(key);
   });
+
   summaryPromises.set(key, request);
   return request;
 }
@@ -268,6 +287,8 @@ function cachedSummary(item, mode = '') {
   const value = summaryCache.get(summaryKey(item, mode));
   return isUsableSummary(value) ? value : null;
 }
+
+readStoredSummaries();
 
 function gridIconSvg() {
   return `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg>`;
@@ -306,6 +327,8 @@ function setRichText(node, value = '') {
 
 function renderSummaryBlock(node, summary) {
   node.replaceChildren();
+  node.classList.toggle('is-pending', summary?.provider === 'pending');
+  node.classList.toggle('is-unavailable', summary?.provider === 'unavailable');
   summaryLines(summary).forEach(line => {
     const text = el('span', { class: 'reader-story-summary-text' });
     setRichText(text, line.text || '—');
@@ -342,11 +365,11 @@ function createSourceMark(item) {
 function progressMarkup() {
   const wrap = el('div', { class: 'reader-ai-progress reader-ai-progress-inline', 'data-reader-progress': '1' });
   const bar = el('span', { class: 'reader-ai-progress-bar', 'data-reader-progress-bar': '1' });
-  bar.style.width = '12%';
+  bar.style.width = '10%';
   wrap.append(
     el('div', { class: 'reader-ai-progress-top' }, [
-      el('span', { class: 'reader-ai-loading-text', 'data-reader-loading-text': '1', text: 'AIで要約を仕上げています' }),
-      el('span', { class: 'reader-ai-progress-value', 'data-reader-progress-value': '1', text: '12%' })
+      el('span', { class: 'reader-ai-loading-text', 'data-reader-loading-text': '1', text: '本文を取得しています' }),
+      el('span', { class: 'reader-ai-progress-value', 'data-reader-progress-value': '1', text: '10%' })
     ]),
     el('div', { class: 'reader-ai-progress-track' }, [bar])
   );
@@ -369,8 +392,15 @@ function setProgress(card, value, text) {
 }
 function startProgress(card) {
   if (!card?.isConnected || summaryProgress.has(card)) return;
-  const steps = [[220,28,'記事情報を確認中'],[650,46,'重要点を抽出中'],[1300,64,'3項目へ整理中'],[2300,80,'タイトルを短く整理中'],[3600,91,'仕上げ中']];
-  const timers = steps.map(([delay,value,text]) => setTimeout(() => setProgress(card,value,text),delay));
+  const steps = [
+    [180, 20, 'RSS本文を確認中'],
+    [650, 36, '元記事本文を取得中'],
+    [1700, 54, '具体的な事実を抽出中'],
+    [3600, 70, '結論・背景・影響へ整理中'],
+    [6500, 84, '日本語タイトルと要約を仕上げ中'],
+    [10_000, 93, '品質を確認中']
+  ];
+  const timers = steps.map(([delay, value, text]) => setTimeout(() => setProgress(card, value, text), delay));
   summaryProgress.set(card, { timers });
 }
 
@@ -417,7 +447,7 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   const card = el('section', { class: 'reader-swipe-card reader-story-card', 'data-index': String(index), 'data-key': focusItemKey(item) || String(index) });
   if (sharedKey && sharedKey === focusItemKey(item)) card.style.viewTransitionName = 'reader-shared-card';
   const cached = cachedSummary(item, mode);
-  const initial = cached || instantSummary(item);
+  const initial = cached || pendingSummary(item);
   const title = el('h2', { class: 'reader-swipe-title reader-story-title', 'data-reader-title': '1' });
   setRichText(title, initial.headline || compactHeadline(item));
   const summaryBox = el('div', { class: 'reader-ai-summary reader-story-summary', 'data-reader-summary': '1' });
@@ -425,7 +455,7 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   const content = el('main', { class: 'reader-story-content' }, [title, summaryBox]);
   if (!cached) content.append(progressMarkup());
   const original = el('a', { class: 'reader-story-open', href: item?.link || '#', target: '_blank', rel: 'noopener noreferrer', text: '元記事を読む ↗' });
-  card.append(buildHero(item,index,label,onList,card), content, el('footer', { class: 'reader-story-actions' }, [original]));
+  card.append(buildHero(item, index, label, onList, card), content, el('footer', { class: 'reader-story-actions' }, [original]));
   return card;
 }
 
@@ -434,7 +464,7 @@ function installHorizontalSwipe(container, { onPrevFeed, onNextFeed }) {
   const down = event => {
     if (event.touches?.length !== 1) return;
     const t = event.touches[0];
-    start = { x:t.clientX, y:t.clientY, target:event.target };
+    start = { x: t.clientX, y: t.clientY, target: event.target };
   };
   const up = event => {
     if (!start || !event.changedTouches?.length) return;
@@ -447,8 +477,8 @@ function installHorizontalSwipe(container, { onPrevFeed, onNextFeed }) {
     if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
     if (dx < 0) onNextFeed?.(); else onPrevFeed?.();
   };
-  container.addEventListener('touchstart', down, { passive:true });
-  container.addEventListener('touchend', up, { passive:true });
+  container.addEventListener('touchstart', down, { passive: true });
+  container.addEventListener('touchend', up, { passive: true });
   return () => {
     container.removeEventListener('touchstart', down);
     container.removeEventListener('touchend', up);
@@ -458,18 +488,26 @@ function installHorizontalSwipe(container, { onPrevFeed, onNextFeed }) {
 function loadCardSummary(card, item, mode) {
   if (!card?.isConnected) return;
   const cached = cachedSummary(item, mode);
-  if (cached) { setCardSummary(card,item,cached); return; }
+  if (cached) { setCardSummary(card, item, cached); return; }
+
   startProgress(card);
+
+  // Translate a foreign title in parallel so the user does not stare at the
+  // temporary “generating Japanese title” label while the full summary runs.
+  if (looksMostlyEnglish(item?.title || '') && !plainText(item?.titleJa)) {
+    translateTitleToJapanese(item).then(translated => {
+      if (!translated || !card.isConnected || card.dataset.summaryProvider && card.dataset.summaryProvider !== 'pending') return;
+      const title = card.querySelector('[data-reader-title]');
+      if (title) setRichText(title, compactHeadline({ ...item, titleJa: translated }));
+    }).catch(() => {});
+  }
+
   fetchSummary(item, { mode }).then(summary => {
     if (!card.isConnected) return;
-    if (summary?.provider === 'instant') {
-      stopProgress(card);
-      setProgress(card,100,'記事本文の要点を表示中');
-      setTimeout(() => card.querySelector('[data-reader-progress]')?.remove(), 700);
-      return;
-    }
-    setProgress(card,100,'完了');
-    setTimeout(() => setCardSummary(card,item,summary), 120);
+    setProgress(card, 100, isUsableSummary(summary) ? '完了' : '本文取得を完了');
+    setTimeout(() => {
+      if (card.isConnected) setCardSummary(card, item, summary);
+    }, 100);
   });
 }
 
@@ -488,31 +526,32 @@ export function mountFocus(host, {
   let index = Math.max(0, Math.min(Number(initialIndex) || 0, Math.max(0, rows.length - 1)));
   let destroyed = false;
   if (!rows.length) {
-    host.replaceChildren(el('div', { class:'empty', text:'記事がありません' }));
+    host.replaceChildren(el('div', { class: 'empty', text: '記事がありません' }));
     return { destroy(){}, go(){} };
   }
 
-  const feed = el('div', { class:'reader-swipe-feed', tabindex:'0' });
-  const cards = rows.map((item,i) => buildFeedCard(item,i,{ label,onList,summaryMode,sharedKey:sharedKey || focusItemKey(rows[index]) }));
+  const feed = el('div', { class: 'reader-swipe-feed', tabindex: '0' });
+  const cards = rows.map((item, i) => buildFeedCard(item, i, { label, onList, summaryMode, sharedKey: sharedKey || focusItemKey(rows[index]) }));
   cards.forEach(card => feed.append(card));
   host.replaceChildren(feed);
 
   const setActive = next => {
     if (destroyed) return;
     index = Math.max(0, Math.min(next, rows.length - 1));
-    cards.forEach((card,i) => card.classList.toggle('is-active', i===index));
+    cards.forEach((card, i) => card.classList.toggle('is-active', i === index));
     onIndexChange?.(index, rows[index]);
     loadCardSummary(cards[index], rows[index], summaryModeOf(rows[index], summaryMode));
   };
 
   const observer = new IntersectionObserver(entries => {
-    const visible = entries.filter(entry => entry.isIntersecting).sort((a,b) => b.intersectionRatio-a.intersectionRatio)[0];
+    const visible = entries.filter(entry => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
     if (visible?.intersectionRatio >= .56) setActive(Number(visible.target.dataset.index || 0));
-  }, { root:feed, threshold:[.56,.72,.9] });
+  }, { root: feed, threshold: [.56, .72, .9] });
   cards.forEach(card => observer.observe(card));
-  const detachHorizontal = installHorizontalSwipe(feed,{onPrevFeed,onNextFeed});
+
+  const detachHorizontal = installHorizontalSwipe(feed, { onPrevFeed, onNextFeed });
   requestAnimationFrame(() => {
-    cards[index]?.scrollIntoView({block:'start',behavior:'auto'});
+    cards[index]?.scrollIntoView({ block: 'start', behavior: 'auto' });
     setActive(index);
   });
 
@@ -524,8 +563,8 @@ export function mountFocus(host, {
       detachHorizontal();
     },
     go(nextIndex) {
-      index = Math.max(0,Math.min(Number(nextIndex)||0,rows.length-1));
-      cards[index]?.scrollIntoView({block:'start',behavior:'smooth'});
+      index = Math.max(0, Math.min(Number(nextIndex) || 0, rows.length - 1));
+      cards[index]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       setActive(index);
     },
     getIndex(){ return index; },
