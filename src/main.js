@@ -1,8 +1,8 @@
-import './runtime-v2185.js';
+import './runtime-v2186.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2185';
+const BUILD='2186';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -59,7 +59,7 @@ function renderScreenError(screen,error,options={}){
   root.querySelector('[data-pdv2-feature-retry]')?.addEventListener('click',()=>{const path=SCREEN[screen]?.path;if(path)modulePromises.delete(path);navigate(screen,{...options,forceModuleReload:true});});
   root.querySelector('[data-pdv2-feature-cache]')?.addEventListener('click',async()=>{await clearDashboardRuntime();location.replace(`/?v=${BUILD}&feature-recovery=${encodeURIComponent(screen)}`);});
 }
-function renderBootError(error){console.error('[pdv2] boot failed:',error);if(!root)return;root.innerHTML=`<section class="screen pd-startup-error"><div class="error-box"><strong>アプリの起動に失敗しました</strong><br><small>${safeMessage(error)}</small><div class="pd-startup-error-actions"><button type="button" class="soft-button" onclick="location.reload()">再読み込み</button></div></div></section>`;}
+function renderBootError(error){console.error('[pdv2] boot failed:',error);if(!root)return;root.innerHTML=`<section class="screen pd-startup-error"><div class="error-box"><strong>アプリの起動に失敗しました</strong><br><small>${safeMessage(error)}</small><div class="pd-feature-error-actions"><button type="button" class="soft-button" onclick="location.reload()">再読み込み</button></div></div></section>`;}
 
 export async function navigate(screen,options={}){
   window.dispatchEvent(new CustomEvent('pdv2:before-navigate',{detail:{screen}}));
