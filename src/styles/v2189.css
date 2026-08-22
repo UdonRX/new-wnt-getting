@@ -1,0 +1,27 @@
+/* Reader paging stability for iPhone Safari v2.18.9 */
+.reader-screen.reader-focus-open {
+  inset: 0 auto auto 0 !important;
+  width: 100vw !important;
+  height: calc(100dvh - var(--nav-total)) !important;
+  min-height: 0 !important;
+}
+
+.reader-screen.reader-focus-open .reader-content-host,
+.reader-swipe-feed {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+.reader-swipe-feed {
+  scroll-snap-type: y mandatory !important;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.reader-swipe-card {
+  height: 100% !important;
+  min-height: 100% !important;
+  scroll-snap-align: start !important;
+  scroll-snap-stop: always !important;
+}
