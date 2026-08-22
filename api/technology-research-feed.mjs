@@ -198,7 +198,7 @@ async function callGemini(prompt) {
     process.env.GEMINI_RESEARCH_MODEL || process.env.GEMINI_SUMMARY_MODEL || 'gemini-3.5-flash-lite'
   ).trim();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25_000);
+  const timer = setTimeout(() => controller.abort(), 20_000);
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
