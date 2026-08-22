@@ -1,6 +1,7 @@
 import summaryV2184 from '../lib/summary-v2184.mjs';
 import summaryBatch from '../lib/summary-batch.mjs';
 import { extractArticleFromUrl } from '../lib/article-reader.mjs';
+import { technologyResearchFeed } from '../lib/technology-research.mjs';
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 
@@ -135,6 +136,10 @@ function isolateSummaryWork(body = {}) {
 }
 
 export default async function handler(req, res) {
+  if (req.method === 'GET' && String(req.query?.technologyResearch || '') === '1') {
+    return technologyResearchFeed(req, res);
+  }
+
   if (req.method === 'POST' && String(req.query?.batch || '') === '1') {
     return summaryBatch(req, res);
   }
