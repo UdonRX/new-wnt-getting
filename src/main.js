@@ -1,7 +1,7 @@
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2170';
+const BUILD='2180';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
