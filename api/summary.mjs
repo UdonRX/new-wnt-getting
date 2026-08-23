@@ -7,7 +7,7 @@ import { summaryBatchV2195, summarySingleV2195 } from '../lib/summary-dispatch-v
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
 
-function clean(value = '') {
+function clean(value = '', max = 6000) {
   return String(value || '')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -15,7 +15,8 @@ function clean(value = '') {
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .slice(0, max);
 }
 
 function first500(value = '') {
@@ -135,6 +136,7 @@ export async function prepareSummaryBody(raw = {}, {
         body.prepareReason = preferFullText ? 'preferred-full-text' : 'article-fallback';
         return body;
       }
+      body.prepareError = `article-text-insufficient:${text.length}`;
     } catch (error) {
       body.prepareError = clean(error?.message || error, 160);
       console.warn('[summary] article prepare failed', body.prepareError);
@@ -157,6 +159,26 @@ function isolateSummaryWork(body = {}) {
   };
 }
 
+async function articleOnlyDiagnostic(req, res) {
+  const startedAt = Date.now();
+  const incoming = rawBody(req);
+  const prepared = await prepareSummaryBody({ ...incoming, preferFullText: true });
+  const preparedChars = Array.from(clean(prepared.description || '')).length;
+  const articleOk = ['article', 'pdf'].includes(String(prepared.preparedSource || ''));
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Summary-Route', 'diagnostic-article-only-v2195');
+  return res.status(200).json({
+    diagnostic: 'article-only-v2195',
+    ok: articleOk,
+    preparedSource: clean(prepared.preparedSource || 'missing', 80),
+    prepareReason: clean(prepared.prepareReason || 'unknown', 120),
+    prepareError: clean(prepared.prepareError || '', 160),
+    preparedChars,
+    inputDescriptionChars: Array.from(clean(incoming.description || '')).length,
+    elapsedMs: Date.now() - startedAt
+  });
+}
+
 export default async function handler(req, res) {
   if (req.method === 'GET' && String(req.query?.technologyResearch || '') === '1') {
     return technologyResearchFeed(req, res);
@@ -164,6 +186,10 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST' && String(req.query?.paperTitles || '') === '1') {
     return paperTitles(req, res);
+  }
+
+  if (req.method === 'POST' && String(req.query?.diagnostic || '') === 'article') {
+    return articleOnlyDiagnostic(req, res);
   }
 
   if (req.method === 'POST' && String(req.query?.batch || '') === '1') {
@@ -184,6 +210,8 @@ export default async function handler(req, res) {
     req.body = isolateSummaryWork(prepared);
     res.setHeader('X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
     res.setHeader('X-Summary-Prepare-Reason', prepared.prepareReason || 'unknown');
+    res.setHeader('X-Summary-Prepare-Error', prepared.prepareError || '');
+    res.setHeader('X-Summary-Prepared-Chars', String(Array.from(clean(prepared.description || '')).length));
     res.setHeader('X-Summary-Prefer-Full-Text', String(Boolean(incoming?.preferFullText)));
 
     if (String(req.query?.stream || '') === '1') return summaryV2184(req, res);
