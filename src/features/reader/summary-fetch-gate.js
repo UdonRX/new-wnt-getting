@@ -75,17 +75,21 @@ function responseFromSnapshot(snapshot) {
   });
 }
 
-function suppressedSnapshot({ articleId, requestId, requestType, reason }) {
-  const body = JSON.stringify({
+function unavailableBody({ articleId, requestId, requestType, reason, upstreamStatus = 0 }) {
+  return JSON.stringify({
     articleId,
     requestId,
     requestType,
     provider: 'unavailable',
     cacheable: false,
     validated: false,
-    upstreamStatus: 0,
+    upstreamStatus,
     fallbackReason: reason
   });
+}
+
+function suppressedSnapshot({ articleId, requestId, requestType, reason }) {
+  const body = unavailableBody({ articleId, requestId, requestType, reason });
   readerTrace('gemini-suppressed', { requestId, articleId, requestType, reason });
   return {
     status: 200,
@@ -128,6 +132,10 @@ async function executeReaderSummary(input, init, parsed, meta) {
     requestId: meta.requestId,
     requestType
   };
+  const timeoutMs = String(parsed.mode).startsWith('papers') ? 32_000 : 28_000;
+  const networkController = new AbortController();
+  const networkTimer = setTimeout(() => networkController.abort(), timeoutMs);
+  const { signal: _callerSignal, ...networkInit } = init || {};
   const startedAt = Date.now();
   actualRequestCount += 1;
   window.__PDV2_GEMINI_REQUEST_COUNT = actualRequestCount;
@@ -137,21 +145,35 @@ async function executeReaderSummary(input, init, parsed, meta) {
     title: String(parsed.body?.title || ''),
     requestType,
     requestNumber: actualRequestCount,
-    startTime: new Date(startedAt).toISOString()
+    startTime: new Date(startedAt).toISOString(),
+    timeoutMs
   });
 
   try {
     const response = await nativeFetch(input, {
-      ...init,
+      ...networkInit,
       cache: 'no-store',
+      signal: networkController.signal,
       body: JSON.stringify(payload)
     });
     const text = await response.text();
     const data = safeJson(text);
     const endedAt = Date.now();
-    readerTrace('gemini-success', {
+    const responseArticleId = String(data?.articleId || '');
+    const articleIdMismatch = Boolean(responseArticleId && responseArticleId !== parsed.articleId);
+    const finalText = articleIdMismatch
+      ? unavailableBody({
+          articleId: parsed.articleId,
+          requestId: meta.requestId,
+          requestType,
+          reason: `article-id-mismatch:${responseArticleId}`,
+          upstreamStatus: Number(data?.upstreamStatus || 0) || 0
+        })
+      : text;
+    readerTrace(articleIdMismatch ? 'gemini-article-id-mismatch' : 'gemini-success', {
       requestId: meta.requestId,
       articleId: parsed.articleId,
+      responseArticleId,
       title: String(parsed.body?.title || ''),
       requestType,
       httpStatus: response.status,
@@ -160,7 +182,7 @@ async function executeReaderSummary(input, init, parsed, meta) {
       elapsedMs: endedAt - startedAt,
       response: responseSummary(data)
     });
-    return snapshotResponse(response, text);
+    return snapshotResponse(response, finalText);
   } catch (error) {
     const endedAt = Date.now();
     readerTrace('gemini-error', {
@@ -176,6 +198,7 @@ async function executeReaderSummary(input, init, parsed, meta) {
     });
     throw error;
   } finally {
+    clearTimeout(networkTimer);
     readerTrace('gemini-finally', {
       requestId: meta.requestId,
       articleId: parsed.articleId,
