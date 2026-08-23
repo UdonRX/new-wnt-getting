@@ -2,6 +2,7 @@
   'use strict';
 
   const nativeFetch = window.fetch.bind(window);
+  const STORAGE_KEY = 'pdv2:summary-diagnostic:last:v2195d2';
   const state = { sequence: 0, last: null, history: [] };
   window.__PDV2_SUMMARY_DIAG = state;
 
@@ -80,6 +81,11 @@
     return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
   }
 
+  function persist(diag) {
+    state.last = diag;
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(diag)); } catch {}
+  }
+
   function actualSnapshot(response, data, elapsedMs) {
     return {
       status: Number(response?.status || 0),
@@ -97,6 +103,16 @@
     };
   }
 
+  async function nativeFetchWithTimeout(input, init = {}, timeoutMs = 13_000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await nativeFetch(input, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function fixedGeminiTest() {
     const body = {
       title: '診断用の固定テキスト', source: 'DIAGNOSTIC_FIXED_TEXT', category: '診断', mode: 'diagnostic', preferFullText: false,
@@ -104,9 +120,9 @@
     };
     const started = performance.now();
     try {
-      const response = await nativeFetch('/api/summary?diagnostic=fixed-gemini', {
+      const response = await nativeFetchWithTimeout('/api/summary?diagnostic=fixed-gemini', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify(body)
-      });
+      }, 13_000);
       const data = await response.json().catch(() => ({}));
       const provider = String(data?.provider || '');
       return {
@@ -115,16 +131,16 @@
         validation: clientValidationReason(data), elapsedMs: Math.round(performance.now() - started)
       };
     } catch (error) {
-      return { ok: false, status: 0, provider: '', model: '', fallbackReason: cleanReason(error?.message || error), validation: 'FETCH_ERROR', elapsedMs: Math.round(performance.now() - started) };
+      return { ok: false, status: 0, provider: '', model: '', fallbackReason: `${error?.name || 'Error'}:${cleanReason(error?.message || error)}`, validation: 'FETCH_ERROR', elapsedMs: Math.round(performance.now() - started) };
     }
   }
 
   async function articleOnlyTest(originalBody) {
     const started = performance.now();
     try {
-      const response = await nativeFetch('/api/summary?diagnostic=article', {
+      const response = await nativeFetchWithTimeout('/api/summary?diagnostic=article', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify(originalBody || {})
-      });
+      }, 13_000);
       const data = await response.json().catch(() => ({}));
       return {
         ok: Boolean(response.ok && data?.ok), status: response.status, preparedSource: String(data?.preparedSource || ''),
@@ -133,13 +149,14 @@
         elapsedMs: Number(data?.elapsedMs || Math.round(performance.now() - started))
       };
     } catch (error) {
-      return { ok: false, status: 0, preparedSource: '', preparedChars: 0, prepareReason: 'diagnostic-fetch-error', prepareError: cleanReason(error?.message || error), elapsedMs: Math.round(performance.now() - started) };
+      return { ok: false, status: 0, preparedSource: '', preparedChars: 0, prepareReason: 'diagnostic-fetch-error', prepareError: `${error?.name || 'Error'}:${cleanReason(error?.message || error)}`, elapsedMs: Math.round(performance.now() - started) };
     }
   }
 
   function deriveCause(diag) {
     const actual = diag.actual || {}, fixed = diag.fixedGemini || {}, article = diag.article || {};
     if (diag.networkError) return /abort/i.test(diag.networkError) ? 'CLIENT_TIMEOUT_OR_ABORT' : 'SUMMARY_NETWORK_ERROR';
+    if (!diag.actual) return 'SUMMARY_REQUEST_STILL_RUNNING';
     if (actual.status >= 400 || actual.status === 0) return `SUMMARY_HTTP_${actual.status || 'ERROR'}`;
     if (actual.clientValidation === 'OK') return 'DISPLAY_STATE_MISMATCH';
     if (!fixed.ok) {
@@ -161,12 +178,12 @@
   function compactDiag(diag) {
     const actual = diag.actual || {}, fixed = diag.fixedGemini || {}, article = diag.article || {};
     return [
-      diag.id, diag.cause || 'DIAGNOSING',
-      `summary HTTP:${actual.status ?? '-'} provider:${actual.provider || '-'} validation:${actual.clientValidation || '-'}`,
+      diag.id, diag.cause || (diag.actual ? 'DIAGNOSING' : 'SUMMARY_REQUEST_STILL_RUNNING'),
+      `summary HTTP:${actual.status ?? '-'} elapsed:${actual.elapsedMs ?? '-'}ms provider:${actual.provider || '-'} validation:${actual.clientValidation || '-'}`,
       `prepared:${actual.preparedSource || '-'} chars:${actual.preparedChars || 0} reason:${cleanReason(actual.prepareReason || '-', 70)}`,
-      `fixedGemini:${fixed.ok ? 'OK' : 'NG'} HTTP:${fixed.status ?? '-'} provider:${fixed.provider || '-'} model:${fixed.model || '-'}`,
-      `article:${article.ok ? 'OK' : 'NG'} source:${article.preparedSource || '-'} chars:${article.preparedChars || 0} reason:${cleanReason(article.prepareReason || '-', 70)}`,
-      `fallback:${cleanReason(actual.fallbackReason || fixed.fallbackReason || '-', 90)}`, 'prewarm:OFF'
+      `fixedGemini:${fixed.ok ? 'OK' : (diag.fixedGemini ? 'NG' : 'WAIT')} HTTP:${fixed.status ?? '-'} provider:${fixed.provider || '-'} model:${fixed.model || '-'}`,
+      `article:${article.ok ? 'OK' : (diag.article ? 'NG' : 'WAIT')} source:${article.preparedSource || '-'} chars:${article.preparedChars || 0} reason:${cleanReason(article.prepareReason || '-', 70)}`,
+      `fallback:${cleanReason(actual.fallbackReason || fixed.fallbackReason || '-', 90)}`, 'prewarm:OFF', 'diagnostic:v2195d2'
     ].join('\n');
   }
 
@@ -178,41 +195,73 @@
     document.head.append(style);
   }
 
-  function renderPanel(card) {
-    if (!card || !card.isConnected || !state.last) return;
-    const diag = state.last;
-    ensureStyle();
-    let panel = card.querySelector('.reader-summary-diagnostic');
-    if (!panel) {
-      panel = document.createElement('div'); panel.className = 'reader-summary-diagnostic';
-      (card.querySelector('.reader-story-content') || card).append(panel);
-    }
-    panel.replaceChildren();
-    const title = document.createElement('strong'); title.textContent = diag.cause ? `診断コード ${diag.id}` : `診断中 ${diag.id}`;
-    const code = document.createElement('code'); code.textContent = compactDiag(diag);
-    const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = '診断コードをコピー';
-    copy.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(compactDiag(diag)); copy.textContent = 'コピーしました'; setTimeout(() => { if (copy.isConnected) copy.textContent = '診断コードをコピー'; }, 1200); }
-      catch { copy.textContent = '長押しで内容をコピー'; }
-    });
-    panel.append(title, code, copy);
+  function activeCard() {
+    return document.querySelector('.reader-story-card.is-active') || document.querySelector('.reader-story-card');
   }
 
-  function renderActiveFailure() {
-    const card = document.querySelector('.reader-story-card.is-active[data-summary-provider="unavailable"]') || document.querySelector('.reader-story-card[data-summary-provider="unavailable"]');
-    if (card) renderPanel(card);
+  function renderPanel(card, diag = state.last) {
+    if (!card || !card.isConnected || !diag) return;
+    ensureStyle();
+    const text = compactDiag(diag);
+    const signature = `${diag.id}|${diag.cause || ''}|${text}`;
+    let panel = card.querySelector('.reader-summary-diagnostic');
+    if (panel?.dataset?.diagSignature === signature) return;
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'reader-summary-diagnostic';
+      (card.querySelector('.reader-story-content') || card).append(panel);
+    }
+    panel.dataset.diagSignature = signature;
+    const title = document.createElement('strong');
+    title.textContent = diag.cause && diag.cause !== 'SUMMARY_REQUEST_STILL_RUNNING' ? `診断コード ${diag.id}` : `診断中 ${diag.id}`;
+    const code = document.createElement('code');
+    code.textContent = text;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.textContent = '診断コードをコピー';
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(compactDiag(diag));
+        copy.textContent = 'コピーしました';
+        setTimeout(() => { if (copy.isConnected) copy.textContent = '診断コードをコピー'; }, 1200);
+      } catch {
+        copy.textContent = '長押しで内容をコピー';
+      }
+    });
+    panel.replaceChildren(title, code, copy);
+  }
+
+  function renderActiveDiagnostic() {
+    if (state.last) renderPanel(activeCard(), state.last);
   }
 
   async function finishDiagnostics(diag, originalBody) {
+    if (diag.finishedAt) return;
     const [fixedGemini, article] = await Promise.all([fixedGeminiTest(), articleOnlyTest(originalBody)]);
-    diag.fixedGemini = fixedGemini; diag.article = article; diag.cause = deriveCause(diag); diag.finishedAt = new Date().toISOString();
-    state.last = diag; state.history.push(diag); if (state.history.length > 20) state.history.splice(0, state.history.length - 20);
-    console.warn('[summary-diagnostic]', diag); renderActiveFailure();
+    diag.fixedGemini = fixedGemini;
+    diag.article = article;
+    diag.cause = deriveCause(diag);
+    diag.finishedAt = new Date().toISOString();
+    persist(diag);
+    state.history.push(diag);
+    if (state.history.length > 20) state.history.splice(0, state.history.length - 20);
+    console.warn('[summary-diagnostic]', diag);
+    renderActiveDiagnostic();
   }
 
-  const observer = new MutationObserver(() => renderActiveFailure());
-  const startObserver = () => { if (document.body) observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-summary-provider', 'class'] }); };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true }); else startObserver();
+  // Only watch the one attribute written by reader-focus when a summary state changes.
+  // Do not observe childList/class: the diagnostic panel itself changes the DOM and
+  // observing those mutations caused an infinite render loop in v2195d1.
+  const observer = new MutationObserver(records => {
+    if (records.some(record => record.type === 'attributes' && record.attributeName === 'data-summary-provider')) {
+      renderActiveDiagnostic();
+    }
+  });
+  const startObserver = () => {
+    if (document.body) observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-summary-provider'] });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true });
+  else startObserver();
 
   window.fetch = async function diagnosticFetch(input, init) {
     const url = asUrl(input);
@@ -229,23 +278,51 @@
     if (diagnosticKind || isPaperTitles || (init?.method || 'GET').toUpperCase() !== 'POST') return nativeFetch(input, init);
 
     const originalBody = parseBody(init);
-    const diag = { id: diagnosticId(), cause: '', startedAt: new Date().toISOString(), prewarm: 'OFF', actual: null, fixedGemini: null, article: null, networkError: '' };
-    state.last = diag;
+    const diag = {
+      id: diagnosticId(), cause: '', startedAt: new Date().toISOString(), prewarm: 'OFF',
+      actual: null, fixedGemini: null, article: null, networkError: '', finishedAt: ''
+    };
+    persist(diag);
+
+    const watchdog = setTimeout(() => {
+      if (!diag.actual && !diag.networkError) {
+        diag.cause = 'SUMMARY_REQUEST_STILL_RUNNING';
+        persist(diag);
+        renderActiveDiagnostic();
+      }
+    }, 3000);
+
     const started = performance.now();
     try {
       const response = await nativeFetch(input, init);
       const clone = response.clone();
       const data = await clone.json().catch(() => ({}));
       diag.actual = actualSnapshot(response, data, Math.round(performance.now() - started));
+      diag.cause = '';
+      persist(diag);
       if (!response.ok || diag.actual.clientValidation !== 'OK') {
-        finishDiagnostics(diag, originalBody).catch(error => { diag.cause = 'DIAGNOSTIC_RUN_FAILED'; diag.networkError = cleanReason(error?.message || error); state.last = diag; renderActiveFailure(); });
+        renderActiveDiagnostic();
+        finishDiagnostics(diag, originalBody).catch(error => {
+          diag.cause = 'DIAGNOSTIC_RUN_FAILED';
+          diag.networkError = cleanReason(error?.message || error);
+          persist(diag);
+          renderActiveDiagnostic();
+        });
       }
       return response;
     } catch (error) {
       diag.networkError = `${error?.name || 'Error'}:${cleanReason(error?.message || error)}`;
-      diag.actual = { status: 0, elapsedMs: Math.round(performance.now() - started), provider: '', clientValidation: 'FETCH_ERROR', preparedSource: '', preparedChars: 0, prepareReason: '', prepareError: '', fallbackReason: '' };
+      diag.actual = {
+        status: 0, elapsedMs: Math.round(performance.now() - started), provider: '', clientValidation: 'FETCH_ERROR',
+        preparedSource: '', preparedChars: 0, prepareReason: '', prepareError: '', fallbackReason: ''
+      };
+      diag.cause = deriveCause(diag);
+      persist(diag);
+      renderActiveDiagnostic();
       finishDiagnostics(diag, originalBody).catch(() => {});
       throw error;
+    } finally {
+      clearTimeout(watchdog);
     }
   };
 })();
