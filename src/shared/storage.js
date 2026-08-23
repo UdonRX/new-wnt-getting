@@ -1,5 +1,48 @@
 const PREFIX = 'pdv2:';
 
+function quotaExceeded(error) {
+  const name = String(error?.name || '');
+  const message = String(error?.message || '');
+  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED' || /quota.*exceeded/i.test(message);
+}
+
+export function reclaimLocalCacheSpace(preserveKey = '') {
+  const keys = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key) keys.push(key);
+    }
+  } catch { return; }
+
+  const removable = keys.filter(key => key !== preserveKey && (
+    key.startsWith('pdv2:readerCache:') ||
+    key.startsWith('pdv2:weatherCache:') ||
+    key === 'reader-summary-cache-v2180' ||
+    key === 'pdv2:paperTitleJa'
+  ));
+
+  for (const key of removable) {
+    try { localStorage.removeItem(key); } catch {}
+  }
+}
+
+export function safeSetItem(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    if (!quotaExceeded(error)) return false;
+    reclaimLocalCacheSpace(key);
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export function load(key, fallback) {
   try {
     const raw = localStorage.getItem(PREFIX + key);
@@ -10,8 +53,9 @@ export function load(key, fallback) {
 }
 
 export function save(key, value) {
-  localStorage.setItem(PREFIX + key, JSON.stringify(value));
-  window.dispatchEvent(new CustomEvent('pdv2:storage', { detail: { key, value } }));
+  const stored = safeSetItem(PREFIX + key, JSON.stringify(value));
+  if (stored) window.dispatchEvent(new CustomEvent('pdv2:storage', { detail: { key, value } }));
+  return stored;
 }
 
 export function remove(key) { localStorage.removeItem(PREFIX + key); }

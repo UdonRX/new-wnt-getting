@@ -171,11 +171,21 @@ function targetForFeed(url='') {
   return `/api/rss?url=${encodeURIComponent(url)}`;
 }
 
-export async function fetchFeed(feed) {
+function forceFreshTarget(target, force) {
+  if (!force) return target;
+  try {
+    const url = new URL(target, location.origin);
+    url.searchParams.set('_fresh', String(Date.now()));
+    return `${url.pathname}${url.search}`;
+  } catch { return target; }
+}
+
+export async function fetchFeed(feed, { force = false, timeoutMs = 35_000 } = {}) {
   const url=String(feed.url||'');
-  const target=targetForFeed(url);
+  const target=forceFreshTarget(targetForFeed(url), force);
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),12000);
+  const wait=Math.max(12_000,Math.min(50_000,Number(timeoutMs)||35_000));
+  const timer=setTimeout(()=>controller.abort(),wait);
   try {
     const response=await fetch(target,{cache:'no-store',signal:controller.signal,headers:{Accept:'application/rss+xml,application/atom+xml,application/xml,text/xml,*/*;q=.2'}});
     if(!response.ok) {
@@ -185,13 +195,13 @@ export async function fetchFeed(feed) {
         if(/json/i.test(type)) detail=String((await response.json())?.error||'');
         else detail=String(await response.text()).replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
       } catch {}
-      throw new Error(`RSS取得エラー (${response.status})${detail?`: ${detail.slice(0,90)}`:''}`);
+      throw new Error(`RSS取得エラー (${response.status})${detail?`: ${detail.slice(0,120)}`:''}`);
     }
     const xml=await response.text();
     if(!/<(?:rss|feed|rdf:RDF)\b/i.test(xml.slice(0,1000))) throw new Error('RSSではない応答を受信しました');
     return parseFeed(xml,feed.name||'');
   } catch(error) {
-    if(error?.name==='AbortError') throw new Error('RSS取得がタイムアウトしました');
+    if(error?.name==='AbortError') throw new Error(`RSS取得がタイムアウトしました (${Math.round(wait/1000)}秒)`);
     throw error;
   } finally { clearTimeout(timer); }
 }

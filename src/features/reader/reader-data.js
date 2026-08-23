@@ -1,5 +1,6 @@
 import { state } from '../../app/store.js';
 import { fetchFeed, parseFeed, dedupeSort } from '../../shared/rss.js';
+import { safeSetItem } from '../../shared/storage.js';
 
 const CACHE_TTL = 6 * 60 * 60 * 1000;
 
@@ -55,10 +56,27 @@ export function readReaderCache(mode, paperTrack = 'core') {
   } catch { return null; }
 }
 
+function compactCacheItem(item) {
+  return {
+    id: item?.id || '',
+    title: item?.title || '',
+    titleJa: item?.titleJa || '',
+    link: item?.link || '',
+    description: String(item?.description || '').slice(0, 5000),
+    source: item?.source || '',
+    author: item?.author || '',
+    feedName: item?.feedName || '',
+    image: item?.image || '',
+    pubDate: item?.pubDate instanceof Date ? item.pubDate.toISOString() : item?.pubDate || '',
+    relative: item?.relative || ''
+  };
+}
+
 function writeCache(mode, items, paperTrack = 'core') {
-  try {
-    localStorage.setItem(readerCacheKey(mode, paperTrack), JSON.stringify({ at: Date.now(), items }));
-  } catch {}
+  const compact = (Array.isArray(items) ? items : [])
+    .slice(0, mode === 'papers' ? 220 : 260)
+    .map(compactCacheItem);
+  safeSetItem(readerCacheKey(mode, paperTrack), JSON.stringify({ at: Date.now(), items: compact }));
 }
 
 async function translatePaperTitles(items) {
@@ -87,8 +105,8 @@ async function translatePaperTitles(items) {
         if (original && ja) local[original] = ja;
       });
       const keys = Object.keys(local);
-      if (keys.length > 1200) keys.slice(0, keys.length - 1200).forEach(key => delete local[key]);
-      try { localStorage.setItem('pdv2:paperTitleJa', JSON.stringify(local)); } catch {}
+      if (keys.length > 900) keys.slice(0, keys.length - 900).forEach(key => delete local[key]);
+      safeSetItem('pdv2:paperTitleJa', JSON.stringify(local));
       window.dispatchEvent(new CustomEvent('pdv2:paper-titles'));
     })
     .catch(() => {});
@@ -172,9 +190,11 @@ function arrangeModeItems(items, mode, feeds, limit) {
 
 function friendlyFailure(mode, failures) {
   const count = failures.length;
-  if (mode === 'knowledge') return `知識RSSを取得できませんでした。保存済み記事があれば自動で表示します。${count ? `（失敗 ${count}件）` : ''}`;
-  if (mode === 'papers') return '論文取得先が一時的に応答していません。保存済み論文があれば自動で表示します。';
-  return '記事を取得できませんでした。しばらくしてから更新してください。';
+  const first = String(failures[0]?.error?.message || '').trim();
+  const detail = first ? ` ${first}` : '';
+  if (mode === 'knowledge') return `知識RSSを取得できませんでした。保存済み記事があれば自動で表示します。${count ? `（失敗 ${count}件）` : ''}${detail}`;
+  if (mode === 'papers') return `論文取得先が一時的に応答していません。保存済み論文があれば自動で表示します。${detail}`;
+  return `記事を取得できませんでした。しばらくしてから更新してください。${detail}`;
 }
 
 export async function loadReader(mode, {
@@ -190,7 +210,7 @@ export async function loadReader(mode, {
   const feeds = selectedFeed && mode !== 'papers'
     ? allFeeds.filter(feed => feed.name === selectedFeed)
     : allFeeds;
-  const cached = !force ? readReaderCache(mode, normalizedTrack) : null;
+  const cached = readReaderCache(mode, normalizedTrack);
 
   let visibleCached = [];
   if (cached?.items?.length) {
@@ -198,8 +218,8 @@ export async function loadReader(mode, {
       ? cached.items.filter(item => item.feedName === selectedFeed)
       : cached.items;
     visibleCached = arrangeModeItems(raw, mode, feeds, mode === 'papers' ? 300 : 350);
-    if (visibleCached.length) onProgress?.(visibleCached, { cached: true, paperTrack: normalizedTrack });
-    if (preferCache && visibleCached.length) {
+    if (visibleCached.length) onProgress?.(visibleCached, { cached: true, refreshing: force, paperTrack: normalizedTrack });
+    if (preferCache && !force && visibleCached.length) {
       return { items: visibleCached, failures: [], cached: true, paperTrack: normalizedTrack };
     }
   }
@@ -216,16 +236,16 @@ export async function loadReader(mode, {
       : Promise.resolve([]);
 
     try {
-      const fast = await fetchFeed({ name: label, url: `${base}?mode=fast` });
+      const fast = await fetchFeed({ name: label, url: `${base}?mode=fast` }, { force, timeoutMs: 35_000 });
       collected.push(...fast);
-      onProgress?.(dedupeSort(collected), { stage: 'fast', paperTrack: normalizedTrack });
+      onProgress?.(dedupeSort([...collected, ...(force ? visibleCached : [])]), { stage: 'fast', paperTrack: normalizedTrack });
     } catch (error) { failures.push({ feed: label, error }); }
 
     if (normalizedTrack === 'core') {
       try {
         const research = await researchPromise;
         collected.push(...research);
-        onProgress?.(dedupeSort(collected), { stage: 'technology-research', paperTrack: normalizedTrack });
+        onProgress?.(dedupeSort([...collected, ...(force ? visibleCached : [])]), { stage: 'technology-research', paperTrack: normalizedTrack });
       } catch (error) {
         failures.push({ feed: researchLabel, error });
       }
@@ -233,7 +253,7 @@ export async function loadReader(mode, {
 
     if (!fastOnly) {
       try {
-        const deep = await fetchFeed({ name: label, url: `${base}?mode=deep` });
+        const deep = await fetchFeed({ name: label, url: `${base}?mode=deep` }, { force, timeoutMs: 45_000 });
         collected.push(...deep);
       } catch (error) { failures.push({ feed: label, error }); }
     }
@@ -243,8 +263,8 @@ export async function loadReader(mode, {
       while (queue.length) {
         const { feed } = queue.shift();
         try {
-          collected.push(...await fetchFeed(feed));
-          onProgress?.(arrangeModeItems(collected, mode, feeds, 350), { feed: feed.name });
+          collected.push(...await fetchFeed(feed, { force, timeoutMs: 35_000 }));
+          onProgress?.(arrangeModeItems([...collected, ...(force ? visibleCached : [])], mode, feeds, 350), { feed: feed.name });
         } catch (error) {
           failures.push({ feed: feed.name, error });
         }
@@ -253,12 +273,15 @@ export async function loadReader(mode, {
     await Promise.all(workers);
   }
 
-  let items = arrangeModeItems(collected, mode, feeds, mode === 'papers' ? 300 : 350);
+  const combined = failures.length && visibleCached.length
+    ? [...collected, ...visibleCached]
+    : collected;
+  let items = arrangeModeItems(combined, mode, feeds, mode === 'papers' ? 300 : 350);
   if (mode === 'papers') items = await translatePaperTitles(items);
 
   if (items.length) {
     if (!selectedFeed || mode === 'papers') writeCache(mode, items, normalizedTrack);
-    return { items, failures, paperTrack: normalizedTrack };
+    return { items, failures, refreshed: force && collected.length > 0, stale: force && collected.length === 0, paperTrack: normalizedTrack };
   }
 
   if (visibleCached.length) {

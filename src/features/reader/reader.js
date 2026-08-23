@@ -9,6 +9,7 @@ import { shortDate } from '../../shared/time.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
 const MIXED_WARM_TTL = 5 * 60 * 1000;
+const CORE_SOURCE_KEY = 'pdv2:paperCoreSource';
 let focusHandle = null;
 let swipeDetach = null;
 let compactDetach = null;
@@ -40,6 +41,26 @@ function saveRead(mode, track, set) {
 }
 function getSelectedFeed(mode) { return storageGet(selectedFeedKey(mode), ''); }
 function setSelectedFeed(mode, name) { storageSet(selectedFeedKey(mode), name || ''); }
+function paperCoreSource() {
+  const value = storageGet(CORE_SOURCE_KEY, 'all');
+  return ['all', 'papers', 'research'].includes(value) ? value : 'all';
+}
+function setPaperCoreSource(value) {
+  storageSet(CORE_SOURCE_KEY, ['papers', 'research'].includes(value) ? value : 'all');
+}
+function isTechnologyResearchItem(item) {
+  return /技術リサーチ/.test([
+    item?.feedName,
+    item?.source,
+    item?.description
+  ].filter(Boolean).join(' '));
+}
+function filterCoreItems(items, source = paperCoreSource()) {
+  const rows = Array.isArray(items) ? items : [];
+  if (source === 'research') return rows.filter(isTechnologyResearchItem);
+  if (source === 'papers') return rows.filter(item => !isTechnologyResearchItem(item));
+  return rows;
+}
 function modeLabel(mode) { return mode === 'papers' ? '論文' : mode === 'knowledge' ? '知識' : 'ニュース'; }
 
 function setReaderMode(mode) {
@@ -115,7 +136,12 @@ function buildPaperTrackLevel(onChange) {
 
 function currentSourceLabel(mode, track, family) {
   if (mode === 'papers') {
-    if (track === 'core') return '製品・熱研究';
+    if (track === 'core') {
+      const source = paperCoreSource();
+      if (source === 'research') return '技術リサーチ';
+      if (source === 'papers') return '論文';
+      return '製品・熱研究';
+    }
     if (family === 'general') return '一般独創';
     if (family === 'applied') return '応用発想';
     return '独創研究';
@@ -129,7 +155,17 @@ function buildSourceDock(mode, track, family, { onSourceChange, onRecommend }) {
 
   if (mode === 'papers') {
     if (track === 'core') {
-      rail.append(el('button', { class: 'chip active', type: 'button', text: '製品・熱研究' }));
+      const source = paperCoreSource();
+      [
+        { value: 'all', label: 'すべて' },
+        { value: 'papers', label: '論文' },
+        { value: 'research', label: '技術リサーチ' }
+      ].forEach(item => rail.append(el('button', {
+        class: `chip ${source === item.value ? 'active' : ''}`,
+        type: 'button',
+        text: item.label,
+        onclick: () => onSourceChange?.({ coreSource: item.value })
+      })));
     } else {
       [
         { value: 'all', label: 'すべて' },
@@ -178,7 +214,7 @@ function buildSourceDock(mode, track, family, { onSourceChange, onRecommend }) {
 
 function bentoFallbackLabel(item) {
   if (item?._readerMode === 'papers') {
-    if (item?._paperTrack === 'core') return '製品熱研究';
+    if (item?._paperTrack === 'core') return isTechnologyResearchItem(item) ? '技術リサーチ' : '製品熱研究';
     if (item?._creativeFamily === 'general') return '一般独創';
     return '応用発想';
   }
@@ -289,10 +325,11 @@ async function loadModeRecommendations(mode, { track = 'core', family = 'all', o
       paperTrack: track,
       fastOnly: true,
       preferCache: false,
-      onProgress: () => onProgress?.(52, '論文を整理中')
+      onProgress: () => onProgress?.(52, track === 'core' && paperCoreSource() === 'research' ? '技術リサーチを整理中' : '論文を整理中')
     });
     let rows = result.items;
     if (track === 'creative') rows = filterCreativeItems(rows, family);
+    else rows = filterCoreItems(rows);
     const annotated = annotateItems(rows, 'papers', track, family);
     onProgress?.(78, '面白さを優先して並べ替え中');
     return paperRecommendations(annotated, track, family);
@@ -559,6 +596,7 @@ export async function renderReader(root, {
     const sourceDock = buildSourceDock(mode, track, family, {
       onSourceChange: next => {
         if (mode === 'papers') {
+          if (track === 'core' && next?.coreSource) setPaperCoreSource(next.coreSource);
           if (track === 'creative' && next?.family) update('creativePaperFamily', next.family);
         } else setSelectedFeed(mode, next?.feed || '');
         renderReader(root, { navigate, readerRecommendations: false });
@@ -673,7 +711,9 @@ export async function renderReader(root, {
   try {
     const selectedFeed = getSelectedFeed(mode);
     const showList = rows => {
-      const visible = mode === 'papers' && track === 'creative' ? filterCreativeItems(rows, family) : rows;
+      let visible = rows;
+      if (mode === 'papers' && track === 'creative') visible = filterCreativeItems(rows, family);
+      if (mode === 'papers' && track === 'core') visible = filterCoreItems(rows);
       const annotated = annotateItems(visible, mode, track, family);
       renderBento(host, mode, track, family, annotated, { onOpen: openArticleSequence });
       return annotated;
@@ -683,9 +723,9 @@ export async function renderReader(root, {
       force: refresh,
       selectedFeed,
       paperTrack: track,
-      onProgress: items => {
-        if (!items?.length || host.querySelector('.reader-bento-view')) return;
-        showList(items);
+      onProgress: (items, meta = {}) => {
+        if (!items?.length) return;
+        if (!host.querySelector('.reader-bento-view') || meta?.stage === 'technology-research' || meta?.cached) showList(items);
       }
     });
     const annotated = showList(result.items);

@@ -3,6 +3,7 @@ import { el, openSheet, showToast } from '../../shared/dom.js';
 import { topbar, segmented, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';
 import { iconSvg as appIconSvg } from '../../shared/icons.js';
 import { attachSwipe } from '../../shared/gestures.js';
+import { safeSetItem } from '../../shared/storage.js';
 import { fetchHourlyJmaModel, fetchOfficialJma, parseOfficialForecast, geocodeJapan } from './weather-api.js';
 import { iconSvg, weatherVisual } from './weather-icons.js';
 
@@ -13,7 +14,7 @@ let selectedIndex = Number(localStorage.getItem('pdv2:weatherIndex') || 0);
 
 function saveMode(next) {
   mode = PERIODS.includes(next) ? next : 'today';
-  localStorage.setItem('pdv2:weatherMode', mode);
+  safeSetItem('pdv2:weatherMode', mode);
 }
 
 function compactWeatherText(raw, fallback = 'くもり') {
@@ -117,9 +118,6 @@ function weekRows(data, official) {
   (daily.time || []).slice(0, 7).forEach((date, index) => {
     const officialDay = official.find(row => row.date === date);
     const visual = weatherVisual(daily.weather_code?.[index]);
-
-    // 気象庁の短期予報に文章がある日はそれを短縮。
-    // 週間側は固定文字列を使わず、日別 weather_code の実予報へフォールバック。
     const label = compactWeatherText(officialDay?.weather, visual.label);
     const dt = new Date(`${date}T00:00:00`);
     const row = el('div', { class: 'daily-row' });
@@ -203,7 +201,7 @@ function openLocationManager(onDone) {
       onclick: () => {
         update('weatherLocations', draft);
         selectedIndex = Math.min(selectedIndex, Math.max(0, draft.length - 1));
-        localStorage.setItem('pdv2:weatherIndex', String(selectedIndex));
+        safeSetItem('pdv2:weatherIndex', String(selectedIndex));
         sheet?.close();
         onDone();
       }
@@ -231,7 +229,6 @@ function attachPullDownDismiss(sheetRef) {
     if (event.touches?.length !== 1) return;
     const touch = event.touches[0];
     const rect = sheet.getBoundingClientRect();
-    // シート上端（ハンドル〜タイトル付近）から始めた下スワイプだけを対象にする。
     if (touch.clientY - rect.top > 96) return;
     startY = touch.clientY;
     startX = touch.clientX;
@@ -316,7 +313,7 @@ function openLocationAdd(onDone) {
             ];
             update('weatherLocations', next);
             selectedIndex = next.length - 1;
-            localStorage.setItem('pdv2:weatherIndex', String(selectedIndex));
+            safeSetItem('pdv2:weatherIndex', String(selectedIndex));
             sheet?.close();
             showToast('地域を追加しました');
             onDone();
@@ -334,7 +331,6 @@ function openLocationAdd(onDone) {
 
   sheet = openSheet(wrap, { title: '地域を追加' });
 }
-
 
 export async function renderWeather(root, { navigate, refresh = false }) {
   if (selectedIndex >= state.weatherLocations.length) selectedIndex = 0;
@@ -369,7 +365,7 @@ export async function renderWeather(root, { navigate, refresh = false }) {
     const next = Math.max(0, Math.min(count - 1, index));
     if (next === selectedIndex && !refreshData) return;
     selectedIndex = next;
-    localStorage.setItem('pdv2:weatherIndex', String(next));
+    safeSetItem('pdv2:weatherIndex', String(next));
     renderWeather(root, { navigate, refresh: refreshData });
   };
 
@@ -394,24 +390,30 @@ export async function renderWeather(root, { navigate, refresh = false }) {
   const cacheKey = `pdv2:weatherCache:${location.lat},${location.lon}`;
   let model;
   let officialData;
+  let fallbackCache = null;
 
-  if (!refresh) {
-    try {
-      const cache = JSON.parse(localStorage.getItem(cacheKey) || 'null');
-      if (cache && Date.now() - cache.at < 30 * 60 * 1000) {
-        model = cache.model;
-        officialData = cache.officialData;
-      }
-    } catch {}
-  }
+  try {
+    fallbackCache = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    if (!refresh && fallbackCache && Date.now() - Number(fallbackCache.at || 0) < 30 * 60 * 1000) {
+      model = fallbackCache.model;
+      officialData = fallbackCache.officialData;
+    }
+  } catch {}
 
   try {
     if (!model) {
-      [model, officialData] = await Promise.all([
-        fetchHourlyJmaModel(location),
-        fetchOfficialJma(location.jmaCode).catch(() => null)
-      ]);
-      localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), model, officialData }));
+      try {
+        [model, officialData] = await Promise.all([
+          fetchHourlyJmaModel(location),
+          fetchOfficialJma(location.jmaCode).catch(() => null)
+        ]);
+        safeSetItem(cacheKey, JSON.stringify({ at: Date.now(), model, officialData }));
+      } catch (fetchError) {
+        if (!fallbackCache?.model) throw fetchError;
+        model = fallbackCache.model;
+        officialData = fallbackCache.officialData;
+        showToast('最新天気の取得に失敗したため、保存済み予報を表示します');
+      }
     }
 
     const official = parseOfficialForecast(officialData);
