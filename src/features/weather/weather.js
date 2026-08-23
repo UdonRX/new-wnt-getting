@@ -4,10 +4,12 @@ import { topbar, segmented, centerScrollItem, installShrinkingHeader } from '../
 import { iconSvg as appIconSvg } from '../../shared/icons.js';
 import { attachSwipe } from '../../shared/gestures.js';
 import { safeSetItem } from '../../shared/storage.js';
-import { fetchHourlyJmaModel, fetchOfficialJma, parseOfficialForecast, geocodeJapan } from './weather-api.js';
+import { geocodeJapan } from './weather-api.js';
+import { fetchWeatherBundle, fetchRapidRainAlert } from './weather-sources.js';
 import { iconSvg, weatherVisual } from './weather-icons.js';
 
 const PERIODS = ['today', 'tomorrow', 'week'];
+const WEATHER_CACHE_TTL = 10 * 60 * 1000;
 let mode = localStorage.getItem('pdv2:weatherMode') || 'today';
 if (!PERIODS.includes(mode)) mode = 'today';
 let selectedIndex = Number(localStorage.getItem('pdv2:weatherIndex') || 0);
@@ -15,32 +17,6 @@ let selectedIndex = Number(localStorage.getItem('pdv2:weatherIndex') || 0);
 function saveMode(next) {
   mode = PERIODS.includes(next) ? next : 'today';
   safeSetItem('pdv2:weatherMode', mode);
-}
-
-function compactWeatherText(raw, fallback = 'くもり') {
-  const original = String(raw || '')
-    .replace(/[\s　]+/g, '')
-    .replace(/くもり/g, '曇り')
-    .replace(/所により/g, '')
-    .replace(/朝晩|昼前|昼過ぎ|夕方|夜遅く|夜|朝|昼/g, '');
-
-  if (!original) return fallback;
-
-  const kinds = '(?:晴れ|曇り|雨|雪|雷雨|みぞれ)';
-
-  const after = original.match(new RegExp(`(${kinds}).*?(?:後|のち).*?(${kinds})`));
-  if (after) return `${after[1]}のち${after[2]}`;
-
-  const temporary = original.match(new RegExp(`(${kinds}).*?一時.*?(${kinds})`));
-  if (temporary) return `一時${temporary[2]}`;
-
-  const sometimes = original.match(new RegExp(`(${kinds}).*?時々.*?(${kinds})`));
-  if (sometimes) return `時々${sometimes[2]}`;
-
-  const found = [...original.matchAll(new RegExp(kinds, 'g'))].map(match => match[0]);
-  if (found.length >= 2) return `${found[0]}・${found[1]}`;
-  if (found.length === 1) return found[0];
-  return fallback;
 }
 
 function pointFrom(data) {
@@ -111,14 +87,12 @@ function hourlyCards(data, wantedMode) {
   return strip;
 }
 
-function weekRows(data, official) {
+function weekRows(data) {
   const daily = data.daily || {};
   const grid = el('div', { class: 'daily-grid' });
 
   (daily.time || []).slice(0, 7).forEach((date, index) => {
-    const officialDay = official.find(row => row.date === date);
     const visual = weatherVisual(daily.weather_code?.[index]);
-    const label = compactWeatherText(officialDay?.weather, visual.label);
     const dt = new Date(`${date}T00:00:00`);
     const row = el('div', { class: 'daily-row' });
 
@@ -126,7 +100,7 @@ function weekRows(data, official) {
       <strong>${dt.toLocaleDateString('ja-JP', { weekday: 'short' })}</strong>
       <div class="daily-weather">
         <span class="daily-weather-icon">${iconSvg(visual.icon, { size: 24 })}</span>
-        <span>${label}</span>
+        <span>${visual.label}</span>
       </div>
       <div class="daily-temp">
         <span class="temp-high">${Math.round(daily.temperature_2m_max?.[index] ?? 0)}°</span>
@@ -137,6 +111,24 @@ function weekRows(data, official) {
   });
 
   return grid;
+}
+
+function heavyRainAlert(alert) {
+  if (!alert?.text) return null;
+  const box = el('div', { class: 'weather-heavy-rain-alert' });
+  const sourceLabel = alert.source === 'yahoo' ? 'Yahoo! 気象情報API' : '気象庁 降水短時間予報';
+  box.append(
+    el('div', { class: 'weather-heavy-rain-title', text: '急な大雨に注意' }),
+    el('div', { class: 'weather-heavy-rain-text', text: alert.text }),
+    el('div', { class: 'weather-heavy-rain-source', text: sourceLabel })
+  );
+  if (alert.yahooAvailable) {
+    const credit = document.createElement('span');
+    credit.className = 'weather-yahoo-credit';
+    credit.innerHTML = '<span style="margin:15px 15px 15px 15px"><a href="https://developer.yahoo.co.jp/sitemap/">Webサービス by Yahoo! JAPAN</a></span>';
+    box.append(credit);
+  }
+  return box;
 }
 
 function centerActiveChip(container) {
@@ -387,36 +379,34 @@ export async function renderWeather(root, { navigate, refresh = false }) {
   centerActiveChip(locTabs);
   installShrinkingHeader(shrinkHeader, { threshold: 44 });
 
-  const cacheKey = `pdv2:weatherCache:${location.lat},${location.lon}`;
+  const cacheKey = `pdv2:weatherCache:multi-source:${location.lat},${location.lon}`;
   let model;
-  let officialData;
   let fallbackCache = null;
 
   try {
     fallbackCache = JSON.parse(localStorage.getItem(cacheKey) || 'null');
-    if (!refresh && fallbackCache && Date.now() - Number(fallbackCache.at || 0) < 30 * 60 * 1000) {
+    if (!refresh && fallbackCache && Date.now() - Number(fallbackCache.at || 0) < WEATHER_CACHE_TTL) {
       model = fallbackCache.model;
-      officialData = fallbackCache.officialData;
     }
   } catch {}
+
+  const rapidRainPromise = fetchRapidRainAlert(location, { refresh }).catch(error => {
+    console.warn('[weather] short rain alert unavailable', String(error?.message || error).slice(0, 220));
+    return null;
+  });
 
   try {
     if (!model) {
       try {
-        [model, officialData] = await Promise.all([
-          fetchHourlyJmaModel(location),
-          fetchOfficialJma(location.jmaCode).catch(() => null)
-        ]);
-        safeSetItem(cacheKey, JSON.stringify({ at: Date.now(), model, officialData }));
+        model = await fetchWeatherBundle(location, { refresh });
+        safeSetItem(cacheKey, JSON.stringify({ at: Date.now(), model }));
       } catch (fetchError) {
         if (!fallbackCache?.model) throw fetchError;
         model = fallbackCache.model;
-        officialData = fallbackCache.officialData;
         showToast('最新天気の取得に失敗したため、保存済み予報を表示します');
       }
     }
 
-    const official = parseOfficialForecast(officialData);
     const current = model.current || {};
     const visual = weatherVisual(current.weather_code);
     const point = pointFrom(model);
@@ -467,7 +457,7 @@ export async function renderWeather(root, { navigate, refresh = false }) {
 
       detail.replaceChildren();
       if (mode === 'week') {
-        detail.append(weekRows(model, official));
+        detail.append(weekRows(model));
       } else {
         detail.append(el('div', { class: 'section-title' }, [
           el('h2', { text: '1時間ごとの予報' }),
@@ -487,6 +477,12 @@ export async function renderWeather(root, { navigate, refresh = false }) {
     screen.replaceChildren(shrinkHeader, card, tabsHost, detail);
     root.replaceChildren(screen);
     centerActiveChip(locTabs);
+
+    rapidRainPromise.then(alert => {
+      if (!alert || !card.isConnected) return;
+      const alertNode = heavyRainAlert(alert);
+      if (alertNode && card.isConnected) card.append(alertNode);
+    });
   } catch (err) {
     screen.replaceChildren(shrinkHeader, el('div', { class: 'error-box', text: err.message }));
     root.replaceChildren(screen);

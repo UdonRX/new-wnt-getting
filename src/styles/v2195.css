@@ -1,4 +1,4 @@
-/* Personal Dashboard v2.19.5 — stable Reader swipe + unified YouTube/Twitch landscape */
+/* Personal Dashboard v2.19.5 — stable Reader swipe + stage-only YouTube/Twitch landscape */
 
 .reader-swipe-progress-indicator { transition: opacity .12s ease !important; }
 .reader-swipe-progress-active > .reader-swipe-progress-indicator { transition: none !important; }
@@ -21,6 +21,13 @@
   display: none !important;
 }
 
+html.youtube-landscape-open,
+body.youtube-landscape-open {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
+/* The viewport and tap-only controls remain upright. Only the video stage rotates. */
 .twitch-inline-player.youtube-css-landscape {
   position: static !important;
   inset: auto !important;
@@ -34,14 +41,66 @@
 }
 .twitch-inline-player.youtube-css-landscape > .twitch-comment-lane,
 .twitch-inline-player.youtube-css-landscape > .twitch-inline-info { display: none !important; }
-.twitch-inline-player.youtube-css-landscape .youtube-landscape-viewport,
-.twitch-inline-player.youtube-css-landscape .youtube-inline-stage,
-.twitch-inline-player.youtube-css-landscape .twitch-embed-min,
-.twitch-inline-player.youtube-css-landscape iframe {
+.twitch-inline-player.youtube-css-landscape .youtube-landscape-viewport {
   transform: none !important;
   rotate: none !important;
 }
-.twitch-inline-player:not(.twitch-css-landscape) { transform: none; }
+.twitch-inline-player.youtube-css-landscape .youtube-inline-stage > div,
+.twitch-inline-player.youtube-css-landscape .youtube-inline-stage iframe {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  border: 0 !important;
+}
+.twitch-inline-player:not(.twitch-css-landscape):not(.youtube-css-landscape) { transform: none; }
+
+@media (orientation: portrait) {
+  .twitch-inline-player.youtube-css-landscape .youtube-inline-stage {
+    position: absolute !important;
+    z-index: 1 !important;
+    inset: auto !important;
+    left: 50% !important;
+    top: 50% !important;
+    width: 100dvh !important;
+    height: 100dvw !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    aspect-ratio: auto !important;
+    transform: translate(-50%, -50%) rotate(90deg) !important;
+    transform-origin: center center !important;
+    rotate: none !important;
+  }
+}
+
+@media (orientation: landscape) {
+  .twitch-inline-player.youtube-css-landscape .youtube-inline-stage {
+    position: absolute !important;
+    z-index: 1 !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    aspect-ratio: auto !important;
+    transform: none !important;
+    rotate: none !important;
+  }
+}
+
+.weather-heavy-rain-alert {
+  margin-top: 12px;
+  padding: 12px 13px;
+  border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--line));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
+  display: grid;
+  gap: 5px;
+  text-align: left;
+}
+.weather-heavy-rain-title { color: var(--danger); font-weight: 800; font-size: 14px; }
+.weather-heavy-rain-text { color: var(--text-strong); font-size: 13px; line-height: 1.5; }
+.weather-heavy-rain-source { color: var(--muted); font-size: 11px; }
 
 @media (prefers-reduced-motion: reduce) {
   .reader-swipe-progress-indicator { transition-duration: .01ms !important; }

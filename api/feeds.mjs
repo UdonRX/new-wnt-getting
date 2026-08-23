@@ -2,12 +2,14 @@ import newsFeed from '../server/news-feed.mjs';
 import rss from '../server/rss.mjs';
 import twitchEventsub from '../server/twitch-eventsub.mjs';
 import twitchFeed from '../server/twitch-feed.mjs';
+import weatherRain from '../server/weather-rain.mjs';
 
 const handlers = new Map([
   ['news-feed', newsFeed],
   ['rss', rss],
   ['twitch-eventsub', twitchEventsub],
-  ['twitch-feed', twitchFeed]
+  ['twitch-feed', twitchFeed],
+  ['weather-rain', weatherRain]
 ]);
 
 export default async function handler(req, res) {
