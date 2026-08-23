@@ -34,8 +34,8 @@
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
   <script>
     (()=>{
-      const BUILD='2195';
-      const RECOVERY_KEY='pdv2:startup-recovery:2195';
+      const BUILD='2195d1';
+      const RECOVERY_KEY='pdv2:startup-recovery:2195d1';
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
@@ -57,6 +57,7 @@
       },6500);
     })();
   </script>
-  <script type="module" src="/src/main.js?v=2195"></script>
+  <script src="/src/summary-diagnostic-v2195.js?v=2195d1"></script>
+  <script type="module" src="/src/main.js?v=2195d1"></script>
 </body>
 </html>
