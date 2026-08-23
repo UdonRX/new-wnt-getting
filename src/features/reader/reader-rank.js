@@ -1,3 +1,5 @@
+import { readerTrace } from '../../shared/reader-debug.js';
+
 const SOURCE_BONUS = [
   /日経|Reuters|BBC|J-STAGE|PubMed|PMC|PLOS|Semantic Scholar/i,
   /ITmedia|MONOist|EE Times|Impress/i
@@ -30,7 +32,7 @@ function recencyScore(date) {
   const hours = Math.max(0, (Date.now() - time) / 3600000);
   return Math.max(0, 30 - hours * 1.2);
 }
-function itemTime(item) { const time = new Date(item?.pubDate || 0).getTime(); return Number.isFinite(time) ? time : 0; }
+function itemTime(item) { const time = Number(item?.publishedTimestamp) || new Date(item?.pubDate || 0).getTime(); return Number.isFinite(time) ? time : 0; }
 function itemKey(item) { return String(item?.id || item?.link || item?.url || `${item?.feedName || item?.source || ''}|${item?.title || ''}`); }
 function acquisitionSource(item) { return String(item?.feedName || item?.source || 'その他').trim() || 'その他'; }
 
@@ -64,18 +66,13 @@ function interleaveBuckets(buckets) {
   return out;
 }
 
-/*
- * News / Knowledge recommendation freshness rule:
- * - If at least one fetched item was published within the last 12 hours, only
- *   those <=12h items are eligible for recommendation.
- * - Only when there are zero <=12h items do we fall back to the previous
- *   36h / 72h source-balancing behavior.
- * This file only selects fetched items; AI-summary generation is untouched.
- */
 export function chooseBalancedRecentRecommendations(items, mode = 'news', unreadSet = new Set(), aiRanking = []) {
   const activeMode = mode === 'knowledge' ? 'knowledge' : 'news';
   const allRows = heuristicRank(items, activeMode, unreadSet);
-  if (!allRows.length) return [];
+  if (!allRows.length) {
+    readerTrace('recommendations', { mode: activeMode, allArticles: 0, recommendedArticles: 0 });
+    return [];
+  }
   const now = Date.now();
   const twelveHourRows = allRows.filter(row => { const time = itemTime(row.item); return time > 0 && now - time <= TWELVE_HOUR_WINDOW; });
   const strictTwelveHour = twelveHourRows.length > 0;
@@ -118,7 +115,16 @@ export function chooseBalancedRecentRecommendations(items, mode = 'news', unread
     if (!qualified.length) continue;
     buckets.push({ name, order: groupOrder++, latest: Math.max(...qualified.map(row => itemTime(row.item))), rows: qualified.map(row => row.item) });
   }
-  return interleaveBuckets(buckets);
+  const result = interleaveBuckets(buckets);
+  readerTrace('recommendations', {
+    mode: activeMode,
+    allArticles: Array.isArray(items) ? items.length : 0,
+    eligibleArticles: rows.length,
+    recommendedArticles: result.length,
+    sourceCount: groups.size,
+    strictTwelveHour
+  });
+  return result;
 }
 
 export function chooseBalancedNewsRecommendations(items, unreadSet = new Set(), aiRanking = []) { return chooseBalancedRecentRecommendations(items, 'news', unreadSet, aiRanking); }
@@ -127,8 +133,9 @@ export function chooseTop(items, mode, unreadSet, limit = 5, aiRanking = []) {
   const heuristic = heuristicRank(items, mode, unreadSet); const byId = new Map(items.map(item => [item.id, item])); const ordered = []; const used = new Set();
   for (const row of Array.isArray(aiRanking) ? aiRanking : []) { const item = byId.get(row?.id); if (item && !used.has(item.id)) { ordered.push({ item, score: Number(row?.score) || 0 }); used.add(item.id); } }
   for (const row of heuristic) if (!used.has(row.item.id)) { ordered.push(row); used.add(row.item.id); }
-  const selected = []; const sourceCount = new Map(); const safeLimit = Math.max(0, Number(limit) || 0);
+  const selected = []; const sourceCount = new Map(); const requestedLimit = Number(limit) || 0; const safeLimit = requestedLimit > 0 ? requestedLimit : ordered.length;
   for (const row of ordered) { const source = acquisitionSource(row.item); const count = sourceCount.get(source) || 0; if (count >= 2 && selected.length < Math.min(safeLimit, ordered.length - 1)) continue; selected.push(row.item); sourceCount.set(source, count + 1); if (selected.length >= safeLimit) break; }
+  readerTrace('recommendations', { mode, allArticles: Array.isArray(items) ? items.length : 0, recommendedArticles: selected.length, requestedLimit });
   return selected;
 }
 
