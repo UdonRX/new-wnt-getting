@@ -5,6 +5,7 @@ import paperTitles from '../lib/paper-titles.mjs';
 import { summaryBatchV2195, summarySingleV2195 } from '../lib/summary-dispatch-v2195.mjs';
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
+const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
 
 function clean(value = '') {
   return String(value || '')
@@ -77,6 +78,7 @@ function researchSummaryFromBody(body = {}) {
     model: 'grounded-search',
     contentSource: 'web-research',
     cacheable: true,
+    validated: true,
     fastPath: 'technology-research-prepared'
   };
 }
@@ -90,39 +92,58 @@ function descriptionLooksReal(title, description) {
   return (text.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length >= 55;
 }
 
-async function prepareBody(req) {
-  const raw = rawBody(req);
-  const body = { ...raw };
+function isGoogleNewsInput(body = {}, url = '') {
+  const source = clean(body.source || body.feedName || '');
+  if (/Google\s*ニュース|Google\s*News/i.test(source)) return true;
+  try { return new URL(url).hostname.toLowerCase() === 'news.google.com'; }
+  catch { return false; }
+}
+
+export async function prepareSummaryBody(raw = {}, {
+  extractor = extractArticleFromUrl,
+  articleTimeoutMs = ARTICLE_PREPARE_TIMEOUT_MS
+} = {}) {
+  const body = { ...(raw || {}) };
   const title = clean(body.title);
   const description = clean(body.description);
+  const url = clean(body.url || body.link);
+  const preferFullText = body.preferFullText === true
+    || String(body.preferFullText || '').toLowerCase() === 'true'
+    || isGoogleNewsInput(body, url);
 
-  if (descriptionLooksReal(title, description)) {
+  if (!preferFullText && descriptionLooksReal(title, description)) {
     body.description = first500(description);
     body.preparedSource = 'rss';
+    body.prepareReason = 'rss-description-sufficient';
     return body;
   }
 
-  const url = clean(body.url || body.link);
   if (url) {
     try {
       const article = await Promise.race([
-        extractArticleFromUrl(url, { maxTextLength: 2200, preferPdf: true }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('summary article timeout')), 4500))
+        extractor(url, { maxTextLength: 2200, preferPdf: true }),
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error('summary article timeout')),
+          Math.max(2500, Number(articleTimeoutMs) || ARTICLE_PREPARE_TIMEOUT_MS)
+        ))
       ]);
       const text = first500(article?.text || '');
       if (text.length >= 70 && !GENERIC_RE.test(text)) {
         body.description = text;
         body.title = clean(article?.title || title) || title;
         body.preparedSource = article?.sourceType === 'pdf' ? 'pdf' : 'article';
+        body.prepareReason = preferFullText ? 'preferred-full-text' : 'article-fallback';
         return body;
       }
     } catch (error) {
-      console.warn('[summary] article prepare failed', error?.message || error);
+      body.prepareError = clean(error?.message || error, 160);
+      console.warn('[summary] article prepare failed', body.prepareError);
     }
   }
 
   body.description = description.length >= 45 && !GENERIC_RE.test(description) ? first500(description) : '';
   body.preparedSource = body.description ? 'rss-short' : 'missing';
+  body.prepareReason = body.description ? 'article-unavailable-rss-fallback' : 'article-and-rss-insufficient';
   return body;
 }
 
@@ -150,7 +171,8 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const preparedResearch = researchSummaryFromBody(rawBody(req));
+    const incoming = rawBody(req);
+    const preparedResearch = researchSummaryFromBody(incoming);
     if (preparedResearch) {
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Summary-Prepared-Source', 'web-research');
@@ -158,14 +180,12 @@ export default async function handler(req, res) {
       return res.status(200).json(preparedResearch);
     }
 
-    const prepared = await prepareBody(req);
+    const prepared = await prepareSummaryBody(incoming);
     req.body = isolateSummaryWork(prepared);
     res.setHeader('X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
+    res.setHeader('X-Summary-Prepare-Reason', prepared.prepareReason || 'unknown');
+    res.setHeader('X-Summary-Prefer-Full-Text', String(Boolean(incoming?.preferFullText)));
 
-    // Explicit streaming requests keep the legacy streaming implementation.
-    // Normal reader cards do not consume an SSE stream; routing those through
-    // streamGenerateContent first only added latency and caused the 19s client
-    // timeout to race the structured fallback. Use one structured request instead.
     if (String(req.query?.stream || '') === '1') return summaryV2184(req, res);
     return summarySingleV2195(req, res);
   }
