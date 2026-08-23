@@ -3,6 +3,7 @@ import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 import { technologyResearchFeed } from '../lib/technology-research.mjs';
 import paperTitles from '../lib/paper-titles.mjs';
 import { summaryBatchV2195, summarySingleV2195 } from '../lib/summary-dispatch-v2195.mjs';
+import { setAsciiHeader, summaryServerErrorCode } from '../lib/http-response-safe.mjs';
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
@@ -179,7 +180,7 @@ async function articleOnlyDiagnostic(req, res) {
   });
 }
 
-export default async function handler(req, res) {
+async function routeSummaryRequest(req, res) {
   if (req.method === 'GET' && String(req.query?.technologyResearch || '') === '1') {
     return technologyResearchFeed(req, res);
   }
@@ -208,15 +209,67 @@ export default async function handler(req, res) {
 
     const prepared = await prepareSummaryBody(incoming);
     req.body = isolateSummaryWork(prepared);
-    res.setHeader('X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
-    res.setHeader('X-Summary-Prepare-Reason', prepared.prepareReason || 'unknown');
-    res.setHeader('X-Summary-Prepare-Error', prepared.prepareError || '');
+    setAsciiHeader(res, 'X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
+    setAsciiHeader(res, 'X-Summary-Prepare-Reason', prepared.prepareReason || 'unknown');
+    setAsciiHeader(res, 'X-Summary-Prepare-Error', prepared.prepareError || '');
     res.setHeader('X-Summary-Prepared-Chars', String(Array.from(clean(prepared.description || '')).length));
     res.setHeader('X-Summary-Prefer-Full-Text', String(Boolean(incoming?.preferFullText)));
+
+    if (prepared.prepareError) {
+      console.warn('[summary] prepared with fallback', {
+        articleId: clean(incoming?.articleId, 180),
+        preparedSource: prepared.preparedSource || 'unknown',
+        prepareReason: prepared.prepareReason || 'unknown',
+        prepareError: prepared.prepareError
+      });
+    }
 
     if (String(req.query?.stream || '') === '1') return summaryV2184(req, res);
     return summarySingleV2195(req, res);
   }
 
   return summaryV2184(req, res);
+}
+
+export default async function handler(req, res) {
+  try {
+    return await routeSummaryRequest(req, res);
+  } catch (error) {
+    const incoming = rawBody(req);
+    const errorCode = summaryServerErrorCode(error);
+    console.error('[summary-api] unhandled error', {
+      errorCode,
+      name: String(error?.name || 'Error'),
+      code: String(error?.code || ''),
+      message: String(error?.message || error).slice(0, 800),
+      method: String(req?.method || ''),
+      articleId: clean(incoming?.articleId, 180),
+      requestId: clean(incoming?.requestId, 180),
+      query: req?.query || {}
+    });
+
+    if (res.headersSent) {
+      try { return res.end(); } catch { return undefined; }
+    }
+
+    try {
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Summary-Route', 'server-error-v2195');
+      res.setHeader('X-Summary-Error-Code', errorCode);
+      setAsciiHeader(res, 'X-Summary-Request-Id', incoming?.requestId || '');
+      setAsciiHeader(res, 'X-Summary-Article-Id', incoming?.articleId || '');
+    } catch (headerError) {
+      console.error('[summary-api] failed to set safe error headers', headerError);
+    }
+
+    return res.status(503).json({
+      provider: 'unavailable',
+      cacheable: false,
+      validated: false,
+      errorCode,
+      articleId: clean(incoming?.articleId, 600),
+      requestId: clean(incoming?.requestId, 240),
+      requestType: ['display', 'prefetch'].includes(String(incoming?.requestType || '')) ? incoming.requestType : 'display'
+    });
+  }
 }
