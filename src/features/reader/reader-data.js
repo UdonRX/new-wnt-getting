@@ -1,31 +1,46 @@
 import { state } from '../../app/store.js';
 import { fetchFeed, parseFeed, dedupeSort } from '../../shared/rss.js';
-import { safeSetItem } from '../../shared/storage.js';
+import { cacheGet, cacheSet, migrateLargeLocalCaches } from '../../shared/storage.js';
 
 const CACHE_TTL = 6 * 60 * 60 * 1000;
 
+// 旧版でlocalStorageに残った巨大な記事キャッシュを、起動後すぐIndexedDBへ逃がす。
+migrateLargeLocalCaches().catch(() => {});
+
 async function fetchTechnologyResearch(force = false) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45_000);
-  try {
-    const target = `/api/summary?technologyResearch=1${force ? '&refresh=1' : ''}`;
-    const response = await fetch(target, {
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: { Accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }
-    });
-    if (!response.ok) {
-      let detail = '';
-      try { detail = String((await response.json())?.error || ''); } catch {}
-      throw new Error(`技術リサーチ取得エラー (${response.status})${detail ? `: ${detail}` : ''}`);
+  const fetchOnce = async refresh => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const target = `/api/summary?technologyResearch=1${refresh ? '&refresh=1' : ''}`;
+      const response = await fetch(target, {
+        cache: 'no-store',
+        signal: controller.signal,
+        headers: { Accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }
+      });
+      if (!response.ok) {
+        let detail = '';
+        try { detail = String((await response.json())?.error || ''); } catch {}
+        throw new Error(`技術リサーチ取得エラー (${response.status})${detail ? `: ${detail}` : ''}`);
+      }
+      const xml = await response.text();
+      return parseFeed(xml, '技術リサーチ');
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('技術リサーチの取得がタイムアウトしました');
+      throw error;
+    } finally {
+      clearTimeout(timer);
     }
-    const xml = await response.text();
-    return parseFeed(xml, '技術リサーチ');
-  } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('技術リサーチの取得がタイムアウトしました');
-    throw error;
-  } finally {
-    clearTimeout(timer);
+  };
+
+  const first = await fetchOnce(force);
+  // 5分類×2件を期待しているため、部分応答のときだけ1回追加取得して履歴を補う。
+  if (first.length >= 10) return first;
+  try {
+    const second = await fetchOnce(true);
+    return dedupeSort([...first, ...second], 20);
+  } catch {
+    return first;
   }
 }
 
@@ -41,19 +56,25 @@ export function readerCacheKey(mode, paperTrack = 'core') {
     : `pdv2:readerCache:${mode}`;
 }
 
-export function readReaderCache(mode, paperTrack = 'core') {
+function restoreReaderCache(data) {
+  if (!data?.items?.length) return null;
+  return {
+    ...data,
+    items: data.items.map(item => ({ ...item, pubDate: new Date(item.pubDate) })),
+    fresh: Date.now() - Number(data.at || 0) < CACHE_TTL
+  };
+}
+
+export async function readReaderCache(mode, paperTrack = 'core') {
   try {
-    let data = JSON.parse(localStorage.getItem(readerCacheKey(mode, paperTrack)) || 'null');
+    let data = await cacheGet(readerCacheKey(mode, paperTrack));
     if (!data && mode === 'papers' && paperTrack !== 'creative') {
-      data = JSON.parse(localStorage.getItem('pdv2:readerCache:papers') || 'null');
+      data = await cacheGet('pdv2:readerCache:papers');
     }
-    if (!data?.items?.length) return null;
-    return {
-      ...data,
-      items: data.items.map(item => ({ ...item, pubDate: new Date(item.pubDate) })),
-      fresh: Date.now() - Number(data.at || 0) < CACHE_TTL
-    };
-  } catch { return null; }
+    return restoreReaderCache(data);
+  } catch {
+    return null;
+  }
 }
 
 function compactCacheItem(item) {
@@ -62,7 +83,7 @@ function compactCacheItem(item) {
     title: item?.title || '',
     titleJa: item?.titleJa || '',
     link: item?.link || '',
-    description: String(item?.description || '').slice(0, 5000),
+    description: String(item?.description || '').slice(0, 8000),
     source: item?.source || '',
     author: item?.author || '',
     feedName: item?.feedName || '',
@@ -72,11 +93,11 @@ function compactCacheItem(item) {
   };
 }
 
-function writeCache(mode, items, paperTrack = 'core') {
+async function writeCache(mode, items, paperTrack = 'core') {
   const compact = (Array.isArray(items) ? items : [])
-    .slice(0, mode === 'papers' ? 220 : 260)
+    .slice(0, mode === 'papers' ? 300 : 350)
     .map(compactCacheItem);
-  safeSetItem(readerCacheKey(mode, paperTrack), JSON.stringify({ at: Date.now(), items: compact }));
+  await cacheSet(readerCacheKey(mode, paperTrack), { at: Date.now(), items: compact });
 }
 
 async function translatePaperTitles(items) {
@@ -86,7 +107,7 @@ async function translatePaperTitles(items) {
   if (!english.length) return items;
 
   let local = {};
-  try { local = JSON.parse(localStorage.getItem('pdv2:paperTitleJa') || '{}'); } catch {}
+  try { local = (await cacheGet('pdv2:paperTitleJa')) || {}; } catch {}
   english.forEach(item => { if (local[item.title]) item.titleJa = local[item.title]; });
   const missing = english.filter(item => !item.titleJa).slice(0, 36);
   if (!missing.length) return items;
@@ -106,7 +127,7 @@ async function translatePaperTitles(items) {
       });
       const keys = Object.keys(local);
       if (keys.length > 900) keys.slice(0, keys.length - 900).forEach(key => delete local[key]);
-      safeSetItem('pdv2:paperTitleJa', JSON.stringify(local));
+      cacheSet('pdv2:paperTitleJa', local).catch(() => {});
       window.dispatchEvent(new CustomEvent('pdv2:paper-titles'));
     })
     .catch(() => {});
@@ -210,7 +231,7 @@ export async function loadReader(mode, {
   const feeds = selectedFeed && mode !== 'papers'
     ? allFeeds.filter(feed => feed.name === selectedFeed)
     : allFeeds;
-  const cached = readReaderCache(mode, normalizedTrack);
+  const cached = await readReaderCache(mode, normalizedTrack);
 
   let visibleCached = [];
   if (cached?.items?.length) {
@@ -245,7 +266,7 @@ export async function loadReader(mode, {
       try {
         const research = await researchPromise;
         collected.push(...research);
-        onProgress?.(dedupeSort([...collected, ...(force ? visibleCached : [])]), { stage: 'technology-research', paperTrack: normalizedTrack });
+        onProgress?.(dedupeSort([...collected, ...visibleCached]), { stage: 'technology-research', paperTrack: normalizedTrack });
       } catch (error) {
         failures.push({ feed: researchLabel, error });
       }
@@ -273,14 +294,15 @@ export async function loadReader(mode, {
     await Promise.all(workers);
   }
 
-  const combined = failures.length && visibleCached.length
-    ? [...collected, ...visibleCached]
-    : collected;
+  // 論文系は更新ごとに過去履歴を全消しせず、IndexedDBの既存履歴とマージする。
+  // 技術リサーチが一時的に5件しか返らない場合も、直近の有効履歴を維持できる。
+  const shouldMergeCached = visibleCached.length && (failures.length > 0 || mode === 'papers');
+  const combined = shouldMergeCached ? [...collected, ...visibleCached] : collected;
   let items = arrangeModeItems(combined, mode, feeds, mode === 'papers' ? 300 : 350);
   if (mode === 'papers') items = await translatePaperTitles(items);
 
   if (items.length) {
-    if (!selectedFeed || mode === 'papers') writeCache(mode, items, normalizedTrack);
+    if (!selectedFeed || mode === 'papers') await writeCache(mode, items, normalizedTrack);
     return { items, failures, refreshed: force && collected.length > 0, stale: force && collected.length === 0, paperTrack: normalizedTrack };
   }
 
