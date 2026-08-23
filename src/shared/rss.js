@@ -1,4 +1,5 @@
 import { relativeTime } from './time.js';
+import { articleDateDebug, readerTable, readerTrace } from './reader-debug.js';
 
 const KNOWN_RSS_SOURCE = [
   [/^https?:\/\/rss\.itmedia\.co\.jp\/rss\/2\.0\/monoist\.xml(?:\?|$)/i, 'monoist'],
@@ -139,16 +140,20 @@ function plainText(value='') {
 export function parseFeed(xmlText, feedName='') {
   const doc=new DOMParser().parseFromString(xmlText,'text/xml');
   if(doc.querySelector('parsererror')) throw new Error('XMLパースエラー');
-  const items=[...doc.querySelectorAll('item, entry')];
-  return items.map((item,index)=>{
+  const nodes=[...doc.querySelectorAll('item, entry')];
+  const items=nodes.map((item,index)=>{
     const title=text(item,['title'])||'無題';
-    let link=text(item,['link','guid']);
+    const guid=text(item,['guid','id']);
+    let link=text(item,['link']);
     if(!link){
       const alternate=[...item.querySelectorAll('link[href]')].find(node=>{const rel=String(node.getAttribute('rel')||'').toLowerCase();return !rel||rel==='alternate';});
-      link=alternate?.getAttribute('href')||'';
+      link=alternate?.getAttribute('href')||guid||'';
     }
     const dateRaw=text(item,['pubDate','published','updated','dc\\:date','date']);
-    const date=new Date(dateRaw);
+    const parsedDate=new Date(dateRaw);
+    const publishedTimestamp=parsedDate.getTime();
+    const dateValid=Number.isFinite(publishedTimestamp) && publishedTimestamp > 0;
+    const pubDate=dateValid ? parsedDate : new Date(0);
     const rawDescription=rawDescriptionOf(item);
     const description=plainText(rawDescription)||title;
     const source=text(item,['source','category'])||feedName;
@@ -156,12 +161,21 @@ export function parseFeed(xmlText, feedName='') {
     const images=mediaImagesOf(item,rawDescription);
     const videoMedia=mediaVideosOf(item,rawDescription);
     return {
-      id:`${link||title}-${dateRaw||index}`,title,link,description,rawDescription,source,author,feedName,
+      id:`${link||guid||title}-${dateRaw||index}`,
+      guid,
+      title,link,description,rawDescription,source,author,feedName,
       image:images[0]||'',images,video:videoMedia.urls[0]||'',videos:videoMedia.urls,videoPosters:videoMedia.posters,
-      pubDate:Number.isNaN(date.getTime())?new Date():date,
-      relative:relativeTime(Number.isNaN(date.getTime())?Date.now():date)
+      pubDate,
+      originalDate:dateRaw,
+      normalizedDate:dateValid ? parsedDate.toISOString() : '',
+      publishedTimestamp:dateValid ? publishedTimestamp : 0,
+      dateValid,
+      relative:dateValid ? relativeTime(pubDate) : '日付不明'
     };
   });
+  readerTrace('rss-parsed', { feed: feedName || 'RSS', count: items.length });
+  readerTable(`rss-dates:${feedName || 'RSS'}`, items.map(articleDateDebug));
+  return items;
 }
 
 function targetForFeed(url='') {
@@ -186,6 +200,8 @@ export async function fetchFeed(feed, { force = false, timeoutMs = 35_000 } = {}
   const controller=new AbortController();
   const wait=Math.max(12_000,Math.min(50_000,Number(timeoutMs)||35_000));
   const timer=setTimeout(()=>controller.abort(),wait);
+  const started=performance.now();
+  readerTrace('rss-fetch-start', { feed: feed?.name || '', url, force });
   try {
     const response=await fetch(target,{cache:'no-store',signal:controller.signal,headers:{Accept:'application/rss+xml,application/atom+xml,application/xml,text/xml,*/*;q=.2'}});
     if(!response.ok) {
@@ -199,18 +215,48 @@ export async function fetchFeed(feed, { force = false, timeoutMs = 35_000 } = {}
     }
     const xml=await response.text();
     if(!/<(?:rss|feed|rdf:RDF)\b/i.test(xml.slice(0,1000))) throw new Error('RSSではない応答を受信しました');
-    return parseFeed(xml,feed.name||'');
+    const items=parseFeed(xml,feed.name||'');
+    readerTrace('rss-fetch-finish', { feed: feed?.name || '', count: items.length, elapsedMs: Math.round(performance.now()-started) });
+    return items;
   } catch(error) {
+    readerTrace('rss-fetch-error', { feed: feed?.name || '', error: String(error?.message || error), elapsedMs: Math.round(performance.now()-started) });
     if(error?.name==='AbortError') throw new Error(`RSS取得がタイムアウトしました (${Math.round(wait/1000)}秒)`);
     throw error;
   } finally { clearTimeout(timer); }
 }
 
+function normalizedDedupeKey(item={}) {
+  const raw=String(item?.link||'').trim();
+  if(raw){
+    try{
+      const url=new URL(raw,location.href);
+      url.hash='';
+      for(const key of [...url.searchParams.keys()]) if(/^utm_|^(?:fbclid|gclid|yclid)$/i.test(key)) url.searchParams.delete(key);
+      return `url:${url.href.toLowerCase()}`;
+    }catch{return `url:${raw.toLowerCase()}`;}
+  }
+  const title=String(item?.title||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const source=String(item?.feedName||item?.source||'').trim().toLowerCase();
+  const stamp=Number(item?.publishedTimestamp)||new Date(item?.pubDate||0).getTime()||0;
+  return `fallback:${source}|${title}|${stamp}`;
+}
+
+function articleTimestamp(item={}) {
+  const explicit=Number(item?.publishedTimestamp);
+  if(Number.isFinite(explicit)&&explicit>0) return explicit;
+  const parsed=new Date(item?.pubDate||0).getTime();
+  return Number.isFinite(parsed)&&parsed>0 ? parsed : 0;
+}
+
 export function dedupeSort(items,limit=250) {
+  const input=Array.isArray(items)?items:[];
   const seen=new Set();
-  return items.filter(item=>{
-    const key=(item.link||item.title).toLowerCase();
+  const deduped=input.filter(item=>{
+    const key=normalizedDedupeKey(item);
     if(seen.has(key)) return false;
     seen.add(key); return true;
-  }).sort((a,b)=>b.pubDate-a.pubDate).slice(0,limit);
+  }).sort((a,b)=>articleTimestamp(b)-articleTimestamp(a));
+  const output=Number(limit)>0 ? deduped.slice(0,Number(limit)) : deduped;
+  readerTrace('dedupe-sort', { before: input.length, afterDedupe: deduped.length, output: output.length, limit: Number(limit)||0 });
+  return output;
 }
