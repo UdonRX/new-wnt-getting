@@ -2,16 +2,33 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "functions": {
-    "api/*.mjs": {
+    "api/ai.mjs": {
       "maxDuration": 60,
       "includeFiles": "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+    },
+    "api/research.mjs": {
+      "maxDuration": 60
+    },
+    "api/feeds.mjs": {
+      "maxDuration": 60
+    },
+    "api/youtube.mjs": {
+      "maxDuration": 60
     }
   },
   "rewrites": [
-    {
-      "source": "/api/paper-titles",
-      "destination": "/api/summary?paperTitles=1"
-    }
+    { "source": "/api/chat", "destination": "/api/ai?__route=chat" },
+    { "source": "/api/rank-items", "destination": "/api/ai?__route=rank-items" },
+    { "source": "/api/summary", "destination": "/api/ai?__route=summary" },
+    { "source": "/api/paper-titles", "destination": "/api/ai?__route=summary&paperTitles=1" },
+    { "source": "/api/creative-papers-feed", "destination": "/api/research?__route=creative-papers-feed" },
+    { "source": "/api/papers-feed", "destination": "/api/research?__route=papers-feed" },
+    { "source": "/api/wikipedia", "destination": "/api/research?__route=wikipedia" },
+    { "source": "/api/news-feed", "destination": "/api/feeds?__route=news-feed" },
+    { "source": "/api/rss", "destination": "/api/feeds?__route=rss" },
+    { "source": "/api/twitch-eventsub", "destination": "/api/feeds?__route=twitch-eventsub" },
+    { "source": "/api/twitch-feed", "destination": "/api/feeds?__route=twitch-feed" },
+    { "source": "/api/youtube-feed", "destination": "/api/youtube" }
   ],
   "headers": [
     {

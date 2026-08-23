@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { prepareSummaryBody } from '../api/summary.mjs';
+import { prepareSummaryBody } from '../server/summary.mjs';
 import { generateStructuredSingle } from '../lib/summary-dispatch-v2195.mjs';
 
 const rssDescription = [
