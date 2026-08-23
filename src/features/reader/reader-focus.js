@@ -1,13 +1,13 @@
 import { el } from '../../shared/dom.js';
 import { shortDate } from '../../shared/time.js';
+import { readerTrace } from '../../shared/reader-debug.js';
+import { articleIdentity, clampReaderIndex, nextPrefetchIndices, readerFlowSnapshot } from './reader-flow.js';
 
 const summaryCache = new Map();
 const summaryPromises = new Map();
-const batchItemPromises = new Map();
 const summaryProgress = new WeakMap();
 const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2180';
 const SUMMARY_STORAGE_LIMIT = 84;
-const SUMMARY_CHUNK_SIZE = 10;
 const IMPORTANT_RE = /(?:[+＋\-−]?\d[\d,.]*(?:\.\d+)?\s*(?:%|％|倍|兆円|億円|万円|円|ドル|人|件|台|社|年|か月|ヶ月|日|時間|分|秒|nm|μm|mm|cm|km|℃|°C|GW|MW|kW|GWh|MWh|kWh|Wh|TB|GB|MB)|世界初|国内初|業界初|史上初|世界最大|国内最大|世界最小|国内最小|過去最高|過去最低|最高値|最安値|初めて|新記録|首位|No\.?\s*1|突破|倍増|半減)/giu;
 const GENERIC_SUMMARY_RE = /(?:についての記事です|について紹介(?:する|しています)|背景や特徴.*(?:整理|確認)|影響や今後.*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?で確認|要約を(?:取得|作成)できません|詳しくは元記事|続報の確認が必要)/i;
 const BROKEN_EDGE_RE = /^(?:[」』）】〉》]|[\s]*[!?！？])|[「『（【〈《]\s*$/;
@@ -55,11 +55,12 @@ function looksMostlyEnglish(value = '') {
   return latin >= 24 && latin > ja * 1.35;
 }
 function summaryModeOf(item, fallback = '') { return String(item?._readerMode || fallback || '').trim(); }
-function focusItemKey(item) { return String(item?.id || item?.link || item?.url || `${item?.source || ''}|${item?.title || ''}`); }
+function focusItemKey(item) { return articleIdentity(item); }
 
 function itemDateLabel(item) {
   const description = String(item?.description || '');
   const yearOnly = description.match(/(?:公開年|出版年):\s*(\d{4})/)?.[1];
+  if (item?.dateValid === false || Number(item?.publishedTimestamp) === 0) return '日付不明';
   if (/日付精度:\s*不明/.test(description)) return '日付不明';
   if (/日付精度:\s*年/.test(description) && yearOnly) return `${yearOnly}年`;
   return shortDate(item?.pubDate);
@@ -156,6 +157,7 @@ function summaryPayload(item, mode = '') {
   const activeMode = summaryModeOf(item, mode) || 'auto';
   const description = stripHtml(item?.description).slice(0, 16_000);
   return {
+    articleId: focusItemKey(item),
     url: item?.link,
     title: item?.title,
     description,
@@ -169,15 +171,27 @@ function summaryPayload(item, mode = '') {
   };
 }
 
-async function fetchSummary(item, { force = false, mode = '' } = {}) {
+async function fetchSummary(item, { force = false, mode = '', purpose = 'active' } = {}) {
   const activeMode = summaryModeOf(item, mode);
   const key = summaryKey(item, activeMode);
-  if (!force && summaryCache.has(key)) return summaryCache.get(key);
-  if (!force && summaryPromises.has(key)) return summaryPromises.get(key);
+  const articleId = focusItemKey(item);
+  if (!force && summaryCache.has(key)) {
+    readerTrace('summary-cache-hit', { articleId, title: item?.title || '', mode: activeMode, purpose });
+    return summaryCache.get(key);
+  }
+  if (!force && summaryPromises.has(key)) {
+    readerTrace('summary-inflight-reuse', { articleId, title: item?.title || '', mode: activeMode, purpose });
+    return summaryPromises.get(key);
+  }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), activeMode === 'papers' ? 24_000 : 19_000);
-  const request = fetch('/api/summary', {
+  const waitMs = activeMode === 'papers' ? 32_000 : 28_000;
+  const timeout = setTimeout(() => controller.abort(), waitMs);
+  const started = performance.now();
+  readerTrace('summary-request-start', { articleId, title: item?.title || '', mode: activeMode, purpose, timeoutMs: waitMs });
+
+  let request;
+  request = fetch('/api/summary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: controller.signal,
@@ -185,10 +199,33 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
     body: JSON.stringify(summaryPayload(item, activeMode))
   }).then(async response => {
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !isUsableSummary(data)) return unavailableSummary(item, data);
+    const usable = response.ok && isUsableSummary(data);
+    readerTrace('summary-request-finish', {
+      articleId,
+      title: item?.title || '',
+      mode: activeMode,
+      purpose,
+      status: response.status,
+      provider: String(data?.provider || ''),
+      model: String(data?.model || ''),
+      usable,
+      elapsedMs: Math.round(performance.now() - started),
+      fallbackReason: String(data?.fallbackReason || '')
+    });
+    if (!usable) return unavailableSummary(item, data);
     storeSummary(item, activeMode, data);
     return data;
-  }).catch(() => unavailableSummary(item)).finally(() => {
+  }).catch(error => {
+    readerTrace('summary-request-error', {
+      articleId,
+      title: item?.title || '',
+      mode: activeMode,
+      purpose,
+      error: String(error?.name || 'Error') + ':' + String(error?.message || error),
+      elapsedMs: Math.round(performance.now() - started)
+    });
+    return unavailableSummary(item);
+  }).finally(() => {
     clearTimeout(timeout);
     if (summaryPromises.get(key) === request) summaryPromises.delete(key);
   });
@@ -197,56 +234,17 @@ async function fetchSummary(item, { force = false, mode = '' } = {}) {
   return request;
 }
 
-export function prewarmSummaryChunk(items, { startIndex = 1, count = 9, summaryMode = '' } = {}) {
+// Kept as a public compatibility function because reader.js calls it.
+// v2.19.5 intentionally limits prefetch to ONE article and uses the normal
+// article-keyed single-summary path. No 10-item Gemini batch is created here.
+export function prewarmSummaryChunk(items, { startIndex = 1, count = 1, summaryMode = '' } = {}) {
   const rows = Array.isArray(items) ? items : [];
-  const slice = rows.slice(Math.max(0, startIndex), Math.max(0, startIndex) + Math.min(SUMMARY_CHUNK_SIZE, Math.max(0, count)));
-  const waiting = [];
-  const fresh = [];
-
-  slice.forEach(item => {
-    const mode = summaryModeOf(item, summaryMode);
-    const key = summaryKey(item, mode);
-    const cached = cachedSummary(item, mode);
-    if (cached) { waiting.push(Promise.resolve(cached)); return; }
-    const inFlight = batchItemPromises.get(key);
-    if (inFlight) { waiting.push(inFlight); return; }
-    fresh.push({ item, mode, key, payload: summaryPayload(item, mode) });
-  });
-
-  if (!fresh.length) return Promise.all(waiting);
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 28_000);
-  const batch = fetch('/api/summary?batch=1&client=reader-focus', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    cache: 'no-store',
-    signal: controller.signal,
-    body: JSON.stringify({ items: fresh.map(row => row.payload) })
-  }).then(async response => {
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !Array.isArray(data?.results)) return [];
-    return data.results;
-  }).catch(error => {
-    console.warn('[reader-summary-batch]', error?.message || error);
-    return [];
-  }).finally(() => clearTimeout(timer));
-
-  fresh.forEach((row, position) => {
-    let itemPromise;
-    itemPromise = batch.then(results => {
-      const result = results.find(entry => Number(entry?.index) === position) || results[position];
-      const summary = result?.summary;
-      if (!storeSummary(row.item, row.mode, summary)) return null;
-      return summary;
-    }).finally(() => {
-      if (batchItemPromises.get(row.key) === itemPromise) batchItemPromises.delete(row.key);
-    });
-    batchItemPromises.set(row.key, itemPromise);
-    waiting.push(itemPromise);
-  });
-
-  return Promise.all(waiting);
+  const start = clampReaderIndex(startIndex, rows.length || 1);
+  if (!rows.length || start >= rows.length || Number(count) <= 0) return Promise.resolve([]);
+  const item = rows[start];
+  const mode = summaryModeOf(item, summaryMode);
+  readerTrace('summary-prefetch', { index: start, articleId: focusItemKey(item), title: item?.title || '', requestedCount: Number(count) || 0, actualCount: 1 });
+  return Promise.all([fetchSummary(item, { mode, purpose: 'prefetch' })]);
 }
 
 readStoredSummaries();
@@ -302,7 +300,8 @@ function unavailableSummary(item, serverResult = null) {
       { label: '背景/特徴', text: 'タイトルだけから内容を推測する表示は行わないようにしています。' },
       { label: '影響/展望', text: '元記事を開くと、取得できていない詳細を確認できます。' }
     ],
-    provider: 'unavailable', cacheable: false
+    provider: 'unavailable', cacheable: false,
+    fallbackReason: String(serverResult?.fallbackReason || '')
   };
 }
 
@@ -392,8 +391,12 @@ function startProgress(card) {
   const steps = [[180,20,'RSS本文を確認中'],[650,36,'元記事本文を取得中'],[1700,54,'具体的な事実を抽出中'],[3600,70,'結論・背景・影響へ整理中'],[6500,84,'日本語タイトルと要約を仕上げ中'],[10000,93,'品質を確認中']];
   summaryProgress.set(card, { timers: steps.map(([delay, value, text]) => setTimeout(() => setProgress(card, value, text), delay)) });
 }
-function setCardSummary(card, item, summary) {
-  if (!card?.isConnected) return;
+function setCardSummary(card, item, summary, expectedArticleId = focusItemKey(item)) {
+  if (!card?.isConnected) return false;
+  if (card.dataset.articleId && card.dataset.articleId !== expectedArticleId) {
+    readerTrace('summary-apply-skipped', { expectedArticleId, cardArticleId: card.dataset.articleId, provider: String(summary?.provider || '') });
+    return false;
+  }
   stopProgress(card);
   const summaryNode = card.querySelector('[data-reader-summary]');
   const title = card.querySelector('[data-reader-title]');
@@ -401,6 +404,8 @@ function setCardSummary(card, item, summary) {
   if (summaryNode) renderSummaryBlock(summaryNode, summary);
   card.querySelector('[data-reader-progress]')?.remove();
   card.dataset.summaryProvider = String(summary?.provider || '');
+  readerTrace('summary-applied', { articleId: expectedArticleId, title: item?.title || '', provider: String(summary?.provider || '') });
+  return true;
 }
 
 function buildHero(item, index, label, onList, card) {
@@ -423,7 +428,8 @@ function buildHero(item, index, label, onList, card) {
 
 function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   const mode = summaryModeOf(item, summaryMode);
-  const card = el('section', { class: 'reader-swipe-card reader-story-card', 'data-index': String(index), 'data-key': focusItemKey(item) || String(index) });
+  const articleId = focusItemKey(item) || String(index);
+  const card = el('section', { class: 'reader-swipe-card reader-story-card', 'data-index': String(index), 'data-key': articleId, 'data-article-id': articleId });
   if (sharedKey && sharedKey === focusItemKey(item)) card.style.viewTransitionName = 'reader-shared-card';
   const cached = cachedSummary(item, mode);
   const initial = cached || pendingSummary(item);
@@ -435,7 +441,7 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   if (!cached) content.append(progressMarkup());
   const original = el('a', { class: 'reader-story-open', href: item?.link || '#', target: '_blank', rel: 'noopener noreferrer', text: '元記事を読む ↗' });
   card.append(buildHero(item, index, label, onList, card), content, el('footer', { class: 'reader-story-actions' }, [original]));
-  if (cached) card.dataset.summaryProvider = String(cached.provider || 'cache');
+  card.dataset.summaryProvider = String(cached?.provider || (cached ? 'cache' : 'pending'));
   return card;
 }
 
@@ -466,34 +472,57 @@ function installHorizontalSwipe(container, { onPrevFeed, onNextFeed }) {
 }
 
 function loadCardSummary(card, item, mode) {
-  if (!card?.isConnected) return;
+  if (!card?.isConnected) return Promise.resolve(null);
+  const expectedArticleId = focusItemKey(item);
+  card.dataset.articleId = expectedArticleId;
   const cached = cachedSummary(item, mode);
-  if (cached) { setCardSummary(card, item, cached); return; }
+  if (cached) {
+    setCardSummary(card, item, cached, expectedArticleId);
+    return Promise.resolve(cached);
+  }
 
   startProgress(card);
   if (looksMostlyEnglish(item?.title || '') && !plainText(item?.titleJa)) {
     translateTitleToJapanese(item).then(translated => {
-      if (!translated || !card.isConnected || (card.dataset.summaryProvider && card.dataset.summaryProvider !== 'pending')) return;
+      if (!translated || !card.isConnected || card.dataset.articleId !== expectedArticleId) return;
+      if (card.dataset.summaryProvider && card.dataset.summaryProvider !== 'pending') return;
       const title = card.querySelector('[data-reader-title]');
       if (title) setRichText(title, compactHeadline({ ...item, titleJa: translated }));
     }).catch(() => {});
   }
 
-  const key = summaryKey(item, mode);
-  const pendingBatch = batchItemPromises.get(key);
-  const source = pendingBatch
-    ? pendingBatch.then(summary => summary || fetchSummary(item, { mode }))
-    : fetchSummary(item, { mode });
-
-  source.then(summary => {
-    if (!card.isConnected) return;
+  // The visible article ALWAYS uses its own article-keyed single-summary path.
+  // It never waits for a batch/prewarm promise.
+  return fetchSummary(item, { mode, purpose: 'active' }).then(summary => {
+    if (!card.isConnected || card.dataset.articleId !== expectedArticleId) {
+      readerTrace('summary-stale-result', { expectedArticleId, cardArticleId: card.dataset.articleId || '', title: item?.title || '' });
+      return summary;
+    }
     if (isUsableSummary(summary)) {
-      setCardSummary(card, item, summary);
-      return;
+      setCardSummary(card, item, summary, expectedArticleId);
+      return summary;
     }
     setProgress(card, 100, '本文取得を完了');
-    setTimeout(() => { if (card.isConnected) setCardSummary(card, item, summary); }, 100);
+    setTimeout(() => {
+      if (card.isConnected && card.dataset.articleId === expectedArticleId) setCardSummary(card, item, summary, expectedArticleId);
+    }, 100);
+    return summary;
   });
+}
+
+function nearestCardIndex(feed, cards) {
+  if (!cards.length) return 0;
+  const height = Number(feed.clientHeight || 0);
+  if (height <= 1) return 0;
+  const estimated = clampReaderIndex(Math.round(Math.max(0, feed.scrollTop) / height), cards.length);
+  let best = estimated;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of [estimated - 1, estimated, estimated + 1]) {
+    if (candidate < 0 || candidate >= cards.length) continue;
+    const distance = Math.abs(Number(cards[candidate]?.offsetTop || 0) - Math.max(0, feed.scrollTop));
+    if (distance < bestDistance) { best = candidate; bestDistance = distance; }
+  }
+  return best;
 }
 
 export function mountFocus(host, {
@@ -508,7 +537,7 @@ export function mountFocus(host, {
   sharedKey = ''
 }) {
   const rows = Array.isArray(items) ? items : [];
-  let index = Math.max(0, Math.min(Number(initialIndex) || 0, Math.max(0, rows.length - 1)));
+  let index = clampReaderIndex(initialIndex, rows.length);
   let activeIndex = -1;
   let destroyed = false;
   let scrollRaf = 0;
@@ -518,43 +547,53 @@ export function mountFocus(host, {
     return { destroy(){}, go(){} };
   }
 
+  readerTrace('focus-mount', readerFlowSnapshot(rows, index));
   const feed = el('div', { class: 'reader-swipe-feed', tabindex: '0' });
   const cards = rows.map((item, i) => buildFeedCard(item, i, { label, onList, summaryMode, sharedKey: sharedKey || focusItemKey(rows[index]) }));
   cards.forEach(card => feed.append(card));
   host.replaceChildren(feed);
 
-  const warmRange = (startIndex, count) => {
-    if (destroyed || startIndex >= rows.length) return;
-    prewarmSummaryChunk(rows, { startIndex, count, summaryMode }).then(() => {
+  const warmNext = currentIndex => {
+    if (destroyed) return;
+    const [nextIndex] = nextPrefetchIndices(currentIndex, rows.length, 1);
+    if (nextIndex === undefined) return;
+    prewarmSummaryChunk(rows, { startIndex: nextIndex, count: 1, summaryMode }).then(() => {
       if (destroyed) return;
-      const end = Math.min(rows.length, startIndex + count);
-      for (let i = startIndex; i < end; i += 1) {
-        const summary = cachedSummary(rows[i], summaryModeOf(rows[i], summaryMode));
-        if (summary) setCardSummary(cards[i], rows[i], summary);
-      }
+      const item = rows[nextIndex];
+      const summary = cachedSummary(item, summaryModeOf(item, summaryMode));
+      if (summary) setCardSummary(cards[nextIndex], item, summary, focusItemKey(item));
     }).catch(() => {});
   };
 
   const setActive = next => {
     if (destroyed) return;
-    const nextIndex = Math.max(0, Math.min(Number(next) || 0, rows.length - 1));
+    const nextIndex = clampReaderIndex(next, rows.length);
     if (activeIndex === nextIndex) return;
+    const previousIndex = activeIndex;
     activeIndex = nextIndex;
     index = nextIndex;
     cards.forEach((card, i) => card.classList.toggle('is-active', i === index));
-    onIndexChange?.(index, rows[index]);
-    loadCardSummary(cards[index], rows[index], summaryModeOf(rows[index], summaryMode));
+    const activeItem = rows[index];
+    readerTrace('swipe-index', {
+      from: previousIndex,
+      to: index,
+      totalArticles: rows.length,
+      currentArticleId: focusItemKey(activeItem),
+      currentTitle: activeItem?.title || ''
+    });
+    onIndexChange?.(index, activeItem);
 
-    const chunkStart = Math.floor(index / SUMMARY_CHUNK_SIZE) * SUMMARY_CHUNK_SIZE;
-    if (index - chunkStart >= 4) warmRange(chunkStart + SUMMARY_CHUNK_SIZE, SUMMARY_CHUNK_SIZE);
+    const requestedIndex = index;
+    loadCardSummary(cards[index], activeItem, summaryModeOf(activeItem, summaryMode))
+      .finally(() => {
+        if (!destroyed && activeIndex === requestedIndex) warmNext(requestedIndex);
+      });
   };
 
   const syncFromScroll = () => {
     scrollRaf = 0;
     if (destroyed) return;
-    const height = Number(feed.clientHeight || 0);
-    if (height <= 1) return;
-    setActive(Math.round(Math.max(0, feed.scrollTop) / height));
+    setActive(nearestCardIndex(feed, cards));
   };
   const onScroll = () => {
     if (scrollRaf) return;
@@ -566,14 +605,8 @@ export function mountFocus(host, {
   if ('onscrollend' in feed) feed.addEventListener('scrollend', onScrollEnd, { passive: true });
   const detachHorizontal = installHorizontalSwipe(feed, { onPrevFeed, onNextFeed });
 
-  // Initial recommendation feed: article 1 uses the normal single-summary path,
-  // while articles 2-10 are prepared as one Gemini batch in the background.
-  if (index === 0) warmRange(1, Math.min(9, rows.length - 1));
-  else {
-    const start = Math.floor(index / SUMMARY_CHUNK_SIZE) * SUMMARY_CHUNK_SIZE;
-    warmRange(start, SUMMARY_CHUNK_SIZE);
-  }
-
+  // No 10-item initial batch. The active article is loaded first; once it
+  // settles, only the immediate next article is prefetched.
   requestAnimationFrame(() => {
     cards[index]?.scrollIntoView({ block: 'start', behavior: 'auto' });
     setActive(index);
@@ -589,7 +622,7 @@ export function mountFocus(host, {
       detachHorizontal();
     },
     go(nextIndex) {
-      const next = Math.max(0, Math.min(Number(nextIndex) || 0, rows.length - 1));
+      const next = clampReaderIndex(nextIndex, rows.length);
       cards[next]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       setActive(next);
     },
