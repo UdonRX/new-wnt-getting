@@ -203,7 +203,7 @@ export async function fetchFeed(feed, { force = false, timeoutMs = 35_000 } = {}
   const started=performance.now();
   readerTrace('rss-fetch-start', { feed: feed?.name || '', url, force });
   try {
-    const response=await fetch(target,{cache:'no-store',signal:controller.signal,headers:{Accept:'application/rss+xml,application/atom+xml,application/xml,text/xml,*/*;q=.2'}});
+    const response=await fetch(target,{cache:force?'no-store':'default',signal:controller.signal,headers:{Accept:'application/rss+xml,application/atom+xml,application/xml,text/xml,*/*;q=.2'}});
     if(!response.ok) {
       let detail='';
       try {

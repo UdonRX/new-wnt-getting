@@ -3,18 +3,22 @@ import { fetchFeed, parseFeed, dedupeSort } from '../../shared/rss.js';
 import { cacheGet, cacheSet, migrateLargeLocalCaches } from '../../shared/storage.js';
 
 const CACHE_TTL = 6 * 60 * 60 * 1000;
+let technologyResearchInFlight = null;
 
 // 旧版でlocalStorageに残った巨大な記事キャッシュを、起動後すぐIndexedDBへ逃がす。
 migrateLargeLocalCaches().catch(() => {});
 
 async function fetchTechnologyResearch(force = false) {
-  const fetchOnce = async refresh => {
+  if (technologyResearchInFlight) return technologyResearchInFlight;
+
+  const request = (async () => {
+    const refresh = Boolean(force);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45_000);
     try {
       const target = `/api/summary?technologyResearch=1${refresh ? '&refresh=1' : ''}`;
       const response = await fetch(target, {
-        cache: 'no-store',
+        cache: refresh ? 'no-store' : 'default',
         signal: controller.signal,
         headers: { Accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }
       });
@@ -31,16 +35,15 @@ async function fetchTechnologyResearch(force = false) {
     } finally {
       clearTimeout(timer);
     }
-  };
+  })();
 
-  const first = await fetchOnce(force);
-  // 5分類×2件を期待しているため、部分応答のときだけ1回追加取得して履歴を補う。
-  if (first.length >= 10) return first;
+  technologyResearchInFlight = request;
   try {
-    const second = await fetchOnce(true);
-    return dedupeSort([...first, ...second], 20);
-  } catch {
-    return first;
+    // 部分応答はloadReader側でIndexedDB履歴とマージする。
+    // 件数不足を理由に同じ外部API/Geminiを直後に再実行しない。
+    return await request;
+  } finally {
+    if (technologyResearchInFlight === request) technologyResearchInFlight = null;
   }
 }
 

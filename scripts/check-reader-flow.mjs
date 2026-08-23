@@ -51,5 +51,18 @@ assert.equal(focusSource.includes('pendingBatch'), false, '表示中記事が先
 assert.match(focusSource, /purpose:\s*'active'/, '表示中記事は単発summary経路を使う');
 assert.match(focusSource, /actualCount:\s*1/, '先読みは1記事に制限');
 
+const readerDataSource = fs.readFileSync(new URL('../src/features/reader/reader-data.js', import.meta.url), 'utf8');
+assert.match(readerDataSource, /technologyResearchInFlight/, '技術リサーチの同時取得を1本へ集約する');
+assert.equal(readerDataSource.includes('const second = await fetchOnce(true)'), false, '件数不足だけで技術リサーチを即時再取得しない');
+assert.match(readerDataSource, /cache:\s*refresh\s*\?\s*'no-store'\s*:\s*'default'/, '技術リサーチは通常取得でHTTP/CDNキャッシュを許可する');
+
+const rssSource = fs.readFileSync(new URL('../src/shared/rss.js', import.meta.url), 'utf8');
+assert.match(rssSource, /cache:\s*force\s*\?\s*'no-store'\s*:\s*'default'/, '通常RSS取得はキャッシュを利用し手動更新時だけ破棄する');
+
+const technologySource = fs.readFileSync(new URL('../lib/technology-source-collectors.mjs', import.meta.url), 'utf8');
+assert.match(technologySource, /VirtualConsole/, 'Science Portal HTML解析でjsdom内部CSSエラーを標準ログへ流さない');
+assert.match(technologySource, /stripStyleBlocks/, 'Science Portal HTML解析前にstyleブロックを除去する');
+
 console.log('reader 30-article flow regression check: OK');
 console.log('checked boundaries: 8→9→10→11→12 and 18→19→20→21, forward 1→30, reverse 30→1');
+console.log('technology research caching / duplicate fetch / jsdom CSS guards: OK');
