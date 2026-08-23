@@ -21,7 +21,7 @@ const prepared = await prepareSummaryBody({
     return {
       title: 'BBCの元記事タイトル',
       sourceType: 'html',
-      text: 'BBCの元記事本文です。ロシアによるサイバー攻撃や政治工作について具体例を挙げています。イギリス政府は安全保障上の対応を強化しています。今後の外交関係にも影響が及ぶ可能性があります。'
+      text: 'BBCの記事ではロシアによるサイバー攻撃や政治工作について具体例を挙げています。イギリス政府は安全保障上の対応を強化しています。外交関係への影響や今後の対応についても具体的に説明しています。'
     };
   }
 });
@@ -29,7 +29,7 @@ const prepared = await prepareSummaryBody({
 assert.equal(extractorCalls, 1, 'preferFullText / Googleニュースでは元記事取得を必ず試す');
 assert.equal(prepared.preparedSource, 'article');
 assert.equal(prepared.prepareReason, 'preferred-full-text');
-assert.match(prepared.description, /BBCの元記事本文/);
+assert.match(prepared.description, /BBCの記事では/);
 
 let normalExtractorCalls = 0;
 const normalRss = await prepareSummaryBody({
