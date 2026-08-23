@@ -3,6 +3,9 @@ on:
   push:
     branches:
       - fix/summary-prefetch-state-v2195
+  pull_request:
+    branches:
+      - main
 jobs:
   check:
     runs-on: ubuntu-latest
