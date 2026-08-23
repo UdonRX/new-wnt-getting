@@ -1,4 +1,20 @@
+export function ensureReaderArticleMetadata(item = {}) {
+  if (!item || typeof item !== 'object') return item;
+  if (item.publishedTimestamp === undefined || item.publishedTimestamp === null) {
+    const parsed = new Date(item.pubDate || 0).getTime();
+    item.publishedTimestamp = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+  if (item.dateValid === undefined || item.dateValid === null) {
+    item.dateValid = Number(item.publishedTimestamp) > 0;
+  }
+  if (!item.normalizedDate && Number(item.publishedTimestamp) > 0) {
+    try { item.normalizedDate = new Date(Number(item.publishedTimestamp)).toISOString(); } catch {}
+  }
+  return item;
+}
+
 export function articleIdentity(item = {}) {
+  ensureReaderArticleMetadata(item);
   return String(
     item?.id
     || item?.link
