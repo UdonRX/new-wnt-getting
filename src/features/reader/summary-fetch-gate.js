@@ -4,6 +4,15 @@ import { readerSummaryRequestCoordinator } from './summary-request-coordinator.j
 const nativeFetch = globalThis.fetch?.bind(globalThis);
 const SUMMARY_PATH = '/api/summary';
 const FAILURE_PROVIDERS = new Set(['pending', 'instant', 'insufficient', 'unavailable']);
+// v2.19.7: iOS Safari/PWAのscroll-snap中に一瞬だけarticleIdが外れる場合は、
+// 即座に「取得不能」と確定せず短時間だけ表示位置の安定を待つ。
+const CLIENT_SUPPRESSION_REASONS = new Set([
+  'display-no-longer-active-before-network-start',
+  'prefetch-outside-active-next-slot',
+  'prefetch-active-summary-not-successful'
+]);
+const SAFARI_SNAP_SETTLE_ATTEMPTS = 8;
+const SAFARI_SNAP_SETTLE_INTERVAL_MS = 90;
 let actualRequestCount = 0;
 
 function parseReaderSummary(input, init = {}) {
@@ -99,8 +108,8 @@ function suppressedSnapshot({ articleId, requestId, requestType, reason }) {
   };
 }
 
-function shouldRunAtNetworkStart(articleId, originalType) {
-  const position = currentReaderPosition(articleId);
+function shouldRunAtNetworkStart(articleId, originalType, positionFn = currentReaderPosition) {
+  const position = positionFn(articleId);
   if (position.requestType === 'display') return { run: true, requestType: 'display', position };
   if (position.requestType === 'prefetch') {
     if (!providerUsable(position.activeCard)) {
@@ -114,14 +123,62 @@ function shouldRunAtNetworkStart(articleId, originalType) {
   return { run: false, requestType: 'prefetch', reason: 'prefetch-outside-active-next-slot', position };
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function waitForStableReaderNetworkGate(articleId, originalType, {
+  positionFn = currentReaderPosition,
+  sleepFn = sleep,
+  settleAttempts = SAFARI_SNAP_SETTLE_ATTEMPTS,
+  settleIntervalMs = SAFARI_SNAP_SETTLE_INTERVAL_MS
+} = {}) {
+  let gate = shouldRunAtNetworkStart(articleId, originalType, positionFn);
+  if (gate.run || !CLIENT_SUPPRESSION_REASONS.has(String(gate.reason || ''))) return gate;
+
+  const initialReason = gate.reason;
+  const attempts = Math.max(0, Number(settleAttempts) || 0);
+  const interval = Math.max(0, Number(settleIntervalMs) || 0);
+  for (let index = 0; index < attempts; index += 1) {
+    if (interval > 0) await sleepFn(interval);
+    gate = shouldRunAtNetworkStart(articleId, originalType, positionFn);
+    if (gate.run) {
+      return {
+        ...gate,
+        recoveredFrom: initialReason,
+        settleChecks: index + 1,
+        settleWaitMs: (index + 1) * interval
+      };
+    }
+  }
+  return { ...gate, initialReason, settleChecks: attempts, settleWaitMs: attempts * interval };
+}
+
+function clientSuppressionReason(snapshot) {
+  const data = safeJson(snapshot?.body || '');
+  const reason = String(data?.fallbackReason || '');
+  return CLIENT_SUPPRESSION_REASONS.has(reason) ? reason : '';
+}
+
 async function executeReaderSummary(input, init, parsed, meta) {
-  const gate = shouldRunAtNetworkStart(parsed.articleId, meta.requestType);
+  const gate = await waitForStableReaderNetworkGate(parsed.articleId, meta.requestType);
   if (!gate.run) {
     return suppressedSnapshot({
       articleId: parsed.articleId,
       requestId: meta.requestId,
       requestType: gate.requestType,
       reason: gate.reason
+    });
+  }
+
+  if (gate.recoveredFrom) {
+    readerTrace('gemini-snap-recovered', {
+      requestId: meta.requestId,
+      articleId: parsed.articleId,
+      requestType: gate.requestType,
+      recoveredFrom: gate.recoveredFrom,
+      settleChecks: gate.settleChecks,
+      settleWaitMs: gate.settleWaitMs
     });
   }
 
@@ -208,6 +265,39 @@ async function executeReaderSummary(input, init, parsed, meta) {
   }
 }
 
+function createReaderSummaryRecord(key, input, init, parsed, requestType) {
+  return readerSummaryRequestCoordinator.getOrCreate(key, {
+    articleId: parsed.articleId,
+    requestType
+  }, meta => executeReaderSummary(input, init, parsed, meta));
+}
+
+async function responseWithDisplayRecovery(record, {
+  key,
+  input,
+  init,
+  parsed,
+  requestedAs
+}) {
+  const firstSnapshot = await record.promise;
+  const reason = requestedAs === 'display' ? clientSuppressionReason(firstSnapshot) : '';
+  const position = requestedAs === 'display' ? currentReaderPosition(parsed.articleId) : null;
+  if (!reason || position?.requestType !== 'display') return responseFromSnapshot(firstSnapshot);
+
+  // v2.19.7: prefetch/displayの共有PromiseがSafariのsnap揺れで一度だけ抑止された場合、
+  // その記事が実際に表示中なら同一articleIdを1回だけ再投入する。
+  // 真の本文取得失敗やGemini失敗には再試行しない。
+  readerTrace('gemini-client-suppression-retry', {
+    articleId: parsed.articleId,
+    originalRequestId: record.requestId,
+    reason,
+    requestType: 'display'
+  });
+  const retryRecord = createReaderSummaryRecord(key, input, init, parsed, 'display');
+  const retrySnapshot = await retryRecord.promise;
+  return responseFromSnapshot(retrySnapshot);
+}
+
 if (nativeFetch && typeof window !== 'undefined' && !window.__PDV2_SUMMARY_FETCH_GATE_INSTALLED) {
   window.__PDV2_SUMMARY_FETCH_GATE_INSTALLED = true;
   globalThis.fetch = function coordinatedFetch(input, init = {}) {
@@ -217,10 +307,7 @@ if (nativeFetch && typeof window !== 'undefined' && !window.__PDV2_SUMMARY_FETCH
     const initialPosition = currentReaderPosition(parsed.articleId);
     const initialType = initialPosition.requestType === 'display' ? 'display' : 'prefetch';
     const key = `${parsed.articleId}::${parsed.mode}`;
-    const record = readerSummaryRequestCoordinator.getOrCreate(key, {
-      articleId: parsed.articleId,
-      requestType: initialType
-    }, meta => executeReaderSummary(input, init, parsed, meta));
+    const record = createReaderSummaryRecord(key, input, init, parsed, initialType);
 
     if (record.reused) {
       readerTrace('gemini-inflight-reuse', {
@@ -238,7 +325,13 @@ if (nativeFetch && typeof window !== 'undefined' && !window.__PDV2_SUMMARY_FETCH
         queueSize: readerSummaryRequestCoordinator.size()
       });
     }
-    return record.promise.then(responseFromSnapshot);
+    return responseWithDisplayRecovery(record, {
+      key,
+      input,
+      init,
+      parsed,
+      requestedAs: initialType
+    });
   };
 
   window.__PDV2_SUMMARY_COORDINATOR = {

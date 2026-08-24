@@ -5,6 +5,7 @@ import { connectTwitchChat, hasTwitchChatToken, startTwitchLogin } from './twitc
 let cleanupChat = null;
 let activeHost = null;
 let landscapePanel = null;
+let landscapeViewportCleanup = null;
 
 function stopChat() {
   cleanupChat?.();
@@ -19,17 +20,71 @@ function orientationButtonHtml(landscape) {
   return `<svg class="youtube-orientation-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg><span>${label}</span>`;
 }
 
+// v2.19.7: Safariのdynamic/visual viewportを実測して、90°回転後のTwitch stageを
+// CSSの100dvh推定ではなく実際の表示領域の中央へ固定する。
+function syncLandscapeViewport(panel) {
+  if (!panel) return;
+  const viewport = window.visualViewport;
+  const width = Math.max(1, Number(viewport?.width || window.innerWidth || document.documentElement.clientWidth || 1));
+  const height = Math.max(1, Number(viewport?.height || window.innerHeight || document.documentElement.clientHeight || 1));
+  const left = Number(viewport?.offsetLeft || 0);
+  const top = Number(viewport?.offsetTop || 0);
+  panel.style.setProperty('--pdv2-media-vw', `${width}px`);
+  panel.style.setProperty('--pdv2-media-vh', `${height}px`);
+  panel.style.setProperty('--pdv2-media-left', `${left}px`);
+  panel.style.setProperty('--pdv2-media-top', `${top}px`);
+  panel.style.setProperty('--pdv2-media-cx', `${left + width / 2}px`);
+  panel.style.setProperty('--pdv2-media-cy', `${top + height / 2}px`);
+}
+
+function clearLandscapeViewport(panel) {
+  if (!panel) return;
+  for (const name of ['--pdv2-media-vw','--pdv2-media-vh','--pdv2-media-left','--pdv2-media-top','--pdv2-media-cx','--pdv2-media-cy']) {
+    panel.style.removeProperty(name);
+  }
+}
+
+function stopLandscapeViewportWatch() {
+  landscapeViewportCleanup?.();
+  landscapeViewportCleanup = null;
+}
+
+function startLandscapeViewportWatch(panel) {
+  stopLandscapeViewportWatch();
+  const sync = () => {
+    if (panel?.isConnected && panel.classList.contains('youtube-css-landscape')) syncLandscapeViewport(panel);
+  };
+  window.addEventListener('resize', sync, { passive: true });
+  window.visualViewport?.addEventListener('resize', sync, { passive: true });
+  window.visualViewport?.addEventListener('scroll', sync, { passive: true });
+  sync();
+  landscapeViewportCleanup = () => {
+    window.removeEventListener('resize', sync);
+    window.visualViewport?.removeEventListener('resize', sync);
+    window.visualViewport?.removeEventListener('scroll', sync);
+  };
+}
+
 function setLandscape(panel, on) {
   if (!panel) return;
   if (landscapePanel && landscapePanel !== panel) {
-    landscapePanel.classList.remove('youtube-css-landscape', 'pdv2-landscape-ui-visible');
+    landscapePanel.classList.remove('youtube-css-landscape', 'twitch-css-landscape', 'pdv2-landscape-ui-visible');
+    clearLandscapeViewport(landscapePanel);
+    stopLandscapeViewportWatch();
   }
   const enabled = Boolean(on);
+  // 古いTwitch用回転クラスが残るとpanel全体のrotateと二重になるため必ず除去する。
+  panel.classList.remove('twitch-css-landscape');
   panel.classList.toggle('youtube-css-landscape', enabled);
   landscapePanel = enabled ? panel : null;
   document.documentElement.classList.toggle('media-player-open', enabled);
   document.documentElement.classList.toggle('youtube-landscape-open', enabled);
   document.body.classList.toggle('youtube-landscape-open', enabled);
+  if (enabled) startLandscapeViewportWatch(panel);
+  else {
+    clearLandscapeViewport(panel);
+    stopLandscapeViewportWatch();
+  }
   panel.querySelectorAll('.youtube-orientation-btn').forEach(button => {
     button.innerHTML = orientationButtonHtml(enabled);
     button.setAttribute('aria-label', enabled ? '縦表示に戻す' : '横表示にする');
@@ -42,6 +97,7 @@ export function cleanupTwitchPlayer() {
   clearPlayingTitle();
   stopChat();
   if (landscapePanel) setLandscape(landscapePanel, false);
+  stopLandscapeViewportWatch();
   landscapePanel = null;
   document.documentElement.classList.remove('media-player-open', 'youtube-landscape-open');
   document.body.classList.remove('youtube-landscape-open');
