@@ -2,6 +2,10 @@ const upstreamFetch = globalThis.fetch?.bind(globalThis);
 const SUMMARY_PATH = '/api/summary';
 const FAILURE_PROVIDERS = new Set(['pending', 'instant', 'insufficient', 'unavailable']);
 const INSTANT_RENDER_RETRY_MS = [0, 16, 48, 120, 260];
+const INSTANT_PAYLOAD_LIMIT = 64;
+const instantPayloads = new Map();
+let activeObserver = null;
+let activeRenderQueued = false;
 
 function cleanText(value = '') {
   return String(value || '')
@@ -60,7 +64,7 @@ function extractInstantContent(body = {}) {
       if (rows.length >= 3) break;
     }
   } else {
-    // v2.19.14: Google Newsのような短いRSSも、推測せず読点・区切りで抽出的に分ける。
+    // v2.19.15: 短いRSSも推測せず、本文・タイトル・カテゴリから即時3カードを作る。
     for (const part of description.split(/[、，,:：;；｜|／/・]|\s+[—–-]\s+/g)) {
       pushUnique(rows, seen, part, body);
       if (rows.length >= 2) break;
@@ -121,6 +125,16 @@ function parseSummaryPost(input, init = {}) {
   return articleId ? { articleId, body } : null;
 }
 
+function rememberParsed(parsed) {
+  const articleId = String(parsed?.articleId || '');
+  if (!articleId) return;
+  if (instantPayloads.has(articleId)) instantPayloads.delete(articleId);
+  instantPayloads.set(articleId, parsed);
+  while (instantPayloads.size > INSTANT_PAYLOAD_LIMIT) {
+    instantPayloads.delete(instantPayloads.keys().next().value);
+  }
+}
+
 function activeCardFor(articleId) {
   const card = document.querySelector('.reader-swipe-card.is-active[data-article-id]');
   return String(card?.dataset?.articleId || '') === String(articleId || '') ? card : null;
@@ -141,7 +155,7 @@ function renderInstantUx(parsed) {
   const rows = buildInstantUxRows(parsed.body);
   node.replaceChildren();
   node.classList.remove('is-pending', 'is-unavailable');
-  node.dataset.instantPreview = 'v21914';
+  node.dataset.instantPreview = 'v21915';
 
   for (const row of rows) {
     const wrapper = document.createElement('div');
@@ -184,12 +198,49 @@ function scheduleInstantUx(parsed) {
   }
 }
 
+function renderStoredActiveUx() {
+  if (typeof document === 'undefined') return false;
+  const card = document.querySelector('.reader-swipe-card.is-active[data-article-id]');
+  if (!card || providerUsable(card)) return false;
+  const parsed = instantPayloads.get(String(card.dataset.articleId || ''));
+  return parsed ? renderInstantUx(parsed) : false;
+}
+
+function queueStoredActiveUx() {
+  if (activeRenderQueued) return;
+  activeRenderQueued = true;
+  queueMicrotask(() => {
+    activeRenderQueued = false;
+    renderStoredActiveUx();
+  });
+}
+
+function installActiveObserver() {
+  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined' || activeObserver) return;
+  const root = document.getElementById('app-main') || document.body;
+  if (!root) return;
+  activeObserver = new MutationObserver(mutations => {
+    const activeCardChanged = mutations.some(mutation =>
+      mutation.type === 'attributes'
+      && mutation.attributeName === 'class'
+      && mutation.target?.matches?.('.reader-swipe-card')
+    );
+    if (activeCardChanged) queueStoredActiveUx();
+  });
+  activeObserver.observe(root, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  queueStoredActiveUx();
+}
+
 if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_SUMMARY_INSTANT_UX_INSTALLED) {
   window.__PDV2_SUMMARY_INSTANT_UX_INSTALLED = true;
   globalThis.fetch = function instantUxFetch(input, init = {}) {
     const parsed = parseSummaryPost(input, init);
     const response = upstreamFetch(input, init);
-    if (parsed) scheduleInstantUx(parsed);
+    if (parsed) {
+      rememberParsed(parsed);
+      scheduleInstantUx(parsed);
+    }
     return response;
   };
+  installActiveObserver();
 }

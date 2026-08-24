@@ -62,11 +62,16 @@ assert.equal(focusSource.includes('SUMMARY_CHUNK_SIZE'), false, '10件チャン�
 assert.equal(focusSource.includes('pendingBatch'), false, '表示中記事が先読みPromiseを待たない');
 assert.match(focusSource, /purpose:\s*'active'/, '表示中記事は単発summary経路を使う');
 assert.match(focusSource, /actualCount:\s*1/, '先読みは1記事に制限');
+assert.match(focusSource, /summaryPromises\.has\(key\)/, '先読み済み記事は同じarticleIdのPromiseを再利用する');
 
 const instantSource = fs.readFileSync(new URL('../src/features/reader/summary-instant-ux.js', import.meta.url), 'utf8');
 assert.match(instantSource, /INSTANT_RENDER_RETRY_MS/, 'activeカード確定まで即時UXを短時間再試行');
 assert.match(instantSource, /data-reader-progress/, '即時要点が出たら大きい進捗UIを除去');
 assert.equal(instantSource.includes('AI確認中'), false, '即時UXにAI待機ラベルを出さない');
+assert.match(instantSource, /instantPayloads/, '先読み時の即時要点材料をarticleIdごとに保持する');
+assert.match(instantSource, /rememberParsed\(parsed\)/, '新規fetchだけでなく先読みpayloadも記録する');
+assert.match(instantSource, /MutationObserver/, 'activeカード切替を監視して先読み済み記事にも即時UXを適用する');
+assert.match(instantSource, /renderStoredActiveUx/, '先読みPromise再利用時は保存済みpayloadから即時3カードを描く');
 
 const readerDataSource = fs.readFileSync(new URL('../src/features/reader/reader-data.js', import.meta.url), 'utf8');
 assert.match(readerDataSource, /technologyResearchInFlight/, '技術リサーチの同時取得を1本へ集約する');
@@ -89,5 +94,5 @@ assert.match(technologySource, /VirtualConsole/, 'Science Portal HTML解析でjs
 assert.match(technologySource, /stripStyleBlocks/, 'Science Portal HTML解析前にstyleブロックを除去する');
 
 console.log('reader 30-article flow regression check: OK');
-console.log('checked: instant 3-card UX, cache-first warm, background refresh dedupe, ROOT REQUEST guard');
+console.log('checked: instant 3-card UX including prefetch→active promotion, cache-first warm, background refresh dedupe, ROOT REQUEST guard');
 console.log('technology research caching / duplicate fetch / jsdom CSS guards: OK');
