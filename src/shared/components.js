@@ -98,9 +98,16 @@ export function installShrinkingHeader(target, {
 
 export function centerScrollItem(container, item, { behavior = 'smooth' } = {}) {
   if (!container || !item) return;
+  const readerRailManaged = () => typeof window !== 'undefined'
+    && window.__PDV2_READER_LIST_UX_INSTALLED
+    && container.classList?.contains('reader-feed-chips')
+    && Boolean(container.closest?.('.reader-source-dock'));
+  // Readerの配信元タブはreader-list-ux.jsだけが位置を管理する。
+  if (readerRailManaged()) return;
   let attempts = 0;
   const maxAttempts = 8;
   const center = () => {
+    if (readerRailManaged()) return;
     attempts += 1;
     if (!container.isConnected || !item.isConnected || container.clientWidth <= 0 || item.offsetWidth <= 0) {
       if (attempts < maxAttempts) requestAnimationFrame(center);

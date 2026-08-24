@@ -1,6 +1,6 @@
 const RAIL_SELECTOR = '.reader-source-dock .reader-feed-chips';
 const FOCUS_SELECTOR = '.reader-focus-open .reader-swipe-feed';
-const VISIBILITY_PADDING = 10;
+const VISIBILITY_EPSILON = 0.5;
 const railOffsets = new Map();
 let touchStart = null;
 
@@ -19,8 +19,8 @@ function targetScrollLeft(rail, active) {
 
   const railRect = rail.getBoundingClientRect();
   const activeRect = active.getBoundingClientRect();
-  const fullyVisible = activeRect.left >= railRect.left + VISIBILITY_PADDING
-    && activeRect.right <= railRect.right - VISIBILITY_PADDING;
+  const fullyVisible = activeRect.left >= railRect.left - VISIBILITY_EPSILON
+    && activeRect.right <= railRect.right + VISIBILITY_EPSILON;
 
   // v2.19.17: 今の位置で完全に見えているタブは動かさない。
   // 画面外/見切れの場合だけ中央へ寄せ、両端だけは端に固定する。
@@ -59,6 +59,10 @@ function scheduleRailAlignment(rail) {
 function prepareRail(rail) {
   if (!rail || rail.dataset.pdv2ReaderRailUx === '1') return;
   rail.dataset.pdv2ReaderRailUx = '1';
+
+  // JSだけを位置決めの責任者にして、Safariのscroll-snapによる二重移動を止める。
+  rail.style.setProperty('scroll-snap-type', 'none', 'important');
+
   const key = railKey(rail);
   const remembered = railOffsets.get(key);
   if (Number.isFinite(remembered)) {
