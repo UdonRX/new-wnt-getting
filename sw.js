@@ -1,5 +1,5 @@
-// v2.19.6: media landscape fix / refresh existing app-shell cache without adding versioned files.
-const CACHE_NAME='personal-dashboard-v2-19-6-media1';
+// v2.19.9: 0f3ea301で修正済みのAI要約ゲートを確実に再配布するため、SWキャッシュ世代を更新する。
+const CACHE_NAME='personal-dashboard-v2-19-9-summary-cache1';
 const STATIC_FETCH_TIMEOUT_MS=5500;
 const APP_SHELL=[
   '/','/index.html','/manifest.webmanifest',
