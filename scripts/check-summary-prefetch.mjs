@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createSummaryRequestCoordinator } from '../src/features/reader/summary-request-coordinator.js';
 import { waitForStableReaderNetworkGate } from '../src/features/reader/summary-fetch-gate.js';
+import { prepareSummaryBody } from '../server/summary.mjs';
 
 let clock = 0;
 const starts = [];
@@ -49,14 +50,14 @@ const retry = queuedArticle('article-error', 'display');
 assert.equal(retry.reused, false, '失敗したarticleIdは新規requestを作成できる');
 await retry.promise;
 
-// Test 4: 高速A→B→C→Dでもネットワーク開始は直列、開始間隔も維持。
+// Test 4: 明示的な開始間隔を与えた場合は従来どおり直列・間隔を維持。
 const rapidStartIndex = starts.length;
 const rapid = ['rapid-A', 'rapid-B', 'rapid-C', 'rapid-D'].map(id => queuedArticle(id, 'display', { duration: 1 }).promise);
 await Promise.all(rapid);
 const rapidStarts = starts.slice(rapidStartIndex);
 assert.equal(rapidStarts.length, 4);
 for (let index = 1; index < rapidStarts.length; index += 1) {
-  assert.ok(rapidStarts[index].at - rapidStarts[index - 1].at >= 100, '高速スワイプでも開始間隔を維持');
+  assert.ok(rapidStarts[index].at - rapidStarts[index - 1].at >= 100, '明示的な開始間隔を維持');
 }
 
 // Test 5: 5記事プールで display A + B/C/D/E prefetch = 合計5、重複0。
@@ -126,6 +127,54 @@ const promotedGate = await waitForStableReaderNetworkGate('promoted-article', 'p
 assert.equal(promotedGate.run, true);
 assert.equal(promotedGate.requestType, 'display', 'prefetch中の記事を開いたらdisplayとして実行する');
 
+// Test 9 (v2.19.12): client既定値では4.3秒を追加しない。直列化だけ維持し、RPM保護はserver側へ一元化。
+let uxClock = 0;
+let uxSleepMs = 0;
+const uxStarts = [];
+const uxCoordinator = createSummaryRequestCoordinator({
+  now: () => uxClock,
+  sleepFn: async ms => { uxSleepMs += ms; uxClock += ms; }
+});
+const uxA = uxCoordinator.getOrCreate('ux-A::news', { articleId: 'ux-A', requestType: 'display' }, async () => {
+  uxStarts.push(uxClock);
+  uxClock += 35;
+});
+const uxB = uxCoordinator.getOrCreate('ux-B::news', { articleId: 'ux-B', requestType: 'display' }, async () => {
+  uxStarts.push(uxClock);
+  uxClock += 20;
+});
+await Promise.all([uxA.promise, uxB.promise]);
+assert.deepEqual(uxStarts, [0, 35], 'clientは前リクエスト完了後すぐ次へ進む');
+assert.equal(uxSleepMs, 0, 'client既定値で追加sleepを入れない');
+
+// Test 10 (v2.19.12): 十分なRSS本文ならpreferFullText=trueでも記事HTML取得を省略する。
+let fastExtractorCalls = 0;
+const fastDescription = [
+  '新製品は従来方式より消費電力を20％削減し、量産ラインへの導入を開始しました。',
+  '開発では温度制御と部品配置を見直し、同じ筐体サイズを維持しています。',
+  '今後は国内工場で生産能力を増やし、海外向けモデルにも展開する予定です。',
+  '評価工程では耐久試験と安全確認も実施し、既存設備との互換性を確保しました。',
+  'サプライヤーとの部材共通化も進め、調達リスクと製造コストの抑制を狙っています。'
+].join('').repeat(2);
+const fastPrepared = await prepareSummaryBody({
+  title: '省電力化した新製品の量産を開始',
+  description: fastDescription,
+  url: 'https://example.com/article',
+  source: 'テスト媒体',
+  mode: 'news',
+  fast: true,
+  preferFullText: true
+}, {
+  extractor: async () => {
+    fastExtractorCalls += 1;
+    return { text: '呼ばれてはいけない本文です。', title: 'unexpected' };
+  }
+});
+assert.equal(fastExtractorCalls, 0, '十分なfast RSSでは外部記事取得をしない');
+assert.equal(fastPrepared.preparedSource, 'rss');
+assert.equal(fastPrepared.prepareReason, 'fast-rss-description-sufficient');
+assert.ok(Array.from(fastPrepared.description).length <= 500, 'Gemini入力は最大500文字');
+
 const gateSource = fs.readFileSync(new URL('../src/features/reader/summary-fetch-gate.js', import.meta.url), 'utf8');
 assert.match(gateSource, /prefetch-outside-active-next-slot/, 'フォーカス外prefetchを抑止');
 assert.match(gateSource, /prefetch-active-summary-not-successful/, '表示記事失敗後はprefetchしない');
@@ -135,6 +184,11 @@ assert.match(gateSource, /article-id-mismatch/, 'articleId不一致を破棄');
 assert.match(gateSource, /__PDV2_GEMINI_REQUEST_COUNT/, '実リクエスト回数を計測');
 assert.match(gateSource, /gemini-snap-recovered/, 'Safari snap安定待ちをログ化');
 assert.match(gateSource, /gemini-client-suppression-retry/, '表示中articleIdだけclient suppressionを1回再投入');
+assert.match(gateSource, /summary-instant-preview/, 'Gemini前にRSS由来の即時要点を表示');
+assert.match(gateSource, /FAST_PREFETCH_SETTLE_ATTEMPTS/, '古いprefetchの待機を短縮');
+
+const coordinatorSource = fs.readFileSync(new URL('../src/features/reader/summary-request-coordinator.js', import.meta.url), 'utf8');
+assert.match(coordinatorSource, /DEFAULT_MIN_START_GAP_MS = 0/, 'client側4.3秒固定待ちを撤去');
 
 const dispatchSource = fs.readFileSync(new URL('../lib/summary-dispatch-v2195.mjs', import.meta.url), 'utf8');
 assert.match(dispatchSource, /waitForGeminiStartSlot/, '単発summaryも共通Gemini開始スロットを利用');
@@ -143,5 +197,8 @@ assert.match(dispatchSource, /\[GEMINI START\]/);
 assert.match(dispatchSource, /\[GEMINI ERROR\]/);
 assert.match(dispatchSource, /X-Summary-Upstream-Status/);
 
+const geminiSource = fs.readFileSync(new URL('../lib/gemini.mjs', import.meta.url), 'utf8');
+assert.match(geminiSource, /GEMINI_MIN_START_GAP_MS = 4300/, 'Gemini無料枠保護の4.3秒間隔はserver側に維持');
+
 console.log('summary prefetch/state regression check: OK');
-console.log('covered: prefetch OFF, B prefetch→display reuse, failure cleanup, fast swipe queue, Safari snap recovery, Chrome stable path, prefetch→display promotion');
+console.log('covered: dedupe, failure cleanup, Safari snap recovery, Chrome stable path, prefetch promotion, instant preview, client no-gap, server fast RSS');

@@ -7,6 +7,7 @@ import { setAsciiHeader, summaryServerErrorCode } from '../lib/http-response-saf
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
+const FAST_RSS_MIN_CHARS = 320;
 
 function clean(value = '', max = 6000) {
   return String(value || '')
@@ -94,6 +95,13 @@ function descriptionLooksReal(title, description) {
   return (text.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length >= 55;
 }
 
+function descriptionLooksFastEnough(title, description) {
+  const text = clean(description);
+  if (text.length < FAST_RSS_MIN_CHARS || !descriptionLooksReal(title, text)) return false;
+  const sentences = text.match(/[^。！？!?.]{12,}[。！？!?.]/g) || [];
+  return sentences.length >= 3;
+}
+
 function isGoogleNewsInput(body = {}, url = '') {
   const source = clean(body.source || body.feedName || '');
   if (/Google\s*ニュース|Google\s*News/i.test(source)) return true;
@@ -109,14 +117,20 @@ export async function prepareSummaryBody(raw = {}, {
   const title = clean(body.title);
   const description = clean(body.description);
   const url = clean(body.url || body.link);
-  const preferFullText = body.preferFullText === true
-    || String(body.preferFullText || '').toLowerCase() === 'true'
-    || isGoogleNewsInput(body, url);
+  const googleNews = isGoogleNewsInput(body, url);
+  const requestedFullText = body.preferFullText === true
+    || String(body.preferFullText || '').toLowerCase() === 'true';
+  // v2.19.12: news/knowledgeのRSSが十分に具体的なら、clientの保守的なfull-text指定より
+  // 500文字以内の即時要約を優先する。Google Newsとpapersは従来どおり本文取得を優先する。
+  const fastRss = Boolean(body.fast)
+    && !googleNews
+    && descriptionLooksFastEnough(title, description);
+  const preferFullText = !fastRss && (requestedFullText || googleNews);
 
-  if (!preferFullText && descriptionLooksReal(title, description)) {
+  if (fastRss || (!preferFullText && descriptionLooksReal(title, description))) {
     body.description = first500(description);
     body.preparedSource = 'rss';
-    body.prepareReason = 'rss-description-sufficient';
+    body.prepareReason = fastRss ? 'fast-rss-description-sufficient' : 'rss-description-sufficient';
     return body;
   }
 

@@ -13,6 +13,13 @@ const CLIENT_SUPPRESSION_REASONS = new Set([
 ]);
 const SAFARI_SNAP_SETTLE_ATTEMPTS = 8;
 const SAFARI_SNAP_SETTLE_INTERVAL_MS = 90;
+const FAST_PREFETCH_SETTLE_ATTEMPTS = 3;
+const INSTANT_PREVIEW_LABELS = ['結論/事実', '背景/特徴', '影響/展望'];
+const INSTANT_PREVIEW_PENDING = [
+  '重要な事実をAIで確認しています…',
+  '背景・特徴をAIで確認しています…',
+  '影響・今後をAIで確認しています…'
+];
 let actualRequestCount = 0;
 
 function parseReaderSummary(input, init = {}) {
@@ -49,6 +56,91 @@ function currentReaderPosition(articleId) {
 function providerUsable(card) {
   const provider = String(card?.dataset?.summaryProvider || '');
   return Boolean(provider) && !FAILURE_PROVIDERS.has(provider);
+}
+
+function cleanInstantText(value = '') {
+  return String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1800);
+}
+
+function instantPreviewSentences(value = '') {
+  const source = cleanInstantText(value);
+  if (!source) return [];
+  const pieces = source.match(/[^。！？!?]+[。！？!?]?/g) || [];
+  const rows = [];
+  const seen = new Set();
+  for (const piece of pieces) {
+    const text = String(piece || '').trim();
+    if (text.length < 12) continue;
+    const key = text.replace(/[\s。、，,.!！?？]/g, '').toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    rows.push(text.length > 96 ? `${Array.from(text).slice(0, 94).join('')}…` : text);
+    if (rows.length >= 3) break;
+  }
+  return rows;
+}
+
+function instantPreviewRows(body = {}) {
+  const sentences = instantPreviewSentences(body?.description || '');
+  return INSTANT_PREVIEW_LABELS.map((label, index) => ({
+    label,
+    text: sentences[index] || INSTANT_PREVIEW_PENDING[index],
+    instant: Boolean(sentences[index])
+  }));
+}
+
+function renderInstantPreview(parsed) {
+  if (typeof document === 'undefined') return false;
+  const position = currentReaderPosition(parsed.articleId);
+  if (position.requestType !== 'display' || !position.activeCard || providerUsable(position.activeCard)) return false;
+  const node = position.activeCard.querySelector('[data-reader-summary]');
+  if (!node) return false;
+  const rows = instantPreviewRows(parsed.body);
+  const realCount = rows.filter(row => row.instant).length;
+  if (!realCount) return false;
+
+  node.replaceChildren();
+  node.classList.remove('is-pending', 'is-unavailable');
+  node.dataset.instantPreview = '1';
+  for (const row of rows) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'reader-story-summary-row';
+    const copy = document.createElement('div');
+    copy.className = 'reader-story-summary-copy';
+    const label = document.createElement('span');
+    label.className = 'reader-story-summary-label';
+    label.textContent = row.label;
+    const text = document.createElement('span');
+    text.className = 'reader-story-summary-text';
+    text.textContent = row.text;
+    copy.append(label, text);
+    wrapper.append(copy);
+    node.append(wrapper);
+  }
+  try {
+    node.animate?.([
+      { opacity: 0.45, transform: 'translateY(3px)' },
+      { opacity: 1, transform: 'translateY(0)' }
+    ], { duration: 160, easing: 'ease-out' });
+  } catch {}
+  readerTrace('summary-instant-preview', {
+    articleId: parsed.articleId,
+    title: String(parsed.body?.title || ''),
+    lineCount: realCount,
+    descriptionChars: cleanInstantText(parsed.body?.description || '').length
+  });
+  return true;
 }
 
 function safeJson(text = '') {
@@ -137,7 +229,12 @@ export async function waitForStableReaderNetworkGate(articleId, originalType, {
   if (gate.run || !CLIENT_SUPPRESSION_REASONS.has(String(gate.reason || ''))) return gate;
 
   const initialReason = gate.reason;
-  const attempts = Math.max(0, Number(settleAttempts) || 0);
+  const requestedAttempts = Math.max(0, Number(settleAttempts) || 0);
+  // v2.19.12: displayのSafari snap回復余裕は維持しつつ、古くなったprefetchは
+  // 最大270msで捨てて後続displayを詰まらせない。
+  const attempts = originalType === 'prefetch'
+    ? Math.min(requestedAttempts, FAST_PREFETCH_SETTLE_ATTEMPTS)
+    : requestedAttempts;
   const interval = Math.max(0, Number(settleIntervalMs) || 0);
   for (let index = 0; index < attempts; index += 1) {
     if (interval > 0) await sleepFn(interval);
@@ -306,6 +403,9 @@ if (nativeFetch && typeof window !== 'undefined' && !window.__PDV2_SUMMARY_FETCH
 
     const initialPosition = currentReaderPosition(parsed.articleId);
     const initialType = initialPosition.requestType === 'display' ? 'display' : 'prefetch';
+    // v2.19.12: Gemini待ちの空白をなくす。これはRSS本文からの引用的プレビューで、
+    // 最終AI要約ではない。既存のprogressを残し、Gemini成功時にReader本体が同じ枠を上書きする。
+    if (initialType === 'display') renderInstantPreview(parsed);
     const key = `${parsed.articleId}::${parsed.mode}`;
     const record = createReaderSummaryRecord(key, input, init, parsed, initialType);
 
