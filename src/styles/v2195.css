@@ -151,6 +151,64 @@ body.youtube-landscape-open {
 .weather-heavy-rain-text { color: var(--text-strong); font-size: 13px; line-height: 1.5; }
 .weather-heavy-rain-source { color: var(--muted); font-size: 11px; }
 
+/* v2.19.16: Reader一覧の選択タブはスワイプ切替に追従し、AI要約表示中は縦スワイプだけを許可する。 */
+.reader-list-open .reader-feed-chips {
+  scroll-behavior: smooth !important;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+.reader-list-open .reader-feed-chips > .chip { scroll-snap-align: center; }
+.reader-list-open .reader-feed-chips > .chip:first-child { scroll-snap-align: start; }
+.reader-list-open .reader-feed-chips > .chip:last-child { scroll-snap-align: end; }
+.reader-focus-open .reader-swipe-feed { touch-action: pan-y !important; }
+
+/* v2.19.16: SafariのvisualViewport枠内に90°回転stageを完全に収める。
+   アプリ側のタイトル/コメント等は横画面では隠し、表示する操作は前・縦戻し・次の3つだけ。 */
+.twitch-inline-player.youtube-css-landscape > .youtube-player-head,
+.twitch-inline-player.youtube-css-landscape > .twitch-inline-head {
+  display: none !important;
+}
+.twitch-inline-player.youtube-css-landscape .youtube-landscape-viewport {
+  contain: layout paint size;
+}
+.twitch-inline-player.youtube-css-landscape .youtube-inline-stage {
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: var(--pdv2-media-vh, 100dvh) !important;
+  height: var(--pdv2-media-vw, 100vw) !important;
+  max-width: none !important;
+  max-height: none !important;
+  transform: translate3d(-50%, -50%, 0) rotate(90deg) !important;
+  -webkit-transform: translate3d(-50%, -50%, 0) rotate(90deg) !important;
+}
+.twitch-inline-player.youtube-css-landscape .youtube-landscape-controls {
+  position: absolute !important;
+  left: 50% !important;
+  bottom: max(12px, calc(env(safe-area-inset-bottom) + 8px)) !important;
+  width: min(calc(100% - 24px), 620px) !important;
+  max-width: calc(100% - 24px) !important;
+  flex-wrap: nowrap !important;
+  gap: 8px !important;
+}
+.twitch-inline-player.youtube-css-landscape .youtube-landscape-controls > :nth-child(n + 4) {
+  display: none !important;
+}
+.twitch-inline-player.youtube-css-landscape .youtube-landscape-action {
+  min-width: 0 !important;
+  flex: 1 1 0 !important;
+  max-width: 180px !important;
+}
+.twitch-inline-player.youtube-css-landscape:not(.pdv2-landscape-ui-visible) .youtube-landscape-viewport > .media-landscape-tap-catcher {
+  position: absolute !important;
+  inset: 0 !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reader-swipe-progress-indicator { transition-duration: .01ms !important; }
 }
