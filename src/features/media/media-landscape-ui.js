@@ -33,12 +33,39 @@ function hideUi(panel) {
 function showUi(panel) {
   if (!panel?.isConnected || !panel.classList.contains(LANDSCAPE_CLASS)) return;
   viewportMetrics(panel);
+  rotateLandscapeControls(panel);
   panel.classList.add(UI_CLASS);
   clearTimer(panel);
   timers.set(panel, setTimeout(() => {
     if (panel.isConnected && panel.classList.contains(LANDSCAPE_CLASS)) panel.classList.remove(UI_CLASS);
     timers.delete(panel);
   }, HIDE_DELAY_MS));
+}
+
+// v2.19.17: プレーヤーstageと同じ時計回り90°へ操作バー全体を回す。
+// 端末を動画と同じ向きに持ち替えた時、前・縦表示・次が自然な横並びになる位置へ置く。
+function rotateLandscapeControls(panel) {
+  if (!panel?.classList.contains(LANDSCAPE_CLASS)) return;
+  const controls = panel.querySelector(CONTROLS_SELECTOR);
+  if (!controls) return;
+  controls.style.setProperty('position', 'absolute', 'important');
+  controls.style.setProperty('left', 'max(48px, calc(env(safe-area-inset-left) + 42px))', 'important');
+  controls.style.setProperty('top', '50%', 'important');
+  controls.style.setProperty('bottom', 'auto', 'important');
+  controls.style.setProperty('width', 'min(calc(var(--pdv2-media-vh, 100dvh) - 28px), 620px)', 'important');
+  controls.style.setProperty('max-width', 'calc(var(--pdv2-media-vh, 100dvh) - 28px)', 'important');
+  controls.style.setProperty('transform', 'translate3d(-50%, -50%, 0) rotate(90deg)', 'important');
+  controls.style.setProperty('-webkit-transform', 'translate3d(-50%, -50%, 0) rotate(90deg)', 'important');
+  controls.style.setProperty('transform-origin', 'center center', 'important');
+  controls.style.setProperty('-webkit-transform-origin', 'center center', 'important');
+}
+
+function clearLandscapeControls(panel) {
+  const controls = panel?.querySelector?.(CONTROLS_SELECTOR);
+  if (!controls) return;
+  for (const name of ['position','left','top','bottom','width','max-width','transform','-webkit-transform','transform-origin','-webkit-transform-origin']) {
+    controls.style.removeProperty(name);
+  }
 }
 
 function ensureTapCatcher(panel) {
@@ -65,6 +92,7 @@ function ensureTapCatcher(panel) {
     controls.addEventListener('touchstart', keepVisible, { passive: true });
     controls.addEventListener('click', keepVisible);
   }
+  rotateLandscapeControls(panel);
 }
 
 function isTwitchPanel(panel) {
@@ -113,7 +141,10 @@ function onLandscapeAction(event) {
 }
 
 function syncAll() {
-  document.querySelectorAll(PANEL_SELECTOR).forEach(panel => viewportMetrics(panel));
+  document.querySelectorAll(PANEL_SELECTOR).forEach(panel => {
+    viewportMetrics(panel);
+    rotateLandscapeControls(panel);
+  });
 }
 
 if (typeof window !== 'undefined' && !window.__PDV2_MEDIA_LANDSCAPE_UX_INSTALLED) {
@@ -125,7 +156,10 @@ if (typeof window !== 'undefined' && !window.__PDV2_MEDIA_LANDSCAPE_UX_INSTALLED
         const wasLandscape = String(record.oldValue || '').split(/\s+/).includes(LANDSCAPE_CLASS);
         const isLandscape = panel instanceof Element && panel.classList.contains(LANDSCAPE_CLASS);
         if (isLandscape && !wasLandscape) preparePanel(panel);
-        else if (!isLandscape && wasLandscape && panel instanceof Element) hideUi(panel);
+        else if (!isLandscape && wasLandscape && panel instanceof Element) {
+          hideUi(panel);
+          clearLandscapeControls(panel);
+        }
       }
       record.addedNodes.forEach(node => { if (node instanceof Element) scan(node); });
     }

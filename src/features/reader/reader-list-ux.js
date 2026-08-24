@@ -1,5 +1,6 @@
 const RAIL_SELECTOR = '.reader-source-dock .reader-feed-chips';
 const FOCUS_SELECTOR = '.reader-focus-open .reader-swipe-feed';
+const VISIBILITY_PADDING = 10;
 const railOffsets = new Map();
 let touchStart = null;
 
@@ -15,9 +16,19 @@ function targetScrollLeft(rail, active) {
   const maxLeft = Math.max(0, rail.scrollWidth - rail.clientWidth);
   if (index <= 0) return 0;
   if (index === chips.length - 1) return maxLeft;
+
   const railRect = rail.getBoundingClientRect();
   const activeRect = active.getBoundingClientRect();
-  const centered = rail.scrollLeft + (activeRect.left - railRect.left) - (railRect.width - activeRect.width) / 2;
+  const fullyVisible = activeRect.left >= railRect.left + VISIBILITY_PADDING
+    && activeRect.right <= railRect.right - VISIBILITY_PADDING;
+
+  // v2.19.17: 今の位置で完全に見えているタブは動かさない。
+  // 画面外/見切れの場合だけ中央へ寄せ、両端だけは端に固定する。
+  if (fullyVisible) return rail.scrollLeft;
+
+  const centered = rail.scrollLeft
+    + (activeRect.left - railRect.left)
+    - (railRect.width - activeRect.width) / 2;
   return Math.min(maxLeft, Math.max(0, centered));
 }
 
@@ -31,6 +42,20 @@ function alignRail(rail, { behavior = 'smooth' } = {}) {
   return true;
 }
 
+function scheduleRailAlignment(rail) {
+  let attempts = 0;
+  const run = () => {
+    if (!rail?.isConnected) return;
+    attempts += 1;
+    if (rail.clientWidth > 0 && rail.scrollWidth > 0) {
+      alignRail(rail, { behavior: 'smooth' });
+      return;
+    }
+    if (attempts < 6) requestAnimationFrame(run);
+  };
+  requestAnimationFrame(run);
+}
+
 function prepareRail(rail) {
   if (!rail || rail.dataset.pdv2ReaderRailUx === '1') return;
   rail.dataset.pdv2ReaderRailUx = '1';
@@ -40,6 +65,7 @@ function prepareRail(rail) {
     const maxLeft = Math.max(0, rail.scrollWidth - rail.clientWidth);
     rail.scrollLeft = Math.min(maxLeft, Math.max(0, remembered));
   }
+
   let raf = 0;
   rail.addEventListener('scroll', () => {
     if (raf) return;
@@ -49,9 +75,9 @@ function prepareRail(rail) {
     });
   }, { passive: true });
 
-  // v2.19.16: DOM差し替え直後の0px位置を見せず、前位置→選択タブへ滑らかに追従する。
-  requestAnimationFrame(() => requestAnimationFrame(() => alignRail(rail, { behavior: 'smooth' })));
-  setTimeout(() => alignRail(rail, { behavior: 'smooth' }), 120);
+  // 旧位置を同期復元したあと、必要な場合だけ1回smooth移動する。
+  // setTimeoutで再度中央寄せしないことで、左右に行ったり来たりする挙動を防ぐ。
+  scheduleRailAlignment(rail);
 }
 
 function prepareVisibleRails(root = document) {
