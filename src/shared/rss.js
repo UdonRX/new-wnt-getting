@@ -17,9 +17,20 @@ function text(parent, selectors) {
 }
 
 function safeHttpUrl(value = '') {
+  // v2.19.11: 空/相対メディアURLをPWA自身のURLへ解決しない。Safariの <img src="/"> 大量ROOT REQUESTを防ぐ。
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const absolute = /^https?:\/\//i.test(raw)
+    ? raw
+    : /^\/\//.test(raw)
+      ? `${location.protocol}${raw}`
+      : '';
+  if (!absolute) return '';
   try {
-    const url = new URL(String(value || '').trim(), location.href);
-    return /^https?:$/.test(url.protocol) ? url.href : '';
+    const url = new URL(absolute);
+    if (!/^https?:$/.test(url.protocol)) return '';
+    if (url.origin === location.origin && url.pathname === '/' && !url.search && !url.hash) return '';
+    return url.href;
   } catch { return ''; }
 }
 
