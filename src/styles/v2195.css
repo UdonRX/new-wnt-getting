@@ -21,32 +21,14 @@
   display: none !important;
 }
 
-/* v2.19.8: Reader fast-cadence experiment reverted. AI summary flow is unchanged. */
-
-/* YouTubeは複数チャンネルを裏でまとめて取得し、一覧DOMは完了時に一度だけ更新する。 */
-.youtube-load-progress {
-  display: grid;
-  gap: 6px;
-  margin: 2px 0 8px;
-  padding: 9px 11px;
-  border: 1px solid color-mix(in srgb, var(--feature-color) 24%, var(--line));
-  border-radius: 13px;
-  background: color-mix(in srgb, var(--feature-color) 7%, var(--surface-2));
-}
-.youtube-load-progress-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.youtube-load-progress-label { min-width: 0; color: var(--muted); font-size: 10px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.youtube-load-progress-value { flex: 0 0 auto; color: var(--feature-color); font-size: 9.5px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.youtube-load-progress-track { position: relative; height: 4px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.08); }
-.youtube-load-progress-fill { position: absolute; inset: 0 auto 0 0; width: 8%; border-radius: inherit; background: var(--feature-color); transition: width .22s ease; }
-
 html.youtube-landscape-open,
 body.youtube-landscape-open {
   overflow: hidden !important;
   overscroll-behavior: none !important;
 }
 
-/* YouTube/Twitch landscape: viewportは固定、動画stageだけ90°回転。
-   safe-area分を左右対称に引いて、iPhoneのステータス領域/ホーム領域へはみ出させない。 */
+/* v2.19.7: 横表示は端末の向きに依存せず、YouTube/Twitchの動画stageだけを90度回転する。
+   SafariではvisualViewportの実測値をJSからCSS変数へ渡し、dynamic viewport由来の画面外ずれを防ぐ。 */
 .twitch-inline-player.youtube-css-landscape {
   position: static !important;
   inset: auto !important;
@@ -59,8 +41,6 @@ body.youtube-landscape-open {
   rotate: none !important;
   background: #000 !important;
 }
-.twitch-inline-player.youtube-css-landscape > .youtube-player-head,
-.twitch-inline-player.youtube-css-landscape > .twitch-inline-head,
 .twitch-inline-player.youtube-css-landscape > .twitch-comment-lane,
 .twitch-inline-player.youtube-css-landscape > .twitch-inline-info { display: none !important; }
 
@@ -90,18 +70,10 @@ body.youtube-landscape-open {
   top: var(--pdv2-media-cy, 50dvh) !important;
   width: 100dvh !important;
   height: 100dvw !important;
-  width: calc(
-    var(--pdv2-media-vh, 100dvh)
-    - max(env(safe-area-inset-top), env(safe-area-inset-bottom))
-    - max(env(safe-area-inset-top), env(safe-area-inset-bottom))
-  ) !important;
-  height: calc(
-    var(--pdv2-media-vw, 100vw)
-    - max(env(safe-area-inset-left), env(safe-area-inset-right))
-    - max(env(safe-area-inset-left), env(safe-area-inset-right))
-  ) !important;
-  min-width: 1px !important;
-  min-height: 1px !important;
+  width: var(--pdv2-media-vh, 100dvh) !important;
+  height: var(--pdv2-media-vw, 100vw) !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
   max-width: none !important;
   max-height: none !important;
   margin: 0 !important;
@@ -134,65 +106,23 @@ body.youtube-landscape-open {
   border: 0 !important;
 }
 
-/* 横表示のカスタム操作は「前 / 縦表示 / 次」の3つだけ。
-   最初と画面タップ時だけ一時表示し、それ以外は完全に消す。 */
+/* v2.19.7: 操作UIは回転させず、従来どおりタップ時だけ前/次/縦表示などを前面表示する。 */
 .twitch-inline-player.youtube-css-landscape .youtube-landscape-controls {
   position: fixed !important;
   z-index: 366 !important;
   left: var(--pdv2-media-cx, 50vw) !important;
-  top: var(--pdv2-media-cy, 50dvh) !important;
-  bottom: auto !important;
-  width: min(calc(var(--pdv2-media-vw, 100vw) - 34px), 520px) !important;
-  min-width: 0 !important;
-  display: grid !important;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  align-items: center !important;
-  gap: 8px !important;
-  padding: 8px !important;
-  border: 1px solid rgba(255,255,255,.14) !important;
-  border-radius: 18px !important;
-  background: rgba(7,9,12,.72) !important;
-  -webkit-backdrop-filter: blur(18px) saturate(1.16);
-  backdrop-filter: blur(18px) saturate(1.16);
-  opacity: 0 !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-  transform: translate3d(-50%, calc(-50% + 8px), 0) !important;
-  -webkit-transform: translate3d(-50%, calc(-50% + 8px), 0) !important;
-  transition: opacity .18s ease, transform .18s cubic-bezier(.2,.82,.2,1), visibility .18s ease !important;
+  bottom: max(18px, calc(env(safe-area-inset-bottom) + 12px)) !important;
+  width: min(92vw, 620px) !important;
+  transform: translate3d(-50%, 10px, 0) !important;
+  -webkit-transform: translate3d(-50%, 10px, 0) !important;
 }
-.twitch-inline-player.youtube-css-landscape .youtube-landscape-action {
-  min-width: 0 !important;
-  min-height: 44px !important;
-  margin: 0 !important;
-  padding: 7px 9px !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  gap: 6px !important;
-  border: 1px solid rgba(255,255,255,.14) !important;
-  border-radius: 12px !important;
-  background: rgba(255,255,255,.10) !important;
-  color: #fff !important;
-  font-size: 11px !important;
-  font-weight: 780 !important;
-  white-space: nowrap !important;
-}
-.twitch-inline-player.youtube-css-landscape .youtube-landscape-action:disabled { opacity: .28 !important; }
-.twitch-inline-player.youtube-css-landscape .youtube-landscape-controls > .youtube-landscape-action:nth-child(n+4) { display: none !important; }
 .twitch-inline-player.youtube-css-landscape.pdv2-landscape-ui-visible .youtube-landscape-controls {
+  display: flex !important;
   opacity: 1 !important;
   visibility: visible !important;
   pointer-events: auto !important;
-  transform: translate3d(-50%, -50%, 0) !important;
-  -webkit-transform: translate3d(-50%, -50%, 0) !important;
-}
-.twitch-inline-player.youtube-css-landscape .media-landscape-tap-catcher {
-  display: none !important;
-  padding: 0 !important;
-  border: 0 !important;
-  background: transparent !important;
-  color: transparent !important;
+  transform: translate3d(-50%, 0, 0) !important;
+  -webkit-transform: translate3d(-50%, 0, 0) !important;
 }
 .twitch-inline-player.youtube-css-landscape:not(.pdv2-landscape-ui-visible) .youtube-landscape-viewport > .media-landscape-tap-catcher {
   display: block !important;
@@ -221,16 +151,6 @@ body.youtube-landscape-open {
 .weather-heavy-rain-text { color: var(--text-strong); font-size: 13px; line-height: 1.5; }
 .weather-heavy-rain-source { color: var(--muted); font-size: 11px; }
 
-@media (max-width: 390px) {
-  .twitch-inline-player.youtube-css-landscape .youtube-landscape-controls {
-    width: min(calc(var(--pdv2-media-vw, 100vw) - 22px), 460px) !important;
-    gap: 5px !important;
-    padding: 6px !important;
-  }
-  .twitch-inline-player.youtube-css-landscape .youtube-landscape-action { min-height: 42px !important; padding-inline: 5px !important; font-size: 10px !important; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .reader-swipe-progress-indicator { transition-duration: .01ms !important; }
-  .twitch-inline-player.youtube-css-landscape .youtube-landscape-controls { transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
