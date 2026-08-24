@@ -43,12 +43,13 @@ if (!weatherRewrite || weatherRewrite.destination !== '/api/feeds?__route=weathe
 }
 
 const read = async path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
-const [weatherRain, weatherSources, weatherView, mediaCss, feedsRouter] = await Promise.all([
+const [weatherRain, weatherSources, weatherView, mediaCss, feedsRouter, twitchPlayer] = await Promise.all([
   read('server/weather-rain.mjs'),
   read('src/features/weather/weather-sources.js'),
   read('src/features/weather/weather.js'),
   read('src/styles/v2195.css'),
-  read('api/feeds.mjs')
+  read('api/feeds.mjs'),
+  read('src/features/twitch/twitch-player.js')
 ]);
 
 if (/@napi-rs\/canvas|pdfjs-dist/.test(weatherRain)) fail('Weather rain processing must not pull canvas/pdfjs into the feeds Function.');
@@ -59,9 +60,24 @@ if (!/best_match/.test(weatherSources)) fail('Current/weekly weather must explic
 if (!/fetchRapidRainAlert/.test(weatherView) || !/if \(alertNode && card\.isConnected\) card\.append\(alertNode\)/.test(weatherView)) {
   fail('Heavy-rain UI must remain conditional instead of changing the normal weather layout.');
 }
-if (!/\.youtube-inline-stage[\s\S]*rotate\(90deg\)/.test(mediaCss)) fail('Landscape mode must rotate the video stage by 90 degrees.');
-if (/\.youtube-landscape-viewport\s*\{[^}]*rotate\(90deg\)/s.test(mediaCss)) fail('Landscape viewport/controls must stay upright; rotate only the video stage.');
+
+// v2.19.6: the landscape button must always rotate only the media stage by exactly 90 degrees.
+if (!/\.youtube-inline-stage\s*\{[\s\S]*?width:\s*100dvh[\s\S]*?height:\s*100dvw[\s\S]*?rotate\(90deg\)/.test(mediaCss)) {
+  fail('Landscape mode must size the stage to the swapped viewport and rotate it by 90 degrees.');
+}
+if (/\.youtube-landscape-viewport\s*\{[^}]*rotate\(90deg\)/s.test(mediaCss)) {
+  fail('Landscape viewport/controls must stay upright; rotate only the video stage.');
+}
+if (/@media\s*\(orientation:\s*landscape\)[\s\S]*?\.youtube-inline-stage[\s\S]*?transform:\s*none/.test(mediaCss)) {
+  fail('Landscape stage rotation must not be disabled by the physical device orientation.');
+}
+if (!/pdv2-landscape-ui-visible[\s\S]*youtube-landscape-controls/.test(mediaCss) && !/youtube-css-landscape\.pdv2-landscape-ui-visible[\s\S]*youtube-landscape-controls/.test(mediaCss)) {
+  fail('Tap-only landscape controls must remain visible while the UI-visible state is active.');
+}
+if (!/landscapePrev[\s\S]*portrait[\s\S]*landscapeNext/.test(twitchPlayer)) {
+  fail('Twitch landscape controls must retain previous / portrait / next actions.');
+}
 if (!/\['weather-rain',\s*weatherRain\]/.test(feedsRouter)) fail('feeds router is missing the weather-rain route.');
 
 if (failed) process.exit(1);
-console.log('Hobby guard: OK (4 Functions, scoped heavy dependencies, cached weather route, stage-only landscape).');
+console.log('Hobby guard: OK (4 Functions, scoped heavy dependencies, cached weather route, stage-only 90deg landscape, Twitch controls).');
