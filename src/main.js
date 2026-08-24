@@ -83,7 +83,14 @@ export async function navigate(screen,options={}){
 function idle(callback,delay=0){if('requestIdleCallback'in window)window.requestIdleCallback(callback,{timeout:Math.max(1000,delay+1500)});else setTimeout(callback,delay);}
 function preloadFeature(screen,{warm=false}={}){
   const config=SCREEN[screen];if(!config)return;
-  loadModule(config.path).then(module=>{if(screen==='reader'&&warm)return module.warmReaderRecommendations?.();if(screen==='twitter'&&warm)return module.warmTwitterFeeds?.();}).catch(error=>console.warn(`[${screen}-preload]`,error));
+  loadModule(config.path).then(module=>{
+    if(screen==='reader'&&warm){
+      // v2.19.14: 初回「読む」はIndexedDBキャッシュから即おすすめを組み、RSS更新はreader-data側で裏へ回す。
+      window.__PDV2_READER_WARM_CACHE_ONLY=true;
+      return Promise.resolve(module.warmReaderRecommendations?.()).finally(()=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;});
+    }
+    if(screen==='twitter'&&warm)return module.warmTwitterFeeds?.();
+  }).catch(error=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;console.warn(`[${screen}-preload]`,error);});
 }
 function jstDay(){return new Date(Date.now()+9*60*60*1000).toISOString().slice(0,10);}
 async function warmWikipediaDaily(){
@@ -97,8 +104,9 @@ async function warmWikipediaDaily(){
   return null;
 }
 function startBackgroundJobs(){
+  // v2.19.14: Readerのキャッシュprewarmはidle待ちせず開始し、下タップ直後の8%待機画面を避ける。
+  preloadFeature('reader',{warm:true});
   idle(()=>warmWikipediaDaily(),20);
-  idle(()=>preloadFeature('reader',{warm:true}),80);
   idle(()=>preloadFeature('twitter',{warm:true}),180);
   idle(()=>preloadFeature('wikipedia'),320);
   idle(()=>preloadFeature('weather'),450);

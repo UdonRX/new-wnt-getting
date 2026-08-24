@@ -1,6 +1,7 @@
 const upstreamFetch = globalThis.fetch?.bind(globalThis);
 const SUMMARY_PATH = '/api/summary';
 const FAILURE_PROVIDERS = new Set(['pending', 'instant', 'insufficient', 'unavailable']);
+const INSTANT_RENDER_RETRY_MS = [0, 16, 48, 120, 260];
 
 function cleanText(value = '') {
   return String(value || '')
@@ -59,7 +60,7 @@ function extractInstantContent(body = {}) {
       if (rows.length >= 3) break;
     }
   } else {
-    // v2.19.13: Google Newsのような「1文だけ」のRSSは、推測せず読点・区切りで抽出的に分ける。
+    // v2.19.14: Google Newsのような短いRSSも、推測せず読点・区切りで抽出的に分ける。
     for (const part of description.split(/[、，,:：;；｜|／/・]|\s+[—–-]\s+/g)) {
       pushUnique(rows, seen, part, body);
       if (rows.length >= 2) break;
@@ -80,17 +81,29 @@ function extractInstantContent(body = {}) {
 export function buildInstantUxRows(body = {}) {
   const content = extractInstantContent(body);
   const rows = content.map((text, index) => ({ label: `要点 ${index + 1}`, text }));
-  const source = cleanText(body?.source || '');
   const category = cleanText(body?.category || '');
+  const source = cleanText(body?.source || '');
+  const metadata = [
+    { label: 'カテゴリ', text: category },
+    { label: '媒体', text: source }
+  ];
 
-  if (rows.length < 3 && (source || category)) {
-    rows.push({
-      label: '記事情報',
-      text: [category, source].filter(Boolean).join(' ・ ')
-    });
+  for (const row of metadata) {
+    if (rows.length >= 3) break;
+    if (!row.text) continue;
+    const duplicate = rows.some(existing => normalizedKey(existing.text) === normalizedKey(row.text));
+    if (!duplicate) rows.push(row);
   }
+
+  const title = cleanText(body?.title || '');
+  if (rows.length < 3 && title) {
+    const duplicate = rows.some(existing => normalizedKey(existing.text) === normalizedKey(title));
+    if (!duplicate) rows.push({ label: '記事', text: clip(title) });
+  }
+
   while (rows.length < 3) {
-    rows.push({ label: 'AI確認中', text: '正式なAI要約を確認しています…' });
+    const fallback = rows[0]?.text || title || source || category || '記事を読み込んでいます';
+    rows.push({ label: `要点 ${rows.length + 1}`, text: fallback });
   }
   return rows.slice(0, 3);
 }
@@ -128,7 +141,7 @@ function renderInstantUx(parsed) {
   const rows = buildInstantUxRows(parsed.body);
   node.replaceChildren();
   node.classList.remove('is-pending', 'is-unavailable');
-  node.dataset.instantPreview = 'v21913';
+  node.dataset.instantPreview = 'v21914';
 
   for (const row of rows) {
     const wrapper = document.createElement('div');
@@ -146,15 +159,29 @@ function renderInstantUx(parsed) {
     node.append(wrapper);
   }
 
-  // 即時要点が見えている間は大きな進捗率を見せず、「待つ」感覚を消す。
+  // 即時要点が見えた時点で「待ち時間UI」を消す。正式AI要約は既存処理が同じ枠へ上書きする。
   card.querySelector('[data-reader-progress]')?.remove();
   try {
     node.animate?.([
-      { opacity: 0.55, transform: 'translateY(2px)' },
+      { opacity: 0.62, transform: 'translateY(2px)' },
       { opacity: 1, transform: 'translateY(0)' }
-    ], { duration: 120, easing: 'ease-out' });
+    ], { duration: 110, easing: 'ease-out' });
   } catch {}
   return true;
+}
+
+function scheduleInstantUx(parsed) {
+  let finished = false;
+  for (const delay of INSTANT_RENDER_RETRY_MS) {
+    const run = () => {
+      if (finished) return;
+      const card = activeCardFor(parsed?.articleId);
+      if (card && providerUsable(card)) { finished = true; return; }
+      if (renderInstantUx(parsed)) finished = true;
+    };
+    if (delay === 0) queueMicrotask(run);
+    else setTimeout(run, delay);
+  }
 }
 
 if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_SUMMARY_INSTANT_UX_INSTALLED) {
@@ -162,8 +189,7 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_SUMMARY_INS
   globalThis.fetch = function instantUxFetch(input, init = {}) {
     const parsed = parseSummaryPost(input, init);
     const response = upstreamFetch(input, init);
-    // 既存summary gateの即時表示が同期実行された直後に、より情報量の多い3カードへ置き換える。
-    if (parsed) queueMicrotask(() => renderInstantUx(parsed));
+    if (parsed) scheduleInstantUx(parsed);
     return response;
   };
 }

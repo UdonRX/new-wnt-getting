@@ -4,6 +4,7 @@ import { cacheGet, cacheSet, migrateLargeLocalCaches } from '../../shared/storag
 
 const CACHE_TTL = 6 * 60 * 60 * 1000;
 let technologyResearchInFlight = null;
+const readerBackgroundRefreshes = new Map();
 
 // 旧版でlocalStorageに残った巨大な記事キャッシュを、起動後すぐIndexedDBへ逃がす。
 migrateLargeLocalCaches().catch(() => {});
@@ -221,13 +222,35 @@ function friendlyFailure(mode, failures) {
   return `記事を取得できませんでした。しばらくしてから更新してください。${detail}`;
 }
 
+function backgroundRefreshKey(mode, selectedFeed, paperTrack, fastOnly) {
+  return [mode, selectedFeed || '', paperTrack || 'core', fastOnly ? 'fast' : 'deep'].join('::');
+}
+
+function scheduleReaderBackgroundRefresh(mode, options = {}) {
+  const key = backgroundRefreshKey(mode, options.selectedFeed, options.paperTrack, options.fastOnly);
+  if (readerBackgroundRefreshes.has(key)) return readerBackgroundRefreshes.get(key);
+  const request = Promise.resolve().then(() => loadReader(mode, {
+    ...options,
+    force: false,
+    preferCache: false,
+    backgroundRefresh: true,
+    onProgress: undefined
+  })).catch(error => {
+    console.warn('[reader background refresh]', mode, error?.message || error);
+    return null;
+  }).finally(() => readerBackgroundRefreshes.delete(key));
+  readerBackgroundRefreshes.set(key, request);
+  return request;
+}
+
 export async function loadReader(mode, {
   force = false,
   onProgress,
   selectedFeed = '',
   paperTrack = 'core',
   fastOnly = false,
-  preferCache = false
+  preferCache = false,
+  backgroundRefresh = false
 } = {}) {
   const normalizedTrack = paperTrack === 'creative' ? 'creative' : 'core';
   const allFeeds = feedsFor(mode);
@@ -246,6 +269,20 @@ export async function loadReader(mode, {
     if (preferCache && !force && visibleCached.length) {
       return { items: visibleCached, failures: [], cached: true, paperTrack: normalizedTrack };
     }
+  }
+
+  // v2.19.14: ホーム直後のReader prewarmではネット取得を待たずIndexedDBを即返し、
+  // 最新RSS/論文の更新だけを同一キー1本に集約してバックグラウンド実行する。
+  const warmCacheOnly = !backgroundRefresh && !force && Boolean(globalThis.__PDV2_READER_WARM_CACHE_ONLY);
+  if (warmCacheOnly) {
+    scheduleReaderBackgroundRefresh(mode, { selectedFeed, paperTrack: normalizedTrack, fastOnly });
+    return {
+      items: visibleCached,
+      failures: [],
+      cached: Boolean(visibleCached.length),
+      warming: true,
+      paperTrack: normalizedTrack
+    };
   }
 
   const collected = [];
