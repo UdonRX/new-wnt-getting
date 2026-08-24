@@ -71,6 +71,14 @@ function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state
 function normalizeKind(item){if(item?.liveType||item?.kind==='live')return'live';if(item?.kind==='videos')return'long';if(item?.kind==='shorts')return'short';return item?.kind||'long'}
 function liveBadge(item){if(item?.liveType==='archive')return el('span',{class:'archive-badge',text:'配信録画'});if(item?.liveType==='upcoming')return el('span',{class:'upcoming-badge',text:'配信予定'});return el('span',{class:'live-badge',text:'LIVE'})}
 
+// v2.19.10: Safariで空のimg srcが現在ページ「/」へ解決されるため、URLが無い時は画像要素自体を作らない。
+function thumbnailNode(item,currentTab,index){
+  const url=String(item?.thumbnail||'').trim();
+  const className=`thumb ${currentTab==='short'?'short-thumb':''}`;
+  if(!url)return el('div',{class:`${className} thumb-missing`});
+  return el('img',{class:className,src:url,alt:'',loading:index<4?'eager':'lazy',decoding:'async'});
+}
+
 export async function renderYouTube(host,{refresh=false}={}){
   const generation=++renderGeneration;
   cleanupYouTubePlayer();listSwipeDetach?.();listSwipeDetach=null;compactDetach?.();compactDetach=null;
@@ -90,11 +98,12 @@ export async function renderYouTube(host,{refresh=false}={}){
     const playerHost=el('div',{class:'youtube-inline-player-host twitch-inline-player-host'});
     const items=selectedRows.flatMap(row=>(row.items||[]).map(item=>({...item,kind:normalizeKind(item)}))).filter(item=>item.kind===tab).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
     const list=el('div',{class:'media-list media-swipe-list'});
-    items.forEach((item,index)=>{const row=el('button',{class:'media-row',type:'button',onclick:()=>mountYouTubePlayer({host:playerHost,queue:items,index,shorts:tab==='short'})});row.append(el('img',{class:`thumb ${tab==='short'?'short-thumb':''}`,src:item.thumbnail||'',alt:'',loading:index<4?'eager':'lazy',decoding:'async'}));const copy=el('div',{class:'media-row-copy'}),titleLine=el('div',{class:'media-title-line'});if(tab==='live')titleLine.append(liveBadge(item),document.createTextNode(' '));titleLine.append(el('span',{class:'media-title',text:item.title||'無題'}));copy.append(titleLine,el('div',{class:'media-meta',text:[item.channelName||'',item.liveType==='archive'?'配信アーカイブ':''].filter(Boolean).join(' ・ ')}));row.append(copy);list.append(row)});
+    items.forEach((item,index)=>{const row=el('button',{class:'media-row',type:'button',onclick:()=>mountYouTubePlayer({host:playerHost,queue:items,index,shorts:tab==='short'})});row.append(thumbnailNode(item,tab,index));const copy=el('div',{class:'media-row-copy'}),titleLine=el('div',{class:'media-title-line'});if(tab==='live')titleLine.append(liveBadge(item),document.createTextNode(' '));titleLine.append(el('span',{class:'media-title',text:item.title||'無題'}));copy.append(titleLine,el('div',{class:'media-meta',text:[item.channelName||'',item.liveType==='archive'?'配信アーカイブ':''].filter(Boolean).join(' ・ ')}));row.append(copy);list.append(row)});
     if(!items.length)list.append(el('div',{class:'empty',text:cache.length?'該当する動画が見つかりません':'YouTubeを取得中…'}));
     const children=[picker,tabBar,playerHost];if(loadWarnings.length)children.push(el('div',{class:'media-warning',text:loadWarnings.slice(0,4).join(' / ')+(loadWarnings.length>4?` / 他${loadWarnings.length-4}件`: '')}));children.push(list);host.replaceChildren(...children);listSwipeDetach=attachSwipe(list,{left:()=>cycleTab(1),right:()=>cycleTab(-1),threshold:68});if(screen)compactDetach=installShrinkingHeader(screen,{threshold:62,className:'youtube-scroll-compact'});
   }
 
   draw();
-  try{await loadAll({force:refresh,onProgress:draw});draw()}catch(error){if(generation!==renderGeneration)return;if(cache.length)draw();else host.replaceChildren(el('div',{class:'error-box',text:error.message}))}
+  // v2.19.10: チャンネルごとの取得完了ではDOMを作り直さず、全取得後に一覧を1回だけ更新する。
+  try{await loadAll({force:refresh});draw()}catch(error){if(generation!==renderGeneration)return;if(cache.length)draw();else host.replaceChildren(el('div',{class:'error-box',text:error.message}))}
 }

@@ -80,8 +80,10 @@ function makeQueue(rows){const queue=[];rows.filter(snapshot=>snapshot.live.isLi
 function unusableThumbnail(url=''){const value=String(url||'').trim();return !value||/(?:404[_-](?:preview|processing)|processing[_-]?preview|placeholder|question|live_user_)/i.test(value);}
 function channelPreview(snapshot){const login=String(snapshot?.broadcaster?.login||'').trim();return login?`https://static-cdn.jtvnw.net/previews-ttv/live_user_${encodeURIComponent(login)}-640x360.jpg`:'';}
 function thumbnailElement(snapshot,video){
-  const primary=String(video?.thumbnailUrl||'');const preview=channelPreview(snapshot);const profile=String(snapshot?.broadcaster?.profileImageUrl||'');
+  const primary=String(video?.thumbnailUrl||'').trim();const preview=channelPreview(snapshot);const profile=String(snapshot?.broadcaster?.profileImageUrl||'').trim();
   const initial=unusableThumbnail(primary)?(profile||preview):primary;
+  // v2.19.10: Safariで空のimg srcが現在ページ「/」へ解決されるため、URL候補が無い時は画像要素自体を作らない。
+  if(!initial)return el('div',{class:'thumb twitch-archive-thumb thumb-missing'});
   const img=el('img',{class:'thumb twitch-archive-thumb',src:initial,alt:'',loading:'lazy',decoding:'async'});
   let step=0;const candidates=[profile,preview].filter(Boolean);
   img.addEventListener('error',()=>{while(step<candidates.length){const next=candidates[step++];if(next&&next!==img.src){img.src=next;return;}}img.removeAttribute('src');img.classList.add('thumb-missing');});
