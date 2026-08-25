@@ -5,7 +5,7 @@ import { attachSwipe } from '../../shared/gestures.js';
 import { cleanupYouTubePlayer, mountYouTubePlayer } from './youtube-player.js';
 
 const TABS=['long','short','live'];
-const CACHE_KEY='pdv2:youtubeCache:kind4';
+const CACHE_KEY='pdv2:youtubeCache:kind4-lockup';
 const LOAD_CONCURRENCY=3;
 let tab=localStorage.getItem('pdv2:youtubeTab')||'long';
 if(!TABS.includes(tab))tab='long';

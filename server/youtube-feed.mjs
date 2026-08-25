@@ -84,7 +84,17 @@ function cachedClassification(videoId,source='youtube'){const cached=classificat
 
 function collectMatches(html,patterns){const ids=new Set();for(const pattern of patterns){pattern.lastIndex=0;let match;while((match=pattern.exec(html)))if(match[1])ids.add(match[1]);}return ids}
 function extractShortIds(html=''){return collectMatches(String(html),[/"shortsLockupViewModel"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"reelItemRenderer"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"reelWatchEndpoint"[\s\S]{0,1200}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"url"\s*:\s*"\\?\/shorts\/([A-Za-z0-9_-]{11})(?:[?\\"/]|$)/g]);}
-function extractLongIds(html=''){return collectMatches(String(html),[/"gridVideoRenderer"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"videoRenderer"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g]);}
+function extractLongIds(html=''){
+  const text=String(html),ids=collectMatches(text,[/"gridVideoRenderer"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"videoRenderer"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g]);
+  let cursor=0;
+  while(cursor<text.length){
+    const index=text.indexOf('"lockupViewModel"',cursor);if(index<0)break;
+    const next=text.indexOf('"lockupViewModel"',index+1),end=Math.min(next>=0?next:text.length,index+6000),block=text.slice(index,end);
+    if(/"contentType"\s*:\s*"LOCKUP_CONTENT_TYPE_VIDEO"/.test(block)){const id=block.match(/"contentId"\s*:\s*"([A-Za-z0-9_-]{11})"/)?.[1];if(id)ids.add(id)}
+    cursor=index+'"lockupViewModel"'.length;
+  }
+  return ids;
+}
 function explicitShortSignal(html='',videoId=''){
   const text=String(html),id=String(videoId);if(!id)return false;const index=text.indexOf(`"videoId":"${id}"`);if(index>=0){const around=text.slice(Math.max(0,index-2200),Math.min(text.length,index+2600));if(/WEB_PAGE_TYPE_SHORTS|"isShorts"\s*:\s*true|shortsLockupViewModel|reelWatchEndpoint/.test(around))return true;}
   const escaped=id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');return new RegExp(`(?:reelWatchEndpoint|shortsLockupViewModel)[\\s\\S]{0,1800}?"videoId"\\s*:\\s*"${escaped}"`).test(text)||new RegExp(`"url"\\s*:\\s*"\\\\?/shorts/${escaped}(?:[?\\\\"/]|$)`).test(text);
