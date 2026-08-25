@@ -5,7 +5,7 @@ import { attachSwipe } from '../../shared/gestures.js';
 import { cleanupYouTubePlayer, mountYouTubePlayer } from './youtube-player.js';
 
 const TABS=['long','short','live'];
-const CACHE_KEY='pdv2:youtubeCache:v2185';
+const CACHE_KEY='pdv2:youtubeCache:kind4';
 const LOAD_CONCURRENCY=3;
 let tab=localStorage.getItem('pdv2:youtubeTab')||'long';
 if(!TABS.includes(tab))tab='long';
@@ -68,7 +68,7 @@ async function loadAll({force=false,onProgress}={}){
 
 function channelSheet(onChange,onEdit){const wrap=el('div');let sheet;wrap.append(el('button',{class:`list-item ${selected==='all'?'selected':''}`,type:'button',text:'すべてのチャンネル',onclick:()=>{selected='all';localStorage.setItem('pdv2:youtubeSelected',selected);sheet?.close();onChange()}}));cache.forEach(row=>wrap.append(el('button',{class:'list-item',type:'button',text:row.channel?.name||row._configuredName||'YouTube',onclick:()=>{selected=row.channel?.id||'all';localStorage.setItem('pdv2:youtubeSelected',selected);sheet?.close();onChange()}})));wrap.append(el('button',{class:'soft-button full-button',type:'button',text:'＋追加 / 編集',onclick:()=>{sheet?.close();onEdit()}}));sheet=openSheet(wrap,{title:'YouTubeチャンネル'})}
 function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.youtubeChannels,fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'チャンネルURL / @handle / Channel ID',placeholder:'例：UCDn8Lqf-x0zD8hmFUg08f6w'}],onSave:draft=>{update('youtubeChannels',draft);localStorage.removeItem(CACHE_KEY);sheet.close();onDone()}}),{title:'YouTubeチャンネル編集'})}
-function normalizeKind(item){if(item?.liveType||item?.kind==='live')return'live';if(item?.kind==='videos')return'long';if(item?.kind==='shorts')return'short';return item?.kind||'long'}
+function normalizeKind(item){if(item?.liveType||item?.kind==='live')return'live';if(item?.kind==='videos')return'long';if(item?.kind==='shorts')return'short';return['long','short','live','unknown'].includes(item?.kind)?item.kind:'unknown'}
 function liveBadge(item){if(item?.liveType==='archive')return el('span',{class:'archive-badge',text:'配信録画'});if(item?.liveType==='upcoming')return el('span',{class:'upcoming-badge',text:'配信予定'});return el('span',{class:'live-badge',text:'LIVE'})}
 
 // v2.19.10: Safariで空のimg srcが現在ページ「/」へ解決されるため、URLが無い時は画像要素自体を作らない。
