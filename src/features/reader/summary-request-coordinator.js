@@ -17,7 +17,8 @@ export function createSummaryRequestCoordinator({
   sleepFn = defaultSleep
 } = {}) {
   const inFlight = new Map();
-  let networkTail = Promise.resolve();
+  let displayTail = Promise.resolve();
+  let prefetchTail = Promise.resolve();
   let lastNetworkStartAt = 0;
   let hasNetworkStart = false;
   let requestSequence = 0;
@@ -27,24 +28,29 @@ export function createSummaryRequestCoordinator({
     return `${safeIdPart(articleId)}-${requestType}-${now()}-${requestSequence}`;
   };
 
-  const scheduleNetwork = task => {
-    const run = networkTail.catch(() => {}).then(async () => {
-      // v2.19.12: ブラウザ側では重複排除と直列化だけを担当する。
-      // GeminiのRPM保護はserver/lib/gemini.mjsの開始スロット1か所へ集約し、
-      // client suppressionまで4.3秒枠を消費してTikTok型スワイプを詰まらせない。
-      if (hasNetworkStart && Number(minStartGapMs) > 0) {
-        const elapsed = Math.max(0, now() - lastNetworkStartAt);
-        const wait = Math.max(0, Number(minStartGapMs) - elapsed);
-        if (wait > 0) await sleepFn(wait);
-      }
-      hasNetworkStart = true;
-      lastNetworkStartAt = now();
-      return task();
-    });
-    // The next request waits for the complete previous request, not only its start.
-    // This prevents display/prefetch from creating concurrent Function calls while
-    // allowing the server-side Gemini scheduler to own the real RPM spacing.
-    networkTail = run.then(() => undefined, () => undefined);
+  const scheduleOnTail = (tail, task) => tail.catch(() => {}).then(async () => {
+    if (hasNetworkStart && Number(minStartGapMs) > 0) {
+      const elapsed = Math.max(0, now() - lastNetworkStartAt);
+      const wait = Math.max(0, Number(minStartGapMs) - elapsed);
+      if (wait > 0) await sleepFn(wait);
+    }
+    hasNetworkStart = true;
+    lastNetworkStartAt = now();
+    return task();
+  });
+
+  const scheduleNetwork = (task, requestType = 'display') => {
+    if (requestType === 'display') {
+      // 表示中の記事同士は従来どおり直列化するが、別記事のprefetch完了は待たない。
+      // 同一記事の重複排除はinFlightで維持し、GeminiのRPM保護はサーバー側に任せる。
+      const run = scheduleOnTail(displayTail, task);
+      displayTail = run.then(() => undefined, () => undefined);
+      return run;
+    }
+
+    const run = scheduleOnTail(prefetchTail, task);
+    // prefetch同士だけを別レーンで直列化し、裏読み同士でFunctionを膨らませない。
+    prefetchTail = run.then(() => undefined, () => undefined);
     return run;
   };
 
@@ -58,7 +64,10 @@ export function createSummaryRequestCoordinator({
 
     const requestId = nextRequestId(articleId, requestType);
     let promise;
-    promise = scheduleNetwork(() => task({ requestId, articleId, requestType })).finally(() => {
+    promise = scheduleNetwork(
+      () => task({ requestId, articleId, requestType }),
+      requestType
+    ).finally(() => {
       if (inFlight.get(normalizedKey)?.promise === promise) inFlight.delete(normalizedKey);
     });
 

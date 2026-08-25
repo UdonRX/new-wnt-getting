@@ -87,7 +87,8 @@ async function warmFeedUntilSuccess(feed, { force = false } = {}) {
 
   while (true) {
     try {
-      const xml = await withWarmSlot(() => fetchXml(feed, { timeout: 12000 }));
+      // Renderのcold start中は1回を長く待たず、5秒probe→5秒待機で起床を確認する。
+      const xml = await withWarmSlot(() => fetchXml(feed, { timeout: 5000 }));
       saveWarm(feed, xml);
       return { feed: feed.name, ok: true };
     } catch (error) {
@@ -1130,13 +1131,21 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     if (cached?.xml) {
       draw(parseFeed(cached.xml, feed.name));
 
-      if (!autoRefreshDue(feed)) return;
-
-      warmJobFor(feed, { force: false }).then(() => {
+      const redrawAfterWarm = job => job.then(() => {
         if (generation !== renderGeneration) return;
         const fresh = readWarmRecord(feed);
         if (fresh?.xml) draw(parseFeed(fresh.xml, feed.name));
       }).catch(() => {});
+
+      // 起動時の強制warmが既に走っている場合は、15分キャッシュ判定より優先して完了を画面へ反映する。
+      const activeWarm = warmJobs.get(warmKey(feed));
+      if (activeWarm) {
+        redrawAfterWarm(activeWarm);
+        return;
+      }
+
+      if (!autoRefreshDue(feed)) return;
+      redrawAfterWarm(warmJobFor(feed, { force: false }));
       return;
     }
 

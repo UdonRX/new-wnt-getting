@@ -6,6 +6,8 @@ const DAILY_KEY = 'pdv2:wikipediaDaily:v213';
 const ARTICLE_PREFIX = 'pdv2:wikipediaArticle:v2131:';
 const SETTINGS_KEY = 'pdv2:wikipediaReaderSettings';
 const DEFAULT_SETTINGS = { writing: 'vertical', fontSize: 19, lineHeight: 1.85, theme: 'warm' };
+const WIKI_MEASURE_MAX_CHARS = 2200;
+const WIKI_PAGINATION_YIELD_EVERY = 2;
 let articleGeneration = 0;
 
 window.addEventListener('pdv2:before-navigate', event => {
@@ -162,6 +164,10 @@ function waitLayoutFrames() {
   return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
+function waitPaginationFrame() {
+  return new Promise(resolve => requestAnimationFrame(resolve));
+}
+
 function renderReaderText(node, text, vertical) {
   appendReadableVerticalText(node, text, vertical);
 }
@@ -188,7 +194,7 @@ function chooseNaturalBreak(chars, start, maximumEnd) {
   return maximumEnd;
 }
 
-function paginateMeasured(text, measureNode, vertical) {
+async function paginateMeasured(text, measureNode, vertical, { cancelled = () => false } = {}) {
   const chars = Array.from(String(text || ''));
   if (!chars.length) return ['本文を表示できませんでした。'];
 
@@ -196,8 +202,14 @@ function paginateMeasured(text, measureNode, vertical) {
   let start = 0;
 
   while (start < chars.length) {
+    if (cancelled()) {
+      measureNode.replaceChildren();
+      return null;
+    }
+
     let low = start + 1;
-    let high = chars.length;
+    // 長文全体を毎回DOMへ流し込まず、1回の計測量を上限付きにする。
+    let high = Math.min(chars.length, start + WIKI_MEASURE_MAX_CHARS);
     let best = start;
 
     while (low <= high) {
@@ -218,6 +230,11 @@ function paginateMeasured(text, measureNode, vertical) {
 
     pages.push(chars.slice(start, end).join(''));
     start = end;
+
+    // iPhoneのメインスレッドを長時間占有しないよう、数ページごとに描画機会を返す。
+    if (pages.length % WIKI_PAGINATION_YIELD_EVERY === 0 && start < chars.length) {
+      await waitPaginationFrame();
+    }
   }
 
   measureNode.replaceChildren();
@@ -342,8 +359,10 @@ function showReader(root, articleMeta, article, backToList) {
     configurePage(measurePage, vertical);
     await waitLayoutFrames();
 
-    const nextPages = paginateMeasured(articleText(article.blocks), measurePage, vertical);
-    if (disposed || serial !== paginationSerial || generation !== articleGeneration) return;
+    const nextPages = await paginateMeasured(articleText(article.blocks), measurePage, vertical, {
+      cancelled: () => disposed || serial !== paginationSerial || generation !== articleGeneration
+    });
+    if (!nextPages || disposed || serial !== paginationSerial || generation !== articleGeneration) return;
 
     pages = nextPages;
     pageIndex = Math.max(0, Math.min(

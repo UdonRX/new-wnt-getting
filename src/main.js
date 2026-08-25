@@ -2,7 +2,7 @@ import './runtime-v2195.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2195flow1';
+const BUILD='2195flow2';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -89,7 +89,7 @@ function preloadFeature(screen,{warm=false}={}){
       window.__PDV2_READER_WARM_CACHE_ONLY=true;
       return Promise.resolve(module.warmReaderRecommendations?.()).finally(()=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;});
     }
-    if(screen==='twitter'&&warm)return module.warmTwitterFeeds?.();
+    if(screen==='twitter'&&warm)return module.warmTwitterFeeds?.({force:true});
   }).catch(error=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;console.warn(`[${screen}-preload]`,error);});
 }
 function jstDay(){return new Date(Date.now()+9*60*60*1000).toISOString().slice(0,10);}
@@ -104,10 +104,10 @@ async function warmWikipediaDaily(){
   return null;
 }
 function startBackgroundJobs(){
-  // v2.19.14: Readerのキャッシュprewarmはidle待ちせず開始し、下タップ直後の8%待機画面を避ける。
+  // Reader候補とTwitter更新はアプリ起動直後から開始する。
   preloadFeature('reader',{warm:true});
+  preloadFeature('twitter',{warm:true});
   idle(()=>warmWikipediaDaily(),20);
-  idle(()=>preloadFeature('twitter',{warm:true}),180);
   idle(()=>preloadFeature('wikipedia'),320);
   idle(()=>preloadFeature('weather'),450);
   idle(()=>preloadFeature('media'),700);

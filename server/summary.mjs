@@ -7,6 +7,7 @@ import { setAsciiHeader, summaryServerErrorCode } from '../lib/http-response-saf
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
+const FAST_ARTICLE_PREPARE_TIMEOUT_MS = 1400;
 const FAST_RSS_MIN_CHARS = 320;
 
 function clean(value = '', max = 6000) {
@@ -118,13 +119,12 @@ export async function prepareSummaryBody(raw = {}, {
   const description = clean(body.description);
   const url = clean(body.url || body.link);
   const googleNews = isGoogleNewsInput(body, url);
+  const fastRequest = body.fast === true || String(body.fast || '').toLowerCase() === 'true';
   const requestedFullText = body.preferFullText === true
     || String(body.preferFullText || '').toLowerCase() === 'true';
-  // v2.19.12: news/knowledgeのRSSが十分に具体的なら、clientの保守的なfull-text指定より
-  // 500文字以内の即時要約を優先する。Google Newsとpapersは従来どおり本文取得を優先する。
-  const fastRss = Boolean(body.fast)
-    && !googleNews
-    && descriptionLooksFastEnough(title, description);
+  // news/knowledgeは、Google Newsを含めRSS本文が十分ならURL解決を待たず500文字以内で即時要約する。
+  // RSSが足りない場合だけ短時間の本文取得を試し、papersの重い本文/PDF取得は従来どおり維持する。
+  const fastRss = fastRequest && descriptionLooksFastEnough(title, description);
   const preferFullText = !fastRss && (requestedFullText || googleNews);
 
   if (fastRss || (!preferFullText && descriptionLooksReal(title, description))) {
@@ -135,12 +135,19 @@ export async function prepareSummaryBody(raw = {}, {
   }
 
   if (url) {
+    const requestedTimeout = Number(articleTimeoutMs);
+    const effectiveArticleTimeoutMs = fastRequest
+      ? Math.max(500, Math.min(FAST_ARTICLE_PREPARE_TIMEOUT_MS, Number.isFinite(requestedTimeout) ? requestedTimeout : FAST_ARTICLE_PREPARE_TIMEOUT_MS))
+      : Math.max(2500, Number.isFinite(requestedTimeout) ? requestedTimeout : ARTICLE_PREPARE_TIMEOUT_MS);
     try {
       const article = await Promise.race([
-        extractor(url, { maxTextLength: 2200, preferPdf: true }),
+        extractor(url, {
+          maxTextLength: fastRequest ? 1200 : 2200,
+          preferPdf: !fastRequest
+        }),
         new Promise((_, reject) => setTimeout(
           () => reject(new Error('summary article timeout')),
-          Math.max(2500, Number(articleTimeoutMs) || ARTICLE_PREPARE_TIMEOUT_MS)
+          effectiveArticleTimeoutMs
         ))
       ]);
       const text = first500(article?.text || '');

@@ -4,11 +4,12 @@ import { topbar, segmented, collectionManager, centerScrollItem, installShrinkin
 import { iconSvg } from '../../shared/icons.js';
 import { loadReader, feedsFor } from './reader-data.js';
 import { chooseTop, heuristicRank, requestAiRank } from './reader-rank.js';
-import { mountFocus, prewarmSummaryChunk } from './reader-focus.js';
+import { mountFocus } from './reader-focus.js';
 import { shortDate } from '../../shared/time.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
 const MIXED_WARM_TTL = 5 * 60 * 1000;
+const RECOMMENDATION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const CORE_SOURCE_KEY = 'pdv2:paperCoreSource';
 let focusHandle = null;
 let swipeDetach = null;
@@ -54,6 +55,24 @@ function isTechnologyResearchItem(item) {
     item?.source,
     item?.description
   ].filter(Boolean).join(' '));
+}
+function recommendationTimestamp(item) {
+  const explicit = Number(item?.publishedTimestamp);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const parsed = new Date(item?.pubDate || 0).getTime();
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+function recentRecommendationOrder(items, now = Date.now()) {
+  const cutoff = now - RECOMMENDATION_WINDOW_MS;
+  const seen = new Set();
+  return (Array.isArray(items) ? items : []).filter(item => {
+    const time = recommendationTimestamp(item);
+    if (!time || time < cutoff || time > now + 5 * 60 * 1000) return false;
+    const key = String(item?.link || item?.id || `${item?.feedName || ''}|${item?.title || ''}`).trim().toLowerCase();
+    if (key && seen.has(key)) return false;
+    if (key) seen.add(key);
+    return true;
+  }).sort((a, b) => recommendationTimestamp(b) - recommendationTimestamp(a));
 }
 function filterCoreItems(items, source = paperCoreSource()) {
   const rows = Array.isArray(items) ? items : [];
@@ -349,31 +368,22 @@ async function loadMixedRecommendations(onProgress) {
   let completed = 0;
   const notify = text => {
     completed += 1;
-    onProgress?.(12 + completed * 17, text);
+    onProgress?.(12 + completed * 22, text);
   };
   const jobs = [
     loadReader('news', { selectedFeed: '', preferCache: false }).finally(() => notify('ニュースを確認しました')),
     loadReader('knowledge', { selectedFeed: '', preferCache: false }).finally(() => notify('知識を確認しました')),
-    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }).finally(() => notify('製品・熱研究を確認しました')),
-    loadReader('papers', { paperTrack: 'creative', fastOnly: true, preferCache: false }).finally(() => notify('独創研究を確認しました'))
+    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }).finally(() => notify('技術リサーチを確認しました'))
   ];
   const results = await Promise.allSettled(jobs);
   const value = index => results[index].status === 'fulfilled' ? results[index].value.items : [];
 
   const news = annotateItems(value(0), 'news');
   const knowledge = annotateItems(value(1), 'knowledge');
-  const core = annotateItems(value(2), 'papers', 'core');
-  const creative = annotateItems(value(3), 'papers', 'creative', 'all');
+  const research = annotateItems(value(2).filter(isTechnologyResearchItem), 'papers', 'core');
 
-  onProgress?.(86, '新しさと面白さで並べ替え中');
-  const newsSelected = chooseTop(news, 'news', getRead('news', 'core'), 0, cachedAiRanking('news', 'core'));
-  const knowledgeSelected = chooseTop(knowledge, 'knowledge', getRead('knowledge', 'core'), 0, cachedAiRanking('knowledge', 'core'));
-  const papers = interleaveRecommendationGroups([
-    paperRecommendations(core, 'core', 'all'),
-    paperRecommendations(creative, 'creative', 'all')
-  ]);
-
-  return interleaveRecommendationGroups([newsSelected, knowledgeSelected, papers]);
+  onProgress?.(88, '直近6時間の記事を新しい順に整理中');
+  return recentRecommendationOrder([...news, ...knowledge, ...research]);
 }
 
 function warmCacheFresh() {
@@ -381,28 +391,25 @@ function warmCacheFresh() {
 }
 
 function ensureMixedRecommendationsWarm() {
-  if (warmCacheFresh()) return Promise.resolve(mixedWarmItems);
+  if (warmCacheFresh()) return Promise.resolve(recentRecommendationOrder(mixedWarmItems));
   if (mixedWarmPromise) return mixedWarmPromise;
   mixedWarmPromise = loadMixedRecommendations().then(items => {
     mixedWarmItems = items;
     mixedWarmAt = Date.now();
-    return items;
+    return recentRecommendationOrder(items);
   }).finally(() => { mixedWarmPromise = null; });
   return mixedWarmPromise;
 }
 
 export async function warmReaderRecommendations() {
-  const recommendations = await ensureMixedRecommendationsWarm();
-  if (recommendations.length > 1) {
-    await prewarmSummaryChunk(recommendations, { startIndex: 1, count: Math.min(9, recommendations.length - 1) });
-  }
-  return recommendations;
+  // 起動時は記事候補だけを温め、Gemini枠を先取りしない。
+  return ensureMixedRecommendationsWarm();
 }
 
 function recommendationLoading(host, mixed) {
   const fill = el('div', { class: 'reader-recommend-progress-fill' });
   const value = el('span', { class: 'reader-recommend-progress-value', text: '8%' });
-  const status = el('span', { text: mixed ? 'ニュース・知識・論文の取得先を確認中' : '登録した取得先を確認中' });
+  const status = el('span', { text: mixed ? 'ニュース・知識・技術リサーチを確認中' : '登録した取得先を確認中' });
   const progress = el('div', { class: 'reader-recommend-progress' }, [
     status,
     el('div', { class: 'reader-recommend-progress-track' }, [fill]),
@@ -410,7 +417,7 @@ function recommendationLoading(host, mixed) {
   ]);
   const box = el('div', { class: 'reader-recommend-loading' }, [
     el('strong', { text: 'おすすめを選んでいます…' }),
-    el('span', { text: mixed ? 'ニュース・知識は新しさ、論文は面白さを優先' : '登録した取得先からおすすめを選別します' }),
+    el('span', { text: mixed ? '直近6時間の記事を新しい順に表示します' : '登録した取得先からおすすめを選別します' }),
     progress
   ]);
   host.replaceChildren(box);
@@ -561,7 +568,7 @@ export async function renderReader(root, {
 
   const header = topbar('読む', {
     subtitle: readerRecommendations
-      ? (scopedMode ? `${modeLabel(scopedMode)}からおすすめ` : 'ニュース・知識・論文からおすすめ')
+      ? (scopedMode ? `${modeLabel(scopedMode)}からおすすめ` : 'ニュース・知識・技術リサーチからおすすめ')
       : mode === 'papers' ? '論文' : modeLabel(mode),
     actions: [
       { html: iconSvg('plus', { size: 20 }), title: '追加/編集', onClick: () => manageFeeds(mode, rerender) },
@@ -589,7 +596,7 @@ export async function renderReader(root, {
 
   const host = el('div', { class: 'reader-content-host' });
   const openRecommendation = () => renderReader(root, {
-    navigate, readerRecommendations: true, recommendationMode: mode, recommendationTrack: track, recommendationFamily: family
+    navigate, readerRecommendations: true
   });
 
   if (!readerRecommendations) {
@@ -648,18 +655,17 @@ export async function renderReader(root, {
           family: scopedFamily,
           onProgress: setLoadingProgress
         });
-      if (!recommendations.length) throw new Error('おすすめ記事を準備できませんでした');
-      if (mixedRecommendation && recommendations.length > 1) {
-        prewarmSummaryChunk(recommendations, { startIndex: 1, count: Math.min(9, recommendations.length - 1) }).catch(() => {});
-      }
+      if (!recommendations.length) throw new Error('直近6時間のおすすめ記事がありません');
       setLoadingProgress(100, 'おすすめを表示します');
 
       const returnToOrigin = () => {
-        const returnMode = mixedRecommendation ? 'news' : scopedMode;
+        const returnMode = mixedRecommendation ? mode : scopedMode;
+        const returnTrack = mixedRecommendation ? track : scopedTrack;
+        const returnFamily = mixedRecommendation ? family : scopedFamily;
         setReaderMode(returnMode);
         if (returnMode === 'papers') {
-          update('paperTrack', scopedTrack);
-          if (scopedTrack === 'creative') update('creativePaperFamily', scopedFamily);
+          update('paperTrack', returnTrack);
+          if (returnTrack === 'creative') update('creativePaperFamily', returnFamily);
         }
         renderReader(root, { navigate, readerRecommendations: false });
       };
