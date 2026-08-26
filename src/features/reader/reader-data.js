@@ -40,8 +40,6 @@ async function fetchTechnologyResearch(force = false) {
 
   technologyResearchInFlight = request;
   try {
-    // 部分応答はloadReader側でIndexedDB履歴とマージする。
-    // 件数不足を理由に同じ外部API/Geminiを直後に再実行しない。
     return await request;
   } finally {
     if (technologyResearchInFlight === request) technologyResearchInFlight = null;
@@ -55,9 +53,9 @@ export function feedsFor(mode) {
 }
 
 export function readerCacheKey(mode, paperTrack = 'core') {
-  return mode === 'papers'
-    ? `pdv2:readerCache:papers:${paperTrack === 'creative' ? 'creative' : 'core'}`
-    : `pdv2:readerCache:${mode}`;
+  if (mode !== 'papers') return `pdv2:readerCache:${mode}`;
+  const track = paperTrack === 'creative' ? 'creative' : 'technology';
+  return `pdv2:readerCache:papers:${track}`;
 }
 
 function restoreReaderCache(data) {
@@ -71,10 +69,7 @@ function restoreReaderCache(data) {
 
 export async function readReaderCache(mode, paperTrack = 'core') {
   try {
-    let data = await cacheGet(readerCacheKey(mode, paperTrack));
-    if (!data && mode === 'papers' && paperTrack !== 'creative') {
-      data = await cacheGet('pdv2:readerCache:papers');
-    }
+    const data = await cacheGet(readerCacheKey(mode, paperTrack));
     return restoreReaderCache(data);
   } catch {
     return null;
@@ -98,10 +93,11 @@ function compactCacheItem(item) {
 }
 
 async function writeCache(mode, items, paperTrack = 'core') {
-  const compact = (Array.isArray(items) ? items : [])
-    .slice(0, mode === 'papers' ? 300 : 350)
-    .map(compactCacheItem);
-  await cacheSet(readerCacheKey(mode, paperTrack), { at: Date.now(), items: compact });
+  const source = Array.isArray(items) ? items : [];
+  const rows = mode === 'papers' && paperTrack === 'technology'
+    ? source
+    : source.slice(0, mode === 'papers' ? 300 : 350);
+  await cacheSet(readerCacheKey(mode, paperTrack), { at: Date.now(), items: rows.map(compactCacheItem) });
 }
 
 async function translatePaperTitles(items) {
@@ -218,7 +214,7 @@ function friendlyFailure(mode, failures) {
   const first = String(failures[0]?.error?.message || '').trim();
   const detail = first ? ` ${first}` : '';
   if (mode === 'knowledge') return `知識RSSを取得できませんでした。保存済み記事があれば自動で表示します。${count ? `（失敗 ${count}件）` : ''}${detail}`;
-  if (mode === 'papers') return `論文取得先が一時的に応答していません。保存済み論文があれば自動で表示します。${detail}`;
+  if (mode === 'papers') return `技術リサーチ取得先が一時的に応答していません。保存済み記事があれば自動で表示します。${detail}`;
   return `記事を取得できませんでした。しばらくしてから更新してください。${detail}`;
 }
 
@@ -252,27 +248,27 @@ export async function loadReader(mode, {
   preferCache = false,
   backgroundRefresh = false
 } = {}) {
-  const normalizedTrack = paperTrack === 'creative' ? 'creative' : 'core';
+  // 現在の papers/core は「技術リサーチ」に全面置換済み。旧 papers-feed は一覧表示経路から外す。
+  const normalizedTrack = paperTrack === 'creative' ? 'creative' : 'technology';
   const allFeeds = feedsFor(mode);
   const feeds = selectedFeed && mode !== 'papers'
     ? allFeeds.filter(feed => feed.name === selectedFeed)
     : allFeeds;
   const cached = await readReaderCache(mode, normalizedTrack);
+  const itemLimit = mode === 'papers' && normalizedTrack === 'technology' ? 0 : (mode === 'papers' ? 300 : 350);
 
   let visibleCached = [];
   if (cached?.items?.length) {
     const raw = selectedFeed && mode !== 'papers'
       ? cached.items.filter(item => item.feedName === selectedFeed)
       : cached.items;
-    visibleCached = arrangeModeItems(raw, mode, feeds, mode === 'papers' ? 300 : 350);
+    visibleCached = arrangeModeItems(raw, mode, feeds, itemLimit);
     if (visibleCached.length) onProgress?.(visibleCached, { cached: true, refreshing: force, paperTrack: normalizedTrack });
     if (preferCache && !force && visibleCached.length) {
       return { items: visibleCached, failures: [], cached: true, paperTrack: normalizedTrack };
     }
   }
 
-  // v2.19.14: ホーム直後のReader prewarmではネット取得を待たずIndexedDBを即返し、
-  // 最新RSS/論文の更新だけを同一キー1本に集約してバックグラウンド実行する。
   const warmCacheOnly = !backgroundRefresh && !force && Boolean(globalThis.__PDV2_READER_WARM_CACHE_ONLY);
   if (warmCacheOnly) {
     scheduleReaderBackgroundRefresh(mode, { selectedFeed, paperTrack: normalizedTrack, fastOnly });
@@ -288,33 +284,25 @@ export async function loadReader(mode, {
   const collected = [];
   const failures = [];
 
-  if (mode === 'papers') {
-    const base = normalizedTrack === 'creative' ? '/api/creative-papers-feed' : '/api/papers-feed';
-    const label = normalizedTrack === 'creative' ? '独創研究' : '製品・熱研究';
-    const researchLabel = '技術リサーチ';
-    const researchPromise = normalizedTrack === 'core'
-      ? fetchTechnologyResearch(force)
-      : Promise.resolve([]);
-
+  if (mode === 'papers' && normalizedTrack === 'technology') {
     try {
-      const fast = await fetchFeed({ name: label, url: `${base}?mode=fast` }, { force, timeoutMs: 35_000 });
+      const research = await fetchTechnologyResearch(force);
+      collected.push(...research);
+      onProgress?.(dedupeSort([...collected, ...visibleCached], 0), { stage: 'technology-research', paperTrack: normalizedTrack });
+    } catch (error) {
+      failures.push({ feed: '技術リサーチ', error });
+    }
+  } else if (mode === 'papers') {
+    const label = '独創研究';
+    try {
+      const fast = await fetchFeed({ name: label, url: '/api/creative-papers-feed?mode=fast' }, { force, timeoutMs: 35_000 });
       collected.push(...fast);
       onProgress?.(dedupeSort([...collected, ...(force ? visibleCached : [])]), { stage: 'fast', paperTrack: normalizedTrack });
     } catch (error) { failures.push({ feed: label, error }); }
 
-    if (normalizedTrack === 'core') {
-      try {
-        const research = await researchPromise;
-        collected.push(...research);
-        onProgress?.(dedupeSort([...collected, ...visibleCached]), { stage: 'technology-research', paperTrack: normalizedTrack });
-      } catch (error) {
-        failures.push({ feed: researchLabel, error });
-      }
-    }
-
     if (!fastOnly) {
       try {
-        const deep = await fetchFeed({ name: label, url: `${base}?mode=deep` }, { force, timeoutMs: 45_000 });
+        const deep = await fetchFeed({ name: label, url: '/api/creative-papers-feed?mode=deep' }, { force, timeoutMs: 45_000 });
         collected.push(...deep);
       } catch (error) { failures.push({ feed: label, error }); }
     }
@@ -334,11 +322,9 @@ export async function loadReader(mode, {
     await Promise.all(workers);
   }
 
-  // 論文系は更新ごとに過去履歴を全消しせず、IndexedDBの既存履歴とマージする。
-  // 技術リサーチが一時的に5件しか返らない場合も、直近の有効履歴を維持できる。
   const shouldMergeCached = visibleCached.length && (failures.length > 0 || mode === 'papers');
   const combined = shouldMergeCached ? [...collected, ...visibleCached] : collected;
-  let items = arrangeModeItems(combined, mode, feeds, mode === 'papers' ? 300 : 350);
+  let items = arrangeModeItems(combined, mode, feeds, itemLimit);
   if (mode === 'papers') items = await translatePaperTitles(items);
 
   if (items.length) {
