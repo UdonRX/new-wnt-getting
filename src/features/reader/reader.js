@@ -9,7 +9,6 @@ import { shortDate } from '../../shared/time.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
 const MIXED_WARM_TTL = 5 * 60 * 1000;
-const RECOMMENDATION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const TECHNOLOGY_TAB_KEY = 'pdv2:technologyResearchTab';
 const TECHNOLOGY_VERSION_RE = /研究方式:\s*生産技術8タブ/i;
 const TECHNOLOGY_TABS = [
@@ -108,17 +107,38 @@ function recommendationTimestamp(item) {
   const parsed = new Date(item?.pubDate || 0).getTime();
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
-function recentRecommendationOrder(items, now = Date.now()) {
-  const cutoff = now - RECOMMENDATION_WINDOW_MS;
+function newestRecommendationOrder(items) {
   const seen = new Set();
   return (Array.isArray(items) ? items : []).filter(item => {
-    const time = recommendationTimestamp(item);
-    if (!time || time < cutoff || time > now + 5 * 60 * 1000) return false;
     const key = String(item?.link || item?.id || `${item?.feedName || ''}|${item?.title || ''}`).trim().toLowerCase();
     if (key && seen.has(key)) return false;
     if (key) seen.add(key);
     return true;
   }).sort((a, b) => recommendationTimestamp(b) - recommendationTimestamp(a));
+}
+function researchDescriptionField(item, label) {
+  const source = String(item?.description || '');
+  const marker = `${label}:`;
+  const start = source.indexOf(marker);
+  if (start < 0) return '';
+  const rest = source.slice(start + marker.length);
+  return rest.split('｜')[0].trim();
+}
+function readerListDate(item, mode) {
+  if (mode === 'papers' && technologyCategoryOf(item) === '論文・研究') {
+    const precision = researchDescriptionField(item, '日付精度');
+    if (precision === '不明') return '日付不明';
+    if (precision === '年') {
+      const year = researchDescriptionField(item, '公開年') || researchDescriptionField(item, '出版年');
+      return /^\d{4}$/.test(year) ? `${year}年` : '年のみ';
+    }
+    const date = new Date(item?.pubDate || 0);
+    if (Number.isFinite(date.getTime()) && date.getTime() > 0) {
+      return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+    }
+    return '日付不明';
+  }
+  return shortDate(item?.pubDate);
 }
 function modeLabel(mode) { return mode === 'papers' ? '技術リサーチ' : mode === 'knowledge' ? '知識' : 'ニュース'; }
 
@@ -128,13 +148,24 @@ function setReaderMode(mode) {
 }
 
 function annotateItems(items, mode, tab = 'all') {
-  return (Array.isArray(items) ? items : []).map(item => ({
-    ...item,
-    _readerMode: mode,
-    _paperTrack: mode === 'papers' ? 'technology' : '',
-    _technologyTab: mode === 'papers' ? tab : '',
-    _creativeFamily: mode === 'papers' && isGeneralCreativeItem(item) ? 'general' : ''
-  }));
+  return (Array.isArray(items) ? items : []).map(item => {
+    const description = String(item?.description || '');
+    const isTechnologyNote = mode === 'papers'
+      && isTechnologyResearchItem(item)
+      && /媒体:\s*note(?:\s|｜|$)/i.test(description);
+    const version = description.match(/研究方式:\s*生産技術8タブ-v(\d+)/i)?.[1] || '';
+    const link = isTechnologyNote && version && item?.link && !String(item.link).includes(`#trv${version}`)
+      ? `${item.link}#trv${version}`
+      : item?.link;
+    return {
+      ...item,
+      link,
+      _readerMode: mode,
+      _paperTrack: mode === 'papers' ? 'technology' : '',
+      _technologyTab: mode === 'papers' ? tab : '',
+      _creativeFamily: mode === 'papers' && isGeneralCreativeItem(item) ? 'general' : ''
+    };
+  });
 }
 function cachedAiRanking(mode, track, family = 'all') {
   try {
@@ -255,7 +286,7 @@ function renderBento(host, mode, track, family, items, { onOpen }) {
 
       const meta = [];
       if (unread) meta.push(el('span', { class: 'badge', text: 'NEW' }));
-      meta.push(el('span', { text: item?.source || item?.feedName || '' }), el('span', { text: shortDate(item?.pubDate) }));
+      meta.push(el('span', { text: item?.source || item?.feedName || '' }), el('span', { text: readerListDate(item, mode) }));
       card.append(media, el('div', { class: 'reader-bento-copy' }, [
         el('div', { class: 'reader-bento-meta' }, meta),
         el(filteredIndex === 0 ? 'h2' : 'h3', { class: 'reader-bento-title', text: item?.titleJa || item?.title || '無題' })
@@ -353,14 +384,14 @@ async function loadModeRecommendations(mode, { tab = technologyTab(), onProgress
   onProgress?.(12, `${modeLabel(mode)}の記事を取得中`);
   if (mode === 'papers') {
     const result = await loadTechnologyRows({
-      tab,
-      fastOnly: true,
+      tab: 'all',
+      fastOnly: false,
       preferCache: false,
-      onProgress: () => onProgress?.(52, `${technologyTabDef(tab).label}を整理中`)
+      onProgress: () => onProgress?.(52, '技術リサーチ全タブを整理中')
     });
-    const annotated = annotateItems(result.items, 'papers', tab);
-    onProgress?.(78, tab === 'general' ? '独創性を優先して並べ替え中' : '実務への役立ち度を優先して並べ替え中');
-    return paperRecommendations(annotated, tab);
+    const annotated = annotateItems(result.items, 'papers', 'all');
+    onProgress?.(78, '技術リサーチ全タブを新しい順に整理中');
+    return newestRecommendationOrder(annotated);
   }
 
   const result = await loadReader(mode, {
@@ -382,17 +413,21 @@ async function loadMixedRecommendations(onProgress) {
   const jobs = [
     loadReader('news', { selectedFeed: '', preferCache: false }).finally(() => notify('ニュースを確認しました')),
     loadReader('knowledge', { selectedFeed: '', preferCache: false }).finally(() => notify('知識を確認しました')),
-    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }).finally(() => notify('技術リサーチを確認しました'))
+    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }).finally(() => notify('論文・研究を確認しました'))
   ];
   const results = await Promise.allSettled(jobs);
   const value = index => results[index].status === 'fulfilled' ? results[index].value.items : [];
 
   const news = annotateItems(value(0), 'news');
   const knowledge = annotateItems(value(1), 'knowledge');
-  const research = annotateItems(value(2).filter(isTechnologyResearchItem), 'papers', 'all');
+  const papers = annotateItems(
+    value(2).filter(item => isTechnologyResearchItem(item) && technologyCategoryOf(item) === '論文・研究'),
+    'papers',
+    'papers'
+  );
 
-  onProgress?.(88, '直近6時間の記事を新しい順に整理中');
-  return recentRecommendationOrder([...news, ...knowledge, ...research]);
+  onProgress?.(88, 'ニュース・知識・論文・研究を新しい順に整理中');
+  return newestRecommendationOrder([...news, ...knowledge, ...papers]);
 }
 
 function warmCacheFresh() {
@@ -400,12 +435,12 @@ function warmCacheFresh() {
 }
 
 function ensureMixedRecommendationsWarm() {
-  if (warmCacheFresh()) return Promise.resolve(recentRecommendationOrder(mixedWarmItems));
+  if (warmCacheFresh()) return Promise.resolve(newestRecommendationOrder(mixedWarmItems));
   if (mixedWarmPromise) return mixedWarmPromise;
   mixedWarmPromise = loadMixedRecommendations().then(items => {
     mixedWarmItems = items;
     mixedWarmAt = Date.now();
-    return recentRecommendationOrder(items);
+    return newestRecommendationOrder(items);
   }).finally(() => { mixedWarmPromise = null; });
   return mixedWarmPromise;
 }
@@ -414,10 +449,11 @@ export async function warmReaderRecommendations() {
   return ensureMixedRecommendationsWarm();
 }
 
-function recommendationLoading(host, mixed) {
+function recommendationLoading(host, mixed, scopedMode = '') {
   const fill = el('div', { class: 'reader-recommend-progress-fill' });
   const value = el('span', { class: 'reader-recommend-progress-value', text: '8%' });
-  const status = el('span', { text: mixed ? 'ニュース・知識・技術リサーチを確認中' : '登録した取得先を確認中' });
+  const statusText = mixed ? 'ニュース・知識・論文・研究を確認中' : scopedMode === 'papers' ? '技術リサーチ全タブを確認中' : '登録した取得先を確認中';
+  const status = el('span', { text: statusText });
   const progress = el('div', { class: 'reader-recommend-progress' }, [
     status,
     el('div', { class: 'reader-recommend-progress-track' }, [fill]),
@@ -425,7 +461,7 @@ function recommendationLoading(host, mixed) {
   ]);
   const box = el('div', { class: 'reader-recommend-loading' }, [
     el('strong', { text: 'おすすめを選んでいます…' }),
-    el('span', { text: mixed ? '直近6時間の記事を新しい順に表示します' : '登録した取得先からおすすめを選別します' }),
+    el('span', { text: mixed ? 'ニュース・知識・論文・研究を新しい順に表示します' : scopedMode === 'papers' ? '技術リサーチ全タブを新しい順に表示します' : '登録した取得先からおすすめを選別します' }),
     progress
   ]);
   host.replaceChildren(box);
@@ -570,7 +606,7 @@ export async function renderReader(root, {
 
   const header = topbar('読む', {
     subtitle: readerRecommendations
-      ? (scopedMode ? `${modeLabel(scopedMode)}からおすすめ` : 'ニュース・知識・技術リサーチからおすすめ')
+      ? (scopedMode === 'papers' ? '技術リサーチ全タブを新しい順' : scopedMode ? `${modeLabel(scopedMode)}からおすすめ` : 'ニュース・知識・論文・研究を新しい順')
       : modeLabel(mode),
     actions
   });
@@ -585,9 +621,15 @@ export async function renderReader(root, {
   screen.append(modeNav);
 
   const host = el('div', { class: 'reader-content-host' });
-  const openRecommendation = () => renderReader(root, {
-    navigate, readerRecommendations: true
-  });
+  const openRecommendation = () => mode === 'papers'
+    ? renderReader(root, {
+      navigate,
+      readerRecommendations: true,
+      recommendationMode: 'papers',
+      recommendationTrack: 'technology',
+      recommendationFamily: 'all'
+    })
+    : renderReader(root, { navigate, readerRecommendations: true });
 
   if (!readerRecommendations) {
     const sourceDock = buildSourceDock(mode, tab, {
@@ -634,7 +676,7 @@ export async function renderReader(root, {
 
   if (readerRecommendations) {
     screen.classList.add('reader-focus-open', 'reader-recommendations-open');
-    const setLoadingProgress = recommendationLoading(host, mixedRecommendation);
+    const setLoadingProgress = recommendationLoading(host, mixedRecommendation, scopedMode);
     try {
       const recommendations = mixedRecommendation
         ? await ensureMixedRecommendationsWarm()
@@ -648,7 +690,7 @@ export async function renderReader(root, {
       const returnToOrigin = () => {
         const returnMode = mixedRecommendation ? mode : scopedMode;
         setReaderMode(returnMode);
-        if (returnMode === 'papers' && !mixedRecommendation) setTechnologyTab(scopedTab);
+        if (returnMode === 'papers' && !mixedRecommendation) setTechnologyTab(tab);
         renderReader(root, { navigate, readerRecommendations: false });
       };
 
@@ -664,14 +706,14 @@ export async function renderReader(root, {
           readerRecommendations: true,
           recommendationMode: nextMode,
           recommendationTrack: nextMode === 'papers' ? 'technology' : '',
-          recommendationFamily: nextMode === 'papers' ? technologyTab() : ''
+          recommendationFamily: nextMode === 'papers' ? 'all' : ''
         });
       };
 
       requestAnimationFrame(() => {
         focusHandle = mountFocus(host, {
           items: recommendations,
-          label: scopedMode ? `${modeLabel(scopedMode)}おすすめ` : 'おすすめ',
+          label: scopedMode === 'papers' ? '技術リサーチ' : 'おすすめ',
           summaryMode: scopedMode,
           onList: returnToOrigin,
           onPrevFeed: () => recommendationSwitch(-1),

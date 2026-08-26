@@ -6,6 +6,7 @@ import { cleanupYouTubePlayer, mountYouTubePlayer } from './youtube-player.js';
 
 const TABS=['long','short','live'];
 const CACHE_KEY='pdv2:youtubeCache:kind4-lockup';
+const CACHE_TTL=10*60*1000;
 const LOAD_CONCURRENCY=3;
 let tab=localStorage.getItem('pdv2:youtubeTab')||'long';
 if(!TABS.includes(tab))tab='long';
@@ -30,11 +31,12 @@ async function loadChannel(ch){
 }
 function readCache(){try{return JSON.parse(localStorage.getItem(CACHE_KEY)||'null')}catch{return null}}
 function saveCache(){try{localStorage.setItem(CACHE_KEY,JSON.stringify({at:Date.now(),rows:cache,warnings:loadWarnings}))}catch{}}
+function cacheIsFresh(value=readCache()){return Boolean(value?.rows?.length)&&Date.now()-Number(value?.at||0)<CACHE_TTL}
 
 async function loadAll({force=false,onProgress}={}){
   const previous=readCache();
-  if(previous?.rows?.length){cache=previous.rows;loadWarnings=[];onProgress?.()}
-  if(!force&&previous&&Date.now()-Number(previous.at||0)<10*60*1000)return cache;
+  if(previous?.rows?.length){cache=previous.rows;loadWarnings=Array.isArray(previous.warnings)?previous.warnings:[];onProgress?.()}
+  if(!force&&cacheIsFresh(previous))return cache;
 
   const staleByKey=new Map((previous?.rows||[]).map(row=>[String(row?._sourceKey||'').toLowerCase(),row]));
   const byKey=new Map(cache.map(row=>[String(row?._sourceKey||'').toLowerCase(),row]));
@@ -67,11 +69,11 @@ async function loadAll({force=false,onProgress}={}){
 }
 
 function channelSheet(onChange,onEdit){const wrap=el('div');let sheet;wrap.append(el('button',{class:`list-item ${selected==='all'?'selected':''}`,type:'button',text:'すべてのチャンネル',onclick:()=>{selected='all';localStorage.setItem('pdv2:youtubeSelected',selected);sheet?.close();onChange()}}));cache.forEach(row=>wrap.append(el('button',{class:'list-item',type:'button',text:row.channel?.name||row._configuredName||'YouTube',onclick:()=>{selected=row.channel?.id||'all';localStorage.setItem('pdv2:youtubeSelected',selected);sheet?.close();onChange()}})));wrap.append(el('button',{class:'soft-button full-button',type:'button',text:'＋追加 / 編集',onclick:()=>{sheet?.close();onEdit()}}));sheet=openSheet(wrap,{title:'YouTubeチャンネル'})}
-function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.youtubeChannels,fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'チャンネルURL / @handle / Channel ID',placeholder:'例：UCDn8Lqf-x0zD8hmFUg08f6w'}],onSave:draft=>{update('youtubeChannels',draft);localStorage.removeItem(CACHE_KEY);sheet.close();onDone()}}),{title:'YouTubeチャンネル編集'})}
+function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.youtubeChannels,fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'チャンネルURL / @handle / Channel ID',placeholder:'例：UCDn8Lqf-x0zD8hmFUg08f6w'}],onSave:draft=>{update('youtubeChannels',draft);localStorage.removeItem(CACHE_KEY);sheet.close();onDone?.()}}),{title:'YouTubeチャンネル編集'})}
+export function openYouTubeChannelManager(onDone=()=>{}){manage(onDone)}
 function normalizeKind(item){if(item?.liveType||item?.kind==='live')return'live';if(item?.kind==='videos')return'long';if(item?.kind==='shorts')return'short';return['long','short','live','unknown'].includes(item?.kind)?item.kind:'unknown'}
 function liveBadge(item){if(item?.liveType==='archive')return el('span',{class:'archive-badge',text:'配信録画'});if(item?.liveType==='upcoming')return el('span',{class:'upcoming-badge',text:'配信予定'});return el('span',{class:'live-badge',text:'LIVE'})}
 
-// v2.19.10: Safariで空のimg srcが現在ページ「/」へ解決されるため、URLが無い時は画像要素自体を作らない。
 function thumbnailNode(item,currentTab,index){
   const url=String(item?.thumbnail||'').trim();
   const className=`thumb ${currentTab==='short'?'short-thumb':''}`;
@@ -83,7 +85,7 @@ export async function renderYouTube(host,{refresh=false}={}){
   const generation=++renderGeneration;
   cleanupYouTubePlayer();listSwipeDetach?.();listSwipeDetach=null;compactDetach?.();compactDetach=null;
   const screen=host.closest('.screen');screen?.classList.add('youtube-list-screen');
-  const previous=readCache();if(previous?.rows?.length){cache=previous.rows;loadWarnings=[]}else{cache=[];loadWarnings=[]}
+  const previous=readCache();if(previous?.rows?.length){cache=previous.rows;loadWarnings=Array.isArray(previous.warnings)?previous.warnings:[]}else{cache=[];loadWarnings=[]}
   if(!state.youtubeChannels.length){host.replaceChildren(el('div',{class:'empty',text:'チャンネルを追加してください'}),el('button',{class:'primary-button full-button',type:'button',text:'YouTubeチャンネルを追加',onclick:()=>manage(()=>renderYouTube(host,{refresh:true}))}));return}
 
   function changeTab(next){if(!TABS.includes(next)||next===tab)return;cleanupYouTubePlayer();tab=next;localStorage.setItem('pdv2:youtubeTab',tab);draw()}
@@ -103,7 +105,16 @@ export async function renderYouTube(host,{refresh=false}={}){
     const children=[picker,tabBar,playerHost];if(loadWarnings.length)children.push(el('div',{class:'media-warning',text:loadWarnings.slice(0,4).join(' / ')+(loadWarnings.length>4?` / 他${loadWarnings.length-4}件`: '')}));children.push(list);host.replaceChildren(...children);listSwipeDetach=attachSwipe(list,{left:()=>cycleTab(1),right:()=>cycleTab(-1),threshold:68});if(screen)compactDetach=installShrinkingHeader(screen,{threshold:62,className:'youtube-scroll-compact'});
   }
 
-  draw();
-  // v2.19.10: チャンネルごとの取得完了ではDOMを作り直さず、全取得後に一覧を1回だけ更新する。
-  try{await loadAll({force:refresh});draw()}catch(error){if(generation!==renderGeneration)return;if(cache.length)draw();else host.replaceChildren(el('div',{class:'error-box',text:error.message}))}
+  if(!refresh&&cacheIsFresh(previous)){draw();return}
+
+  // 一覧を操作できる前に更新を完了する。再生中に非同期のdrawが走ってプレーヤーを閉じない。
+  host.replaceChildren(el('div',{class:'card',html:'<div class="loading">YouTubeを更新しています...</div>'}));
+  try{
+    await loadAll({force:refresh});
+    if(generation!==renderGeneration)return;
+    draw();
+  }catch(error){
+    if(generation!==renderGeneration)return;
+    if(cache.length)draw();else host.replaceChildren(el('div',{class:'error-box',text:error.message}));
+  }
 }
