@@ -2,7 +2,7 @@ import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
 import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';
 import { iconSvg } from '../../shared/icons.js';
-import { loadReader, feedsFor } from './reader-data.js';
+import { loadReader, readReaderCache, feedsFor } from './reader-data.js';
 import { chooseTop, heuristicRank, requestAiRank } from './reader-rank.js';
 import { mountFocus } from './reader-focus.js';
 import { shortDate } from '../../shared/time.js';
@@ -125,37 +125,48 @@ function researchDescriptionField(item, label) {
   return rest.split('｜')[0].trim();
 }
 function readerListDate(item, mode) {
-  if (mode === 'papers' && technologyCategoryOf(item) === '論文・研究') {
+  if (mode === 'papers' && isTechnologyResearchItem(item)) {
     const precision = researchDescriptionField(item, '日付精度');
     if (precision === '不明') return '日付不明';
     if (precision === '年') {
       const year = researchDescriptionField(item, '公開年') || researchDescriptionField(item, '出版年');
       return /^\d{4}$/.test(year) ? `${year}年` : '年のみ';
     }
-    const date = new Date(item?.pubDate || 0);
-    if (Number.isFinite(date.getTime()) && date.getTime() > 0) {
-      return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+    if (technologyCategoryOf(item) === '論文・研究') {
+      const date = new Date(item?.pubDate || 0);
+      if (Number.isFinite(date.getTime()) && date.getTime() > 0) {
+        return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
+      }
+      return '日付不明';
     }
-    return '日付不明';
   }
   return shortDate(item?.pubDate);
 }
 function modeLabel(mode) { return mode === 'papers' ? '技術リサーチ' : mode === 'knowledge' ? '知識' : 'ニュース'; }
-
 function setReaderMode(mode) {
   if (!READER_MODES.includes(mode)) return;
   update('lastReaderMode', mode);
+}
+async function settleWithin(promise, timeoutMs, fallback) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve(promise).catch(() => fallback),
+      new Promise(resolve => { timer = setTimeout(() => resolve(fallback), timeoutMs); })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function annotateItems(items, mode, tab = 'all') {
   return (Array.isArray(items) ? items : []).map(item => {
     const description = String(item?.description || '');
-    const isTechnologyNote = mode === 'papers'
-      && isTechnologyResearchItem(item)
-      && /媒体:\s*note(?:\s|｜|$)/i.test(description);
+    const isTechnology = mode === 'papers' && isTechnologyResearchItem(item);
     const version = description.match(/研究方式:\s*生産技術8タブ-v(\d+)/i)?.[1] || '';
-    const link = isTechnologyNote && version && item?.link && !String(item.link).includes(`#trv${version}`)
-      ? `${item.link}#trv${version}`
+    const originalLink = String(item?.link || '');
+    const link = isTechnology && version && originalLink
+      ? `${originalLink.replace(/#.*$/, '')}#trv${version}c2`
       : item?.link;
     return {
       ...item,
@@ -191,57 +202,36 @@ function manageFeeds(mode, rerender) {
     }
   }), { title: `${modeLabel(mode)}のタブ編集` });
 }
-
 function centerActiveChip(chips) {
   const active = chips?.querySelector('.chip.active');
   if (active) centerScrollItem(chips, active, { behavior: 'smooth' });
 }
-
 function currentSourceLabel(mode, tab = technologyTab()) {
   if (mode === 'papers') return technologyTabDef(tab).label;
   return getSelectedFeed(mode) || 'All';
 }
-
 function buildSourceDock(mode, tab, { onSourceChange, onRecommend }) {
   const dock = el('div', { class: 'reader-source-dock reader-sticky-context' });
   const rail = el('div', { class: 'chips reader-source-scroll reader-feed-chips' });
-
   if (mode === 'papers') {
     TECHNOLOGY_TABS.forEach(item => rail.append(el('button', {
       class: `chip ${tab === item.value ? 'active' : ''}`,
-      type: 'button',
-      text: item.label,
+      type: 'button', text: item.label,
       onclick: () => onSourceChange?.({ technologyTab: item.value })
     })));
   } else {
     const selected = getSelectedFeed(mode);
-    rail.append(el('button', {
-      class: `chip ${!selected ? 'active' : ''}`,
-      type: 'button',
-      text: 'All',
-      onclick: () => onSourceChange?.({ feed: '' })
-    }));
+    rail.append(el('button', { class: `chip ${!selected ? 'active' : ''}`, type: 'button', text: 'All', onclick: () => onSourceChange?.({ feed: '' }) }));
     feedsFor(mode).forEach(feed => rail.append(el('button', {
-      class: `chip ${selected === feed.name ? 'active' : ''}`,
-      type: 'button',
-      text: feed.name,
+      class: `chip ${selected === feed.name ? 'active' : ''}`, type: 'button', text: feed.name,
       onclick: () => onSourceChange?.({ feed: feed.name })
     })));
   }
-
   const compactActive = el('button', {
-    class: 'chip active reader-source-active-compact',
-    type: 'button',
-    text: currentSourceLabel(mode, tab),
+    class: 'chip active reader-source-active-compact', type: 'button', text: currentSourceLabel(mode, tab),
     onclick: () => window.scrollTo({ top: 0, behavior: 'smooth' })
   });
-  const recommend = el('button', {
-    class: 'soft-button reader-recommend-overlay',
-    type: 'button',
-    text: 'おすすめへ',
-    onclick: onRecommend
-  });
-
+  const recommend = el('button', { class: 'soft-button reader-recommend-overlay', type: 'button', text: 'おすすめへ', onclick: onRecommend });
   dock.append(rail, compactActive, recommend);
   centerActiveChip(rail);
   return dock;
@@ -254,36 +244,25 @@ function bentoFallbackLabel(item) {
   }
   return item?.feedName || item?.source || modeLabel(item?._readerMode);
 }
-
 function renderBento(host, mode, track, family, items, { onOpen }) {
   const read = getRead(mode, track);
   const wrap = el('div', { class: 'reader-bento-view' });
   const search = el('input', { class: 'reader-bento-search', placeholder: 'タイトル・媒体を検索' });
   const grid = el('div', { class: 'reader-bento-grid' });
-
   const draw = () => {
     grid.replaceChildren();
     const q = search.value.trim().toLowerCase();
-    const filtered = items.filter(item => !q || [item?.title, item?.titleJa, item?.source, item?.feedName]
-      .filter(Boolean).join(' ').toLowerCase().includes(q));
-
+    const filtered = items.filter(item => !q || [item?.title, item?.titleJa, item?.source, item?.feedName].filter(Boolean).join(' ').toLowerCase().includes(q));
     filtered.forEach((item, filteredIndex) => {
       const unread = !read.has(item.id);
       const card = el('button', { class: `reader-bento-card ${filteredIndex === 0 ? 'is-hero' : ''}`, type: 'button' });
       const media = el('div', { class: 'reader-bento-media' });
       if (item?.image) {
-        const image = el('img', {
-          src: item.image,
-          alt: '',
-          loading: filteredIndex <= 2 ? 'eager' : 'lazy',
-          decoding: 'async',
-          referrerpolicy: 'no-referrer'
-        });
+        const image = el('img', { src: item.image, alt: '', loading: filteredIndex <= 2 ? 'eager' : 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
         image.addEventListener('error', () => media.classList.add('image-failed'), { once: true });
         media.append(image);
       } else media.classList.add('image-failed');
       media.append(el('span', { class: 'reader-bento-fallback', text: bentoFallbackLabel(item) }));
-
       const meta = [];
       if (unread) meta.push(el('span', { class: 'badge', text: 'NEW' }));
       meta.push(el('span', { text: item?.source || item?.feedName || '' }), el('span', { text: readerListDate(item, mode) }));
@@ -292,20 +271,14 @@ function renderBento(host, mode, track, family, items, { onOpen }) {
         el(filteredIndex === 0 ? 'h2' : 'h3', { class: 'reader-bento-title', text: item?.titleJa || item?.title || '無題' })
       ]));
       card.onclick = () => {
-        read.add(item.id);
-        saveRead(mode, track, read);
-        onOpen(item, filteredIndex, filtered);
+        read.add(item.id); saveRead(mode, track, read); onOpen(item, filteredIndex, filtered);
       };
       grid.append(card);
     });
-
     if (!filtered.length) grid.append(el('div', { class: 'empty reader-bento-empty', text: '該当する記事がありません' }));
   };
-
   search.addEventListener('input', draw);
-  draw();
-  wrap.append(search, grid);
-  host.replaceChildren(wrap);
+  draw(); wrap.append(search, grid); host.replaceChildren(wrap);
 }
 
 function paperRecommendations(items, tab) {
@@ -313,90 +286,85 @@ function paperRecommendations(items, tab) {
   const unread = getRead('papers', 'technology');
   const heuristic = heuristicRank(items, rankMode, unread);
   const byKey = new Map(items.map(item => [String(item?.id || ''), item]));
-  const ordered = [];
-  const used = new Set();
-
+  const ordered = [], used = new Set();
   for (const row of cachedAiRanking('papers', 'technology', tab)) {
     const item = byKey.get(String(row?.id || ''));
     if (!item || used.has(item.id)) continue;
-    ordered.push(item);
-    used.add(item.id);
+    ordered.push(item); used.add(item.id);
   }
   for (const row of heuristic) {
     if (used.has(row.item.id)) continue;
-    ordered.push(row.item);
-    used.add(row.item.id);
+    ordered.push(row.item); used.add(row.item.id);
   }
   return ordered;
 }
 
-async function loadTechnologyRows({
-  tab = technologyTab(),
-  force = false,
-  fastOnly = false,
-  preferCache = false,
-  onProgress
-} = {}) {
+async function loadTechnologyRows({ tab = technologyTab(), force = false, fastOnly = false, preferCache = false, onProgress } = {}) {
   const needCore = tab !== 'general';
   const needCreative = tab === 'all' || tab === 'general';
   const jobs = [];
-
   if (needCore) {
     jobs.push(loadReader('papers', {
-      force,
-      paperTrack: 'core',
-      fastOnly,
-      preferCache,
+      force, paperTrack: 'core', fastOnly, preferCache,
       onProgress: (items, meta = {}) => onProgress?.(filterTechnologyItems(items, tab), { ...meta, technologySource: 'focused' })
     }).then(result => ({ kind: 'core', result })));
   }
   if (needCreative) {
     jobs.push(loadReader('papers', {
-      force,
-      paperTrack: 'creative',
-      fastOnly,
-      preferCache,
+      force, paperTrack: 'creative', fastOnly, preferCache,
       onProgress: (items, meta = {}) => onProgress?.(filterTechnologyItems(items, tab), { ...meta, technologySource: 'general' })
     }).then(result => ({ kind: 'creative', result })));
   }
-
   const settled = await Promise.allSettled(jobs);
-  const items = [];
-  const failures = [];
+  const items = [], failures = [];
   for (const row of settled) {
     if (row.status === 'fulfilled') {
-      items.push(...(row.value.result?.items || []));
-      failures.push(...(row.value.result?.failures || []));
-    } else {
-      failures.push({ feed: '技術リサーチ', error: row.reason });
-    }
+      items.push(...(row.value.result?.items || [])); failures.push(...(row.value.result?.failures || []));
+    } else failures.push({ feed: '技術リサーチ', error: row.reason });
   }
   const filtered = filterTechnologyItems(items, tab);
   if (filtered.length) return { items: filtered, failures };
-  if (settled.some(row => row.status === 'rejected')) {
-    const first = settled.find(row => row.status === 'rejected');
-    throw first.reason;
-  }
+  if (settled.some(row => row.status === 'rejected')) throw settled.find(row => row.status === 'rejected').reason;
   return { items: [], failures };
+}
+
+async function loadTechnologyRecommendations(onProgress) {
+  onProgress?.(16, '保存済みの技術リサーチを確認中');
+  const [coreCache, creativeCache] = await Promise.all([
+    readReaderCache('papers', 'technology'),
+    readReaderCache('papers', 'creative')
+  ]);
+  let core = coreCache?.items || [];
+  let creative = creativeCache?.items || [];
+
+  onProgress?.(34, '技術リサーチ本体を更新確認中');
+  const coreResult = await settleWithin(
+    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }),
+    12_000,
+    { items: core }
+  );
+  if (coreResult?.items?.length) core = coreResult.items;
+
+  onProgress?.(58, '一般独創を高速確認中');
+  if (!creative.length) {
+    const creativeResult = await settleWithin(
+      loadReader('papers', { paperTrack: 'creative', fastOnly: true, preferCache: false }),
+      12_000,
+      { items: [] }
+    );
+    if (creativeResult?.items?.length) creative = creativeResult.items;
+  }
+
+  onProgress?.(82, '技術リサーチ全タブを新しい順に整理中');
+  const merged = filterTechnologyItems([...core, ...creative], 'all');
+  return newestRecommendationOrder(annotateItems(merged, 'papers', 'all'));
 }
 
 async function loadModeRecommendations(mode, { tab = technologyTab(), onProgress } = {}) {
   onProgress?.(12, `${modeLabel(mode)}の記事を取得中`);
-  if (mode === 'papers') {
-    const result = await loadTechnologyRows({
-      tab: 'all',
-      fastOnly: false,
-      preferCache: false,
-      onProgress: () => onProgress?.(52, '技術リサーチ全タブを整理中')
-    });
-    const annotated = annotateItems(result.items, 'papers', 'all');
-    onProgress?.(78, '技術リサーチ全タブを新しい順に整理中');
-    return newestRecommendationOrder(annotated);
-  }
-
+  if (mode === 'papers') return loadTechnologyRecommendations(onProgress);
   const result = await loadReader(mode, {
-    selectedFeed: '',
-    preferCache: false,
+    selectedFeed: '', preferCache: false,
     onProgress: () => onProgress?.(52, '登録した取得先を均等に確認中')
   });
   const annotated = annotateItems(result.items, mode);
@@ -404,68 +372,60 @@ async function loadModeRecommendations(mode, { tab = technologyTab(), onProgress
   return chooseTop(annotated, mode, getRead(mode, 'core'), 0, cachedAiRanking(mode, 'core'));
 }
 
-async function loadMixedRecommendations(onProgress) {
+async function loadMixedRecommendations(onProgress, { forceSources = false } = {}) {
   let completed = 0;
   const notify = text => {
     completed += 1;
     onProgress?.(12 + completed * 22, text);
   };
+  const technologyJob = (async () => {
+    const cached = await readReaderCache('papers', 'technology');
+    return settleWithin(
+      loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }),
+      12_000,
+      { items: cached?.items || [] }
+    );
+  })();
   const jobs = [
-    loadReader('news', { selectedFeed: '', preferCache: false }).finally(() => notify('ニュースを確認しました')),
-    loadReader('knowledge', { selectedFeed: '', preferCache: false }).finally(() => notify('知識を確認しました')),
-    loadReader('papers', { paperTrack: 'core', fastOnly: true, preferCache: false }).finally(() => notify('論文・研究を確認しました'))
+    loadReader('news', { selectedFeed: '', force: forceSources, preferCache: false }).finally(() => notify('ニュースを最新化しました')),
+    loadReader('knowledge', { selectedFeed: '', force: forceSources, preferCache: false }).finally(() => notify('知識を最新化しました')),
+    technologyJob.finally(() => notify('改善事例を確認しました'))
   ];
   const results = await Promise.allSettled(jobs);
   const value = index => results[index].status === 'fulfilled' ? results[index].value.items : [];
-
   const news = annotateItems(value(0), 'news');
   const knowledge = annotateItems(value(1), 'knowledge');
-  const papers = annotateItems(
-    value(2).filter(item => isTechnologyResearchItem(item) && technologyCategoryOf(item) === '論文・研究'),
-    'papers',
-    'papers'
+  const cases = annotateItems(
+    value(2).filter(item => isTechnologyResearchItem(item) && technologyCategoryOf(item) === '改善事例'),
+    'papers', 'case'
   );
-
-  onProgress?.(88, 'ニュース・知識・論文・研究を新しい順に整理中');
-  return newestRecommendationOrder([...news, ...knowledge, ...papers]);
+  onProgress?.(88, 'ニュース・知識・改善事例を新しい順に整理中');
+  return newestRecommendationOrder([...news, ...knowledge, ...cases]);
 }
 
-function warmCacheFresh() {
-  return mixedWarmItems.length > 0 && Date.now() - mixedWarmAt < MIXED_WARM_TTL;
-}
-
+function warmCacheFresh() { return mixedWarmItems.length > 0 && Date.now() - mixedWarmAt < MIXED_WARM_TTL; }
 function ensureMixedRecommendationsWarm() {
   if (warmCacheFresh()) return Promise.resolve(newestRecommendationOrder(mixedWarmItems));
   if (mixedWarmPromise) return mixedWarmPromise;
-  mixedWarmPromise = loadMixedRecommendations().then(items => {
-    mixedWarmItems = items;
-    mixedWarmAt = Date.now();
-    return newestRecommendationOrder(items);
+  mixedWarmPromise = loadMixedRecommendations(undefined, { forceSources: false }).then(items => {
+    mixedWarmItems = items; mixedWarmAt = Date.now(); return newestRecommendationOrder(items);
   }).finally(() => { mixedWarmPromise = null; });
   return mixedWarmPromise;
 }
-
-export async function warmReaderRecommendations() {
-  return ensureMixedRecommendationsWarm();
-}
+export async function warmReaderRecommendations() { return ensureMixedRecommendationsWarm(); }
 
 function recommendationLoading(host, mixed, scopedMode = '') {
   const fill = el('div', { class: 'reader-recommend-progress-fill' });
   const value = el('span', { class: 'reader-recommend-progress-value', text: '8%' });
-  const statusText = mixed ? 'ニュース・知識・論文・研究を確認中' : scopedMode === 'papers' ? '技術リサーチ全タブを確認中' : '登録した取得先を確認中';
+  const statusText = mixed ? 'ニュース・知識・改善事例を最新化中' : scopedMode === 'papers' ? '技術リサーチ全タブを確認中' : '登録した取得先を確認中';
   const status = el('span', { text: statusText });
-  const progress = el('div', { class: 'reader-recommend-progress' }, [
-    status,
-    el('div', { class: 'reader-recommend-progress-track' }, [fill]),
-    value
-  ]);
+  const progress = el('div', { class: 'reader-recommend-progress' }, [status, el('div', { class: 'reader-recommend-progress-track' }, [fill]), value]);
   const box = el('div', { class: 'reader-recommend-loading' }, [
     el('strong', { text: 'おすすめを選んでいます…' }),
-    el('span', { text: mixed ? 'ニュース・知識・論文・研究を新しい順に表示します' : scopedMode === 'papers' ? '技術リサーチ全タブを新しい順に表示します' : '登録した取得先からおすすめを選別します' }),
+    el('span', { text: mixed ? 'ニュース・知識・改善事例の全記事を新しい順に表示します' : scopedMode === 'papers' ? '技術リサーチ全タブを新しい順に表示します' : '登録した取得先からおすすめを選別します' }),
     progress
   ]);
   host.replaceChildren(box);
-
   let current = 0.08;
   const set = (percent, text) => {
     current = Math.max(current, Math.min(1, Number(percent || 0) / 100));
@@ -473,109 +433,67 @@ function recommendationLoading(host, mixed, scopedMode = '') {
     value.textContent = `${Math.round(current * 100)}%`;
     if (text) status.textContent = text;
   };
-  set(8);
-  return set;
+  set(8); return set;
 }
 
-function paperContextStates() {
-  return TECHNOLOGY_TABS.map(item => item.value);
-}
-
+function paperContextStates() { return TECHNOLOGY_TABS.map(item => item.value); }
 function sourceStates(mode) {
   if (mode === 'papers') return paperContextStates();
   return ['', ...feedsFor(mode).map(feed => feed.name)];
 }
-
 function applyModeBoundary(nextMode, direction) {
   setReaderMode(nextMode);
   if (nextMode === 'papers') {
-    const states = paperContextStates();
-    setTechnologyTab(direction > 0 ? states[0] : states.at(-1));
-    return;
+    const states = paperContextStates(); setTechnologyTab(direction > 0 ? states[0] : states.at(-1)); return;
   }
-  const states = sourceStates(nextMode);
-  setSelectedFeed(nextMode, direction > 0 ? states[0] : states.at(-1));
+  const states = sourceStates(nextMode); setSelectedFeed(nextMode, direction > 0 ? states[0] : states.at(-1));
 }
-
 function stepReaderContext(mode, direction, rerender) {
   if (![-1, 1].includes(direction)) return;
-
   if (mode === 'papers') {
     const states = paperContextStates();
-    let current = states.indexOf(technologyTab());
-    if (current < 0) current = 0;
+    let current = states.indexOf(technologyTab()); if (current < 0) current = 0;
     const next = current + direction;
-    if (next >= 0 && next < states.length) {
-      setTechnologyTab(states[next]);
-      rerender();
-      return;
-    }
-    if (direction < 0) {
-      applyModeBoundary('knowledge', -1);
-      rerender();
-    }
+    if (next >= 0 && next < states.length) { setTechnologyTab(states[next]); rerender(); return; }
+    if (direction < 0) { applyModeBoundary('knowledge', -1); rerender(); }
     return;
   }
-
-  const states = sourceStates(mode);
-  const selected = getSelectedFeed(mode);
-  let current = states.indexOf(selected);
-  if (current < 0) current = 0;
+  const states = sourceStates(mode), selected = getSelectedFeed(mode);
+  let current = states.indexOf(selected); if (current < 0) current = 0;
   const next = current + direction;
-  if (next >= 0 && next < states.length) {
-    setSelectedFeed(mode, states[next]);
-    rerender();
-    return;
-  }
-
-  const modeIndex = READER_MODES.indexOf(mode);
-  const nextModeIndex = modeIndex + direction;
+  if (next >= 0 && next < states.length) { setSelectedFeed(mode, states[next]); rerender(); return; }
+  const modeIndex = READER_MODES.indexOf(mode), nextModeIndex = modeIndex + direction;
   if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;
-  applyModeBoundary(READER_MODES[nextModeIndex], direction);
-  rerender();
+  applyModeBoundary(READER_MODES[nextModeIndex], direction); rerender();
 }
-
 function installReaderListSwipe(node, mode, rerender) {
-  let start = null;
-  let suppressUntil = 0;
+  let start = null, suppressUntil = 0;
   const shouldIgnore = target => Boolean(target?.closest?.('input,textarea,select,a,.reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search'));
   const onStart = event => {
     if (event.touches?.length !== 1 || shouldIgnore(event.target)) return;
-    const touch = event.touches[0];
-    start = { x: touch.clientX, y: touch.clientY };
+    const touch = event.touches[0]; start = { x: touch.clientX, y: touch.clientY };
   };
   const onEnd = event => {
     if (!start || !event.changedTouches?.length) { start = null; return; }
-    const touch = event.changedTouches[0];
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
-    start = null;
+    const touch = event.changedTouches[0], dx = touch.clientX - start.x, dy = touch.clientY - start.y; start = null;
     if (Math.abs(dx) < 64 || Math.abs(dx) <= Math.abs(dy) * 1.35) return;
-    suppressUntil = Date.now() + 430;
-    stepReaderContext(mode, dx > 0 ? 1 : -1, rerender);
+    suppressUntil = Date.now() + 430; stepReaderContext(mode, dx > 0 ? 1 : -1, rerender);
   };
   const blockClick = event => {
     if (Date.now() >= suppressUntil) return;
-    event.preventDefault();
-    event.stopPropagation();
+    event.preventDefault(); event.stopPropagation();
   };
   node.addEventListener('touchstart', onStart, { passive: true });
   node.addEventListener('touchend', onEnd, { passive: true });
   node.addEventListener('click', blockClick, true);
   return () => {
-    node.removeEventListener('touchstart', onStart);
-    node.removeEventListener('touchend', onEnd);
-    node.removeEventListener('click', blockClick, true);
+    node.removeEventListener('touchstart', onStart); node.removeEventListener('touchend', onEnd); node.removeEventListener('click', blockClick, true);
   };
 }
 
 export async function renderReader(root, {
-  navigate,
-  refresh = false,
-  readerRecommendations = false,
-  recommendationMode = '',
-  recommendationTrack = '',
-  recommendationFamily = ''
+  navigate, refresh = false, readerRecommendations = false,
+  recommendationMode = '', recommendationTrack = '', recommendationFamily = ''
 }) {
   focusHandle?.destroy?.(); focusHandle = null;
   swipeDetach?.(); swipeDetach = null;
@@ -593,8 +511,7 @@ export async function renderReader(root, {
   const rerender = (force = false) => renderReader(root, { navigate, refresh: force, readerRecommendations: false });
   const switchMode = nextMode => {
     if (!READER_MODES.includes(nextMode) || nextMode === mode) return;
-    setReaderMode(nextMode);
-    renderReader(root, { navigate, readerRecommendations: false });
+    setReaderMode(nextMode); renderReader(root, { navigate, readerRecommendations: false });
   };
 
   const actions = [];
@@ -603,15 +520,13 @@ export async function renderReader(root, {
     { html: iconSvg('refresh', { size: 20 }), title: '更新', onClick: () => rerender(true) },
     { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
   );
-
   const header = topbar('読む', {
     subtitle: readerRecommendations
-      ? (scopedMode === 'papers' ? '技術リサーチ全タブを新しい順' : scopedMode ? `${modeLabel(scopedMode)}からおすすめ` : 'ニュース・知識・論文・研究を新しい順')
+      ? (scopedMode === 'papers' ? '技術リサーチ全タブを新しい順' : scopedMode ? `${modeLabel(scopedMode)}からおすすめ` : 'ニュース・知識・改善事例を新しい順')
       : modeLabel(mode),
     actions
   });
   screen.append(header);
-
   const modeNav = el('div', { class: 'reader-mode-nav' });
   modeNav.append(segmented([
     { value: 'news', label: 'ニュース' },
@@ -622,13 +537,7 @@ export async function renderReader(root, {
 
   const host = el('div', { class: 'reader-content-host' });
   const openRecommendation = () => mode === 'papers'
-    ? renderReader(root, {
-      navigate,
-      readerRecommendations: true,
-      recommendationMode: 'papers',
-      recommendationTrack: 'technology',
-      recommendationFamily: 'all'
-    })
+    ? renderReader(root, { navigate, readerRecommendations: true, recommendationMode: 'papers', recommendationTrack: 'technology', recommendationFamily: 'all' })
     : renderReader(root, { navigate, readerRecommendations: true });
 
   if (!readerRecommendations) {
@@ -642,9 +551,7 @@ export async function renderReader(root, {
     });
     screen.append(sourceDock);
   }
-
-  screen.append(host);
-  root.replaceChildren(screen);
+  screen.append(host); root.replaceChildren(screen);
 
   const openArticleSequence = (item, initialIndex, visibleItems) => {
     const rows = Array.isArray(visibleItems) && visibleItems.length ? visibleItems : [item];
@@ -653,24 +560,11 @@ export async function renderReader(root, {
     window.scrollTo({ top: 0, behavior: 'auto' });
     focusHandle?.destroy?.();
     focusHandle = mountFocus(host, {
-      items: rows,
-      initialIndex,
-      label: currentSourceLabel(mode, tab),
-      summaryMode: mode,
+      items: rows, initialIndex, label: currentSourceLabel(mode, tab), summaryMode: mode,
       onList: () => renderReader(root, { navigate, readerRecommendations: false }),
-      onIndexChange: (_, activeItem) => {
-        const r = getRead(mode, track);
-        r.add(activeItem.id);
-        saveRead(mode, track, r);
-      },
-      onPrevFeed: () => {
-        const i = READER_MODES.indexOf(mode);
-        if (i > 0) switchMode(READER_MODES[i - 1]);
-      },
-      onNextFeed: () => {
-        const i = READER_MODES.indexOf(mode);
-        if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]);
-      }
+      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); },
+      onPrevFeed: () => { const i = READER_MODES.indexOf(mode); if (i > 0) switchMode(READER_MODES[i - 1]); },
+      onNextFeed: () => { const i = READER_MODES.indexOf(mode); if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]); }
     });
   };
 
@@ -679,11 +573,12 @@ export async function renderReader(root, {
     const setLoadingProgress = recommendationLoading(host, mixedRecommendation, scopedMode);
     try {
       const recommendations = mixedRecommendation
-        ? await ensureMixedRecommendationsWarm()
-        : await loadModeRecommendations(scopedMode, {
-          tab: scopedTab,
-          onProgress: setLoadingProgress
-        });
+        ? await loadMixedRecommendations(setLoadingProgress, { forceSources: true })
+        : await loadModeRecommendations(scopedMode, { tab: scopedTab, onProgress: setLoadingProgress });
+      if (mixedRecommendation) {
+        mixedWarmItems = recommendations;
+        mixedWarmAt = Date.now();
+      }
       if (!recommendations.length) throw new Error('おすすめ記事がありません');
       setLoadingProgress(100, 'おすすめを表示します');
 
@@ -693,23 +588,18 @@ export async function renderReader(root, {
         if (returnMode === 'papers' && !mixedRecommendation) setTechnologyTab(tab);
         renderReader(root, { navigate, readerRecommendations: false });
       };
-
       const recommendationSwitch = direction => {
         if (!scopedMode) return;
-        const i = READER_MODES.indexOf(scopedMode);
-        const next = i + direction;
+        const i = READER_MODES.indexOf(scopedMode), next = i + direction;
         if (next < 0 || next >= READER_MODES.length) return;
         const nextMode = READER_MODES[next];
         setReaderMode(nextMode);
         renderReader(root, {
-          navigate,
-          readerRecommendations: true,
-          recommendationMode: nextMode,
+          navigate, readerRecommendations: true, recommendationMode: nextMode,
           recommendationTrack: nextMode === 'papers' ? 'technology' : '',
           recommendationFamily: nextMode === 'papers' ? 'all' : ''
         });
       };
-
       requestAnimationFrame(() => {
         focusHandle = mountFocus(host, {
           items: recommendations,
@@ -721,9 +611,7 @@ export async function renderReader(root, {
           onIndexChange: (_, item) => {
             const m = item._readerMode || scopedMode || 'news';
             const t = m === 'papers' ? 'technology' : 'core';
-            const r = getRead(m, t);
-            r.add(item.id);
-            saveRead(m, t, r);
+            const r = getRead(m, t); r.add(item.id); saveRead(m, t, r);
           }
         });
       });
@@ -746,33 +634,23 @@ export async function renderReader(root, {
       renderBento(host, mode, track, tab, annotated, { onOpen: openArticleSequence });
       return annotated;
     };
-
     const result = mode === 'papers'
       ? await loadTechnologyRows({
-        tab,
-        force: refresh,
+        tab, force: refresh,
         onProgress: (items, meta = {}) => {
           if (!items?.length) return;
           if (!host.querySelector('.reader-bento-view') || meta?.technologySource === 'focused' || meta?.cached) showList(items);
         }
       })
       : await loadReader(mode, {
-        force: refresh,
-        selectedFeed,
+        force: refresh, selectedFeed,
         onProgress: (items, meta = {}) => {
           if (!items?.length) return;
           if (!host.querySelector('.reader-bento-view') || meta?.cached) showList(items);
         }
       });
-
     const annotated = showList(result.items);
-    compactDetach = installShrinkingHeader(screen, {
-      threshold: 72,
-      className: 'reader-list-motion-compact',
-      range: 58,
-      hysteresis: 20
-    });
-
+    compactDetach = installShrinkingHeader(screen, { threshold: 72, className: 'reader-list-motion-compact', range: 58, hysteresis: 20 });
     if (state.settings.rankWithAi && annotated.length) {
       const rankMode = mode === 'papers' && tab === 'general' ? 'papers-creative-general' : mode;
       requestAiRank(annotated, rankMode).then(data => {

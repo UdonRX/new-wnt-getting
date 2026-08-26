@@ -45,11 +45,13 @@ function researchField(description, label, nextLabels = []) {
   }
   return source.slice(valueStart, end).replace(/^\s+|\s+$/g, '').trim();
 }
-function conciseResearchText(value = '', max = 190) {
-  let text = clean(value, max * 6)
+function conciseResearchText(value = '', max = 110) {
+  let text = clean(value, max * 7)
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/%[0-9a-f]{2}/gi, ' ')
     .replace(/\b(?:Title|Description|QYResearch)\s*[:：]?/gi, ' ')
+    .replace(/(?:^|\s)#{1,6}\s*/g, ' ')
+    .replace(/\bM-?\d+(?:-\d+)?(?:h\d+v\d+)?(?:\.svg)?\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const sentences = text.match(/[^。！？!?]{10,}[。！？!?]?/g) || [];
@@ -57,7 +59,7 @@ function conciseResearchText(value = '', max = 190) {
   const chars = Array.from(text);
   return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : text;
 }
-function noteSelectionReason(category = '') {
+function researchSelectionReason(category = '') {
   const map = {
     '生技基礎': '用語・計算・使い分けを整理でき、生産技術の判断軸を増やせる内容だから選びました。',
     '改善事例': '課題から対策、効果までの考え方を自工程へ置き換えやすい内容だから選びました。',
@@ -75,39 +77,24 @@ function researchSummaryFromBody(body = {}) {
   const category = researchField(description, 'カテゴリ', ['日付精度', '公開年', '概要', '応用着眼点', '媒体']);
   const overview = researchField(description, '概要', ['応用着眼点', '媒体']);
   const application = researchField(description, '応用着眼点', ['媒体']);
-  const media = researchField(description, '媒体', ['関連度', '有用度', '選別理由', 'トピック', '取得方式']);
   const selectionReason = researchField(description, '選別理由', ['トピック', '取得方式']);
   if (!organization || !category || !overview || !application) return null;
   const sentence = value => /[。！？!?]$/.test(value) ? value : `${value}。`;
-
-  if (/^note$/i.test(media)) {
-    const shortOverview = conciseResearchText(overview, 190) || conciseResearchText(body.title, 120);
-    const reason = /機械採点|score|検索関連度/i.test(selectionReason)
-      ? noteSelectionReason(category)
-      : conciseResearchText(selectionReason, 150) || noteSelectionReason(category);
-    const shortApplication = conciseResearchText(application, 170);
-    return {
-      headline: clean(body.title) || '技術リサーチ',
-      lines: [
-        { label: '概要', text: sentence(shortOverview) },
-        { label: '選んだ理由', text: sentence(reason) },
-        { label: '生技への応用', text: sentence(shortApplication) }
-      ],
-      short: sentence(shortOverview),
-      points: [sentence(reason), sentence(shortApplication)],
-      provider: 'technology-research-prepared-v7', model: 'prepared', contentSource: 'web-research', cacheable: true, validated: true, fastPath: 'technology-research-note-prepared'
-    };
-  }
+  const shortOverview = conciseResearchText(overview, 110) || conciseResearchText(body.title, 90);
+  const reason = /機械採点|score|検索関連度|カテゴリ語|条件に合致/i.test(selectionReason)
+    ? researchSelectionReason(category)
+    : conciseResearchText(selectionReason, 88) || researchSelectionReason(category);
+  const shortApplication = conciseResearchText(application, 96);
   return {
     headline: clean(body.title) || '技術リサーチ',
     lines: [
-      { label: '対象企業/組織名', text: sentence(`${organization}を対象にした情報です`) },
-      { label: 'カテゴリ・概要', text: sentence(`［${category}］${overview}`) },
-      { label: '応用着眼点', text: sentence(application) }
+      { label: '概要', text: sentence(shortOverview) },
+      { label: '選んだ理由', text: sentence(reason) },
+      { label: '生技への応用', text: sentence(shortApplication) }
     ],
-    short: sentence(`${organization}を対象にした情報です`),
-    points: [sentence(`［${category}］${overview}`), sentence(application)],
-    provider: 'gemini-grounded-research-v2195', model: 'grounded-search', contentSource: 'web-research', cacheable: true, validated: true, fastPath: 'technology-research-prepared'
+    short: sentence(shortOverview),
+    points: [sentence(reason), sentence(shortApplication)],
+    provider: 'technology-research-prepared-v8', model: 'prepared', contentSource: 'web-research', cacheable: true, validated: true, fastPath: 'technology-research-prepared-v8'
   };
 }
 function descriptionLooksReal(title, description) {
@@ -183,7 +170,7 @@ async function routeSummaryRequest(req, res) {
     const incoming = rawBody(req);
     const preparedResearch = researchSummaryFromBody(incoming);
     if (preparedResearch) {
-      res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Prepared-Source', 'web-research'); res.setHeader('X-Summary-Route', 'technology-research-prepared');
+      res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Prepared-Source', 'web-research'); res.setHeader('X-Summary-Route', 'technology-research-prepared-v8');
       return res.status(200).json(preparedResearch);
     }
     const prepared = await prepareSummaryBody(incoming);
