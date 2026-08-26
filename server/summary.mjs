@@ -5,10 +5,12 @@ import paperTitles from '../lib/paper-titles.mjs';
 import { summaryBatchV2195, summarySingleV2195 } from '../lib/summary-dispatch-v2195.mjs';
 import { setAsciiHeader, summaryServerErrorCode } from '../lib/http-response-safe.mjs';
 
-const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:整理|確認)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
+const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
 const FAST_ARTICLE_PREPARE_TIMEOUT_MS = 1400;
 const FAST_RSS_MIN_CHARS = 320;
+const RESEARCH_ARTICLE_TIMEOUT_MS = 5000;
+const RESEARCH_NOISE_RE = /(?:Cookie|クッキー|JavaScript|ログイン|会員登録|お問い合わせ|プライバシーポリシー|利用規約|関連記事|おすすめ記事|広告|Copyright|無断転載|メニュー|サイト内検索|シェア(?:する|はこちら)?|ホームへ|トップページ)/i;
 
 function clean(value = '', max = 6000) {
   return String(value || '')
@@ -45,19 +47,88 @@ function researchField(description, label, nextLabels = []) {
   }
   return source.slice(valueStart, end).replace(/^\s+|\s+$/g, '').trim();
 }
-function conciseResearchText(value = '', max = 110) {
-  let text = clean(value, max * 7)
+function cleanResearchText(value = '', max = 5000) {
+  return clean(value, max)
     .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/%[0-9a-f]{2}/gi, ' ')
     .replace(/\b(?:Title|Description|QYResearch)\s*[:：]?/gi, ' ')
     .replace(/(?:^|\s)#{1,6}\s*/g, ' ')
     .replace(/\bM-?\d+(?:-\d+)?(?:h\d+v\d+)?(?:\.svg)?\b/gi, ' ')
+    .replace(/(?:…|\.{3,})+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  const sentences = text.match(/[^。！？!?]{10,}[。！？!?]?/g) || [];
-  if (sentences.length) text = sentences.slice(0, 2).join('').trim();
+}
+function researchSentenceCandidates(value = '') {
+  const text = cleanResearchText(value, 5000);
+  const sentences = text.match(/[^。！？!?]{18,260}[。！？!?]/g) || [];
+  return sentences
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence.length >= 18 && !RESEARCH_NOISE_RE.test(sentence));
+}
+function finishResearchSentence(value = '') {
+  const text = cleanResearchText(value, 360)
+    .replace(/[、,;；:：\s]+$/g, '')
+    .trim();
+  if (!text) return '';
+  return /[。！？!?]$/.test(text) ? text : `${text}。`;
+}
+function completeResearchText(value = '', max = 145) {
+  const sentences = researchSentenceCandidates(value);
+  let combined = '';
+  for (const sentence of sentences) {
+    const next = `${combined}${sentence}`;
+    if (Array.from(next).length <= max) {
+      combined = next;
+      continue;
+    }
+    if (combined) break;
+    const chars = Array.from(sentence);
+    if (chars.length <= max + 35) return finishResearchSentence(sentence);
+    const prefix = chars.slice(0, max).join('');
+    const boundaries = ['。', '！', '？', '、', '；', ';', '：', ':'];
+    const index = Math.max(...boundaries.map(mark => prefix.lastIndexOf(mark)));
+    if (index >= Math.floor(max * 0.55)) {
+      return finishResearchSentence(prefix.slice(0, index + 1));
+    }
+  }
+  if (combined) return finishResearchSentence(combined);
+
+  const text = cleanResearchText(value, max * 3);
   const chars = Array.from(text);
-  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : text;
+  if (!chars.length) return '';
+  const prefix = chars.slice(0, max).join('');
+  const boundaries = ['。', '！', '？', '、', '；', ';', '：', ':', '｜'];
+  const index = Math.max(...boundaries.map(mark => prefix.lastIndexOf(mark)));
+  if (index >= Math.floor(max * 0.55)) return finishResearchSentence(prefix.slice(0, index + 1));
+  return '';
+}
+function researchFallbackOverview(title = '', category = '') {
+  const cleanedTitle = cleanResearchText(title, 92).replace(/[「」『』]+/g, '').trim();
+  if (!cleanedTitle) return `${category || '生産技術'}に関わる技術・事例を扱った記事です。`;
+  return `「${cleanedTitle}」では、${category || '生産技術'}に関わる技術・事例を扱っています。`;
+}
+async function researchOverviewText(body, overview, acquisition, category) {
+  const fallback = completeResearchText(overview, 145);
+  const url = clean(body.url || body.link, 1600);
+  const shouldReadArticle = /Tavily/i.test(acquisition)
+    || /(?:…|\.{3,})/.test(String(overview || ''))
+    || researchSentenceCandidates(overview).length === 0;
+
+  if (url && shouldReadArticle) {
+    try {
+      const article = await Promise.race([
+        extractArticleFromUrl(url, { maxTextLength: 4200, preferPdf: false }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('technology research article timeout')), RESEARCH_ARTICLE_TIMEOUT_MS))
+      ]);
+      const articleText = cleanResearchText(article?.text || '', 4200);
+      const fromArticle = completeResearchText(articleText, 145);
+      if (fromArticle && !RESEARCH_NOISE_RE.test(fromArticle)) return fromArticle;
+    } catch (error) {
+      console.warn('[summary] technology research article fallback', clean(error?.message || error, 160));
+    }
+  }
+
+  return fallback || researchFallbackOverview(body.title, category);
 }
 function researchSelectionReason(category = '') {
   const map = {
@@ -70,7 +141,7 @@ function researchSelectionReason(category = '') {
   };
   return map[category] || '生産技術の知識・改善・技術着想につながる具体性があるため選びました。';
 }
-function researchSummaryFromBody(body = {}) {
+async function researchSummaryFromBody(body = {}) {
   const description = clean(body.description);
   if (!/技術リサーチ:\s*Web調査済み/.test(description)) return null;
   const organization = researchField(description, '対象企業/組織名', ['カテゴリ', '日付精度', '公開年', '概要', '応用着眼点', '媒体']);
@@ -78,23 +149,31 @@ function researchSummaryFromBody(body = {}) {
   const overview = researchField(description, '概要', ['応用着眼点', '媒体']);
   const application = researchField(description, '応用着眼点', ['媒体']);
   const selectionReason = researchField(description, '選別理由', ['トピック', '取得方式']);
+  const acquisition = researchField(description, '取得方式');
   if (!organization || !category || !overview || !application) return null;
-  const sentence = value => /[。！？!?]$/.test(value) ? value : `${value}。`;
-  const shortOverview = conciseResearchText(overview, 110) || conciseResearchText(body.title, 90);
+
+  const overviewText = await researchOverviewText(body, overview, acquisition, category);
   const reason = /機械採点|score|検索関連度|カテゴリ語|条件に合致/i.test(selectionReason)
     ? researchSelectionReason(category)
-    : conciseResearchText(selectionReason, 88) || researchSelectionReason(category);
-  const shortApplication = conciseResearchText(application, 96);
+    : completeResearchText(selectionReason, 96) || researchSelectionReason(category);
+  const applicationText = completeResearchText(application, 110)
+    || '手法・原理・効果を自工程の課題へ置き換え、改善や新規技術探索の着眼点として使えます。';
+
   return {
     headline: clean(body.title) || '技術リサーチ',
     lines: [
-      { label: '概要', text: sentence(shortOverview) },
-      { label: '選んだ理由', text: sentence(reason) },
-      { label: '生技への応用', text: sentence(shortApplication) }
+      { label: '概要', text: overviewText },
+      { label: '選んだ理由', text: reason },
+      { label: '生技への応用', text: applicationText }
     ],
-    short: sentence(shortOverview),
-    points: [sentence(reason), sentence(shortApplication)],
-    provider: 'technology-research-prepared-v8', model: 'prepared', contentSource: 'web-research', cacheable: true, validated: true, fastPath: 'technology-research-prepared-v8'
+    short: overviewText,
+    points: [reason, applicationText],
+    provider: 'technology-research-prepared-v9',
+    model: 'prepared',
+    contentSource: /Tavily/i.test(acquisition) ? 'article+web-research' : 'web-research',
+    cacheable: true,
+    validated: true,
+    fastPath: 'technology-research-prepared-v9'
   };
 }
 function descriptionLooksReal(title, description) {
@@ -168,9 +247,9 @@ async function routeSummaryRequest(req, res) {
   if (req.method === 'POST' && String(req.query?.batch || '') === '1') return summaryBatchV2195(req, res);
   if (req.method === 'POST') {
     const incoming = rawBody(req);
-    const preparedResearch = researchSummaryFromBody(incoming);
+    const preparedResearch = await researchSummaryFromBody(incoming);
     if (preparedResearch) {
-      res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Prepared-Source', 'web-research'); res.setHeader('X-Summary-Route', 'technology-research-prepared-v8');
+      res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Prepared-Source', 'web-research'); res.setHeader('X-Summary-Route', 'technology-research-prepared-v9');
       return res.status(200).json(preparedResearch);
     }
     const prepared = await prepareSummaryBody(incoming);
