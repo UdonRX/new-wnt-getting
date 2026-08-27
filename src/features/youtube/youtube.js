@@ -103,10 +103,27 @@ function channelSheet(onChange,onEdit){
   wrap.append(el('button',{class:'soft-button full-button',type:'button',text:'＋追加 / 編集',onclick:()=>{sheet?.close();onEdit()}}));
   sheet=openSheet(wrap,{title:'YouTubeチャンネル'});
 }
+function normalizeChannelValue(value=''){
+  const raw=String(value||'').trim();
+  if(!raw)return'';
+  if(raw.startsWith('@'))return raw.split(/[/?#]/)[0];
+  try{
+    if(/^https?:\/\//i.test(raw)){
+      const url=new URL(raw);
+      const host=url.hostname.toLowerCase().replace(/^www\./,'').replace(/^m\./,'');
+      if(host==='youtube.com'){
+        const parts=url.pathname.split('/').filter(Boolean);
+        if(parts[0]?.startsWith('@'))return `@${parts[0].slice(1)}`;
+        if(parts[0]==='channel'&&parts[1])return parts[1];
+      }
+    }
+  }catch{}
+  return raw;
+}
 function normalizeChannels(draft=[]){
   const seen=new Set(),out=[];
   for(const raw of draft){
-    const ch={...raw,name:String(raw?.name||'').trim(),value:String(raw?.value||'').trim()};
+    const ch={...raw,name:String(raw?.name||'').trim(),value:normalizeChannelValue(raw?.value)};
     const key=channelKey(ch);if(!key||seen.has(key))continue;seen.add(key);out.push(ch);
   }
   return out;
@@ -118,7 +135,7 @@ function preserveCacheFor(channels){
   loadWarnings=[];
   try{localStorage.setItem(CACHE_KEY,JSON.stringify({at:Number(previous?.at||0),complete:false,configSignature:configSignature(channels),rows:cache,warnings:[]}))}catch{}
 }
-function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.youtubeChannels,fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'チャンネルURL / @handle / Channel ID',placeholder:'例：UCDn8Lqf-x0zD8hmFUg08f6w'}],onSave:draft=>{const channels=normalizeChannels(draft);update('youtubeChannels',channels);preserveCacheFor(channels);sheet.close();onDone?.()}}),{title:'YouTubeチャンネル編集'})}
+function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.youtubeChannels,fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'YouTube共有URL / @handle / Channel ID',placeholder:'例：https://youtube.com/@channel?si=...'}],onSave:draft=>{const channels=normalizeChannels(draft);update('youtubeChannels',channels);preserveCacheFor(channels);sheet.close();onDone?.()}}),{title:'YouTubeチャンネル編集'})}
 export function openYouTubeChannelManager(onDone=()=>{}){manage(onDone)}
 function normalizeKind(item){if(item?.liveType||item?.kind==='live')return'live';if(item?.kind==='videos')return'long';if(item?.kind==='shorts')return'short';return['long','short','live','unknown'].includes(item?.kind)?item.kind:'unknown'}
 function liveBadge(item){if(item?.liveType==='archive')return el('span',{class:'archive-badge',text:'配信録画'});if(item?.liveType==='upcoming')return el('span',{class:'upcoming-badge',text:'配信予定'});return el('span',{class:'live-badge',text:'LIVE'})}
