@@ -209,6 +209,31 @@ body.youtube-landscape-open {
   height: 100% !important;
 }
 
+/* Reader focus: title + all three AI summary cards must always stay inside the card. */
+.reader-focus-open .reader-story-title.reader-swipe-title {
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 3 !important;
+  line-clamp: 3 !important;
+  max-height: calc(1.22em * 3) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis;
+}
+.reader-focus-open .reader-story-summary-row,
+.reader-focus-open .reader-story-summary-copy {
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+.reader-focus-open .reader-story-summary-text {
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 3 !important;
+  line-clamp: 3 !important;
+  max-height: calc(1.48em * 3) !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reader-swipe-progress-indicator { transition-duration: .01ms !important; }
 }
