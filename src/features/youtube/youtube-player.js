@@ -49,11 +49,35 @@ function mountIframeFallback(stage,item,{shorts=false}={}) {
   return iframe;
 }
 
+function clearPlaybackNotice(stage) {
+  stage?.querySelectorAll?.('[data-youtube-playback-notice]').forEach(node=>node.remove());
+}
+
 function renderPlaybackError(stage,message,className='youtube-shorts-error') {
   if(!stage?.isConnected) return;
-  const errorNode=el('div',{class:className,text:message});
+  clearPlaybackNotice(stage);
+  const errorNode=el('div',{class:className,'data-youtube-playback-notice':'1',text:message});
   errorNode.style.cssText='position:absolute;inset:0;z-index:4;display:grid;place-content:center;padding:28px;text-align:center;background:#000;color:#fff;';
   stage.append(errorNode);
+}
+
+function renderExternalPlaybackFallback(stage,item,{shorts=false}={}) {
+  if(!stage?.isConnected||!item?.videoId) return;
+  clearPlaybackNotice(stage);
+  const href=shorts
+    ? `https://www.youtube.com/shorts/${encodeURIComponent(item.videoId)}`
+    : `https://www.youtube.com/watch?v=${encodeURIComponent(item.videoId)}`;
+  const message=el('div',{text:'この動画は投稿者の設定で埋め込み再生できません。'});
+  const link=el('a',{
+    href,
+    target:'_blank',
+    rel:'noopener noreferrer',
+    text:'YouTubeで再生 ↗'
+  });
+  link.style.cssText='display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 20px;border:1px solid rgba(255,255,255,.34);border-radius:14px;background:#202020;color:#fff;text-decoration:none;font-weight:800;';
+  const notice=el('div',{'data-youtube-playback-notice':'1'},[message,link]);
+  notice.style.cssText='position:absolute;inset:0;z-index:4;display:grid;place-content:center;gap:16px;padding:28px;text-align:center;background:#000;color:#fff;';
+  stage.append(notice);
 }
 
 function ensureApi() {
@@ -239,6 +263,7 @@ function mountShortsPlayer({queue,index=0}={}) {
   const useFallback=reason=>{
     if(myGeneration!==generation||!overlay.isConnected) return;
     console.warn('[youtube shorts] iframe fallback',youtubeErrorMessage(reason));
+    clearPlaybackNotice(stage);
     try{player?.destroy?.();}catch{}
     player=null;
     fallbackMode=true;
@@ -247,6 +272,7 @@ function mountShortsPlayer({queue,index=0}={}) {
   const loadIndex=nextIndex=>{
     if(nextIndex<0||nextIndex>=queue.length) return false;
     current=nextIndex; advancing=false; updateUi();
+    clearPlaybackNotice(stage);
     const item=queue[current];
     if(!fallbackMode&&player?.loadVideoById){try{player.loadVideoById({videoId:item.videoId,startSeconds:0});player.playVideo?.();}catch(error){useFallback(error);}}
     else if(fallbackMode) mountIframeFallback(stage,item,{shorts:true});
@@ -264,7 +290,7 @@ function mountShortsPlayer({queue,index=0}={}) {
       player=new YT.Player(holderId,{videoId:queue[current].videoId,playerVars:{autoplay:1,playsinline:1,rel:0,cc_load_policy:0,controls:1,modestbranding:1,origin:location.origin},events:{
         onReady:event=>{try{event.target.getIframe?.().setAttribute('referrerpolicy','strict-origin-when-cross-origin');event.target.playVideo();}catch{} endedMonitor=setInterval(()=>{if(myGeneration!==generation||!overlay.isConnected)return;try{if(player?.getPlayerState?.()===YT.PlayerState.ENDED)advance();}catch{}},650);},
         onStateChange:event=>{if(event.data===YT.PlayerState.PLAYING)advancing=false;if(event.data===YT.PlayerState.ENDED)advance();},
-        onError:event=>{const code=Number(event?.data||0);if(code===5||code===153)useFallback(event);else renderPlaybackError(stage,youtubeErrorMessage(event));}
+        onError:event=>{const code=Number(event?.data||0);if(code===5||code===153)useFallback(event);else if(code===101||code===150)renderExternalPlaybackFallback(stage,queue[current],{shorts:true});else renderPlaybackError(stage,youtubeErrorMessage(event));}
       }});
     }catch(error){useFallback(error);}
   }).catch(error=>useFallback(error));
