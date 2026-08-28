@@ -4,10 +4,10 @@ import './features/reader/summary-fetch-gate.js?v=2199summarycache1';
 import './features/reader/summary-instant-ux.js?v=21917highlight1';
 // Reader専用: RSSが実質的に短い場合だけ「記載なし」を使い、具体情報があれば1〜2文でもAIで3カード要約する。
 import './features/reader/reader-summary-accelerator.js?v=21924rssquality1';
-// Reader専用: 横スワイプされたページだけTavilyを1回実行し、AI要約を検索テーマに使う。Gemini整形は検索結果表示後に行う。
-import './features/reader/reader-deep-dive-page-unit.js?v=21926deepdive2';
-// Reader専用: Tavilyを最大7秒待ち、Fingerprint v2と深掘り横スワイプの方向ロックを適用する。
-import './features/reader/reader-deep-dive-long-wait.js?v=21929deepfix2';
+// Reader専用: 通常カードは触らず、横ジェスチャー確定時の1記事だけ深掘りカルーセル化する。横操作はこのモジュールだけが所有する。
+import './features/reader/reader-deep-dive-page-unit.js?v=21930lazycarousel1';
+// Reader専用: Tavily検索は3秒を超えても最大7秒待つ。深掘り検索キャッシュのFingerprint世代だけ管理する。
+import './features/reader/reader-deep-dive-long-wait.js?v=21930lazycarousel1';
 // Reader専用: 実処理名を切り替えながら1本のプログレスバーを0→100%へ進める。
 import './features/reader/reader-recommend-loading-ui.js?v=21922loadingsingle1';
 // Reader専用: 読み込み表示を「登録配信元の最新記事を新しい順」に統一する。
