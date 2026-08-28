@@ -247,31 +247,29 @@ function fixError(node) {
   }
 }
 
-function futureEmptyMessage(reason = '') {
-  if (reason === 'tavily-no-results') return 'Tavily検索では、このニュースに関連する今後情報の検索結果が見つかりませんでした。';
-  if (reason === 'fingerprint-all-rejected') return '関連候補は見つかりましたが、元ニュースとの一致条件を満たす根拠は確認できませんでした。';
-  if (reason === 'evidence-no-grounded-future') return '関連する根拠は取得できましたが、裏付け済みの今後の予定・見解として確定できませんでした。';
+function conciseEmptyMessage(node) {
+  const heading = String(node?.closest?.('.reader-deep-page')?.querySelector?.('.reader-deep-heading')?.textContent || '');
+  if (/なぜ今/.test(heading)) return '裏付けのある過去イベントは確認できませんでした。';
+  if (/どう見られている/.test(heading)) return '裏付けのある異なる視点や国内外差は確認できませんでした。';
+  if (/次に何が起こる/.test(heading)) return '裏付けのある今後の予定・見解は確認できませんでした。';
   return '';
 }
-function fixFutureEmpty(node) {
+function fixDeepEmpty(node) {
   if (!(node instanceof Element) || !node.matches('.reader-deep-empty')) return;
-  if (!/今後の予定・見解/.test(String(node.textContent || ''))) return;
-  const card = node.closest('.reader-story-card');
-  const reason = futureReasons.get(articleKey(card?.dataset?.articleId || card?.dataset?.key));
-  const text = futureEmptyMessage(reason);
-  if (text) node.textContent = text;
+  const text = conciseEmptyMessage(node);
+  if (text && node.textContent !== text) node.textContent = text;
 }
 
 function scan(root = document) {
   if (root instanceof Element) {
     armLoading(root);
     fixError(root);
-    fixFutureEmpty(root);
+    fixDeepEmpty(root);
     syncDeepTitles(root.closest?.('.reader-story-card'));
   }
   root.querySelectorAll?.('.reader-deep-loading').forEach(armLoading);
   root.querySelectorAll?.('.reader-deep-error').forEach(fixError);
-  root.querySelectorAll?.('.reader-deep-empty').forEach(fixFutureEmpty);
+  root.querySelectorAll?.('.reader-deep-empty').forEach(fixDeepEmpty);
   const card = root instanceof Element ? root.closest?.('.reader-story-card') : null;
   if (card) syncDeepTitles(card);
 }
