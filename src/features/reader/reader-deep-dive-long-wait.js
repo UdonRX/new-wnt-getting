@@ -3,7 +3,7 @@ const SEARCH_MAX_MS = 7800;
 const ENRICH_MAX_MS = 10000;
 const SOFT_WAIT_MS = 3000;
 const FINGERPRINT_MARKER = 'reader-deep-dive-fingerprint-version';
-const FINGERPRINT_VERSION = 'fingerprint-source-language-v4-ja-output-dots';
+const FINGERPRINT_VERSION = 'fingerprint-source-language-v5-ja-output-view-validation';
 
 function clearPreFingerprintCache() {
   try {
@@ -66,14 +66,68 @@ function blankDisplay(data, sourceLanguage) {
   };
 }
 
+function hasJapanese(value = '') {
+  return (String(value || '').match(/[\u3040-\u30ff\u3400-\u9fff]/g) || []).length >= 4;
+}
+function japaneseSentenceCount(value = '') {
+  return (String(value || '').match(/[。！？]/g) || []).length;
+}
+function perspectiveLike(value = '') {
+  return /(と述べ|と語|と評価|と指摘|と表明|と批判|と支持|と歓迎|と警告|と懸念|と追悼|計り知れない損失|悲し|悼|懸念|支持|批判|歓迎|警告|期待|評価|見解|主張)/.test(String(value || ''));
+}
+function sanitizeDeepData(data = {}, sourceLanguage = '') {
+  const language = sourceLanguage || data.sourceLanguage || 'ja';
+  const foreign = language !== 'ja';
+  const out = { ...data, sourceLanguage: language };
+
+  if (Array.isArray(out.timeline)) {
+    out.timeline = out.timeline.filter(item => {
+      if (!foreign) return true;
+      const text = String(item?.text || '');
+      const count = japaneseSentenceCount(text);
+      return hasJapanese(text) && count >= 2 && count <= 3;
+    }).slice(0, 4);
+  }
+
+  if (Array.isArray(out.perspectives)) {
+    out.perspectives = out.perspectives.map(issue => {
+      const views = (Array.isArray(issue?.views) ? issue.views : []).filter(view => {
+        const text = String(view?.text || '');
+        return hasJapanese(text) && perspectiveLike(text) && String(view?.actor || '').trim();
+      }).slice(0, 2);
+      if (views.length !== 2) return null;
+      const actors = new Set(views.map(view => String(view.actor || '').replace(/\s+/g, '').toLowerCase()));
+      return actors.size === 2 ? { ...issue, views } : null;
+    }).filter(Boolean).slice(0, 2);
+  }
+
+  if (Array.isArray(out.regionGap) && foreign) {
+    out.regionGap = out.regionGap.filter(item => hasJapanese(item?.japan) && hasJapanese(item?.overseas)).slice(0, 1);
+  }
+  if (Array.isArray(out.future) && foreign) {
+    out.future = out.future.filter(item => hasJapanese(item?.text)).slice(0, 3);
+  }
+  if (Array.isArray(out.nextWatch) && foreign) {
+    out.nextWatch = out.nextWatch.filter(item => hasJapanese(item?.event)).slice(0, 2);
+  }
+  return out;
+}
+
 function installLongSearchWait() {
-  if (window.__PDV2_READER_DEEP_LONG_WAIT_INSTALLED_V4) return;
-  window.__PDV2_READER_DEEP_LONG_WAIT_INSTALLED_V4 = true;
+  if (window.__PDV2_READER_DEEP_LONG_WAIT_INSTALLED_V5) return;
+  window.__PDV2_READER_DEEP_LONG_WAIT_INSTALLED_V5 = true;
   const upstream = globalThis.fetch.bind(globalThis);
 
   globalThis.fetch = async function readerDeepLongWaitFetch(input, init = {}) {
     const parsed = parseDeepDive(input, init);
-    if (!parsed || parsed.body.phase !== 'search') return upstream(input, init);
+    if (!parsed) return upstream(input, init);
+
+    if (parsed.body.phase === 'enrich') {
+      const response = await upstream(input, init);
+      if (!response.ok) return response;
+      const data = await response.clone().json().catch(() => null);
+      return data ? jsonResponse(sanitizeDeepData(data, parsed.body.sourceLanguage), response) : response;
+    }
 
     const sourceLanguage = parsed.body.sourceLanguage === 'ja' || parsed.body.sourceLanguage === 'en'
       ? parsed.body.sourceLanguage
@@ -87,37 +141,39 @@ function installLongSearchWait() {
       return searchData ? jsonResponse({ ...searchData, sourceLanguage }, searchResponse) : searchResponse;
     }
 
-    // Foreign-language sources are searched in their source language, but the UI must remain Japanese.
-    // Enrich immediately with the already-fetched Tavily evidence; this does NOT issue another Tavily search.
+    // Search foreign-language publishers in their source language first, then
+    // translate/summarize the already-fetched evidence. No second Tavily search.
     try {
       const enrichBody = { ...searchBody, phase: 'enrich', evidence: searchData.evidence };
       const enrichResponse = await fetchWithTimeout(upstream, input, init, enrichBody, ENRICH_MAX_MS);
       if (enrichResponse.ok) {
         const enriched = await enrichResponse.clone().json().catch(() => null);
         if (enriched) {
-          return jsonResponse({
+          return jsonResponse(sanitizeDeepData({
             ...searchData,
             ...enriched,
             evidence: searchData.evidence,
             sourceCount: searchData.sourceCount,
             sourceLanguage,
             translationPending: false
-          }, searchResponse);
+          }, sourceLanguage), searchResponse);
         }
       }
     } catch {}
 
-    // Never flash English/foreign fallback text. The existing delayed enrich path can retry later.
+    // Do not flash raw foreign-language fallback text. The delayed enrich path
+    // may retry, but until then the UI stays in Japanese-only safe state.
     return jsonResponse(blankDisplay(searchData, sourceLanguage), searchResponse);
   };
 }
 
 function installDeepUiPatchStyle() {
-  if (document.getElementById('reader-deep-ui-patch-v4')) return;
+  if (document.getElementById('reader-deep-ui-patch-v5')) return;
   const style = document.createElement('style');
-  style.id = 'reader-deep-ui-patch-v4';
+  style.id = 'reader-deep-ui-patch-v5';
   style.textContent = `
-.reader-deep-idle-dots{bottom:126px!important}
+.reader-focus-open .reader-story-card{position:relative}
+.reader-deep-idle-dots{bottom:142px!important;z-index:14!important}
 .reader-story-card.reader-deep-enabled .reader-deep-idle-dots{display:none!important}
 .reader-deep-view>.reader-deep-badge{align-items:center!important;justify-content:center!important}
 `;
@@ -139,6 +195,7 @@ function ensureIdleDots(card) {
   if (card.querySelector(':scope > .reader-deep-idle-dots')) return;
   const wrap = document.createElement('div');
   wrap.className = 'reader-deep-dots reader-deep-idle-dots';
+  wrap.setAttribute('aria-hidden', 'true');
   for (let index = 0; index < 4; index += 1) {
     const dot = document.createElement('span');
     dot.className = `reader-deep-dot${index === 0 ? ' is-active' : ''}`;
@@ -171,7 +228,8 @@ function scan(root = document) {
     armLoading(root);
     fixError(root);
     if (root.matches('.reader-story-card')) ensureIdleDots(root);
-    syncDeepTitles(root.closest?.('.reader-story-card'));
+    const card = root.closest?.('.reader-story-card');
+    if (card) { ensureIdleDots(card); syncDeepTitles(card); }
   }
   root.querySelectorAll?.('.reader-deep-loading').forEach(armLoading);
   root.querySelectorAll?.('.reader-deep-error').forEach(fixError);
@@ -183,7 +241,8 @@ function observe() {
   scan(document);
   new MutationObserver(records => {
     for (const record of records) {
-      syncDeepTitles(record.target?.closest?.('.reader-story-card'));
+      const card = record.target?.closest?.('.reader-story-card');
+      if (card) { ensureIdleDots(card); syncDeepTitles(card); }
       for (const node of record.addedNodes) {
         if (node.nodeType === 1) scan(node);
       }
