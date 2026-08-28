@@ -3,6 +3,7 @@ import { readerTrace } from '../../shared/reader-debug.js';
 const upstreamFetch = globalThis.fetch?.bind(globalThis);
 const SUMMARY_PATH = '/api/summary';
 const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2180';
+const SOURCE_RECOVERY_MIGRATION_KEY = 'reader-summary-source-recovery-v2';
 const LABELS = ['結論/事実', '背景/特徴', '影響/展望'];
 const MISSING = [
   'RSSには結論として要約できる追加情報が記載されていません。',
@@ -10,7 +11,6 @@ const MISSING = [
   'RSSには影響・今後の詳細が記載されていません。'
 ];
 const BOILERPLATE_RE = /(?:続きを読む(?:…|\.{3})?|続き(?:はこちら|を読む)|詳細(?:はこちら|を見る)|全文(?:はこちら|を読む)|記事(?:はこちら|を読む)|Read\s*more|More\s*details?)/gi;
-const LEGACY_SPARSE_PROVIDERS = new Set(['rss-short-grounded-v1']);
 
 function clean(value = '', max = 3000) {
   return String(value || '')
@@ -47,29 +47,17 @@ function sentence(value = '') {
   return !text ? '' : /[。！？!?]$/.test(text) ? text : `${text}。`;
 }
 
-function isBoilerplateFact(value = '') {
-  const text = clean(value, 260);
-  if (!text) return true;
-  if (BOILERPLATE_RE.test(text)) {
-    BOILERPLATE_RE.lastIndex = 0;
-    return true;
-  }
-  BOILERPLATE_RE.lastIndex = 0;
-  return /^(?:こちら|詳細|記事|全文|続き)(?:へ|です|はこちら)?[。！？!?]*$/i.test(text);
-}
-
 function addFact(rows, seen, value) {
   const raw = sentence(value);
-  if (isBoilerplateFact(raw) || informativeChars(raw) < 10) return;
-  const semantic = keyOf(raw);
-  if (Array.from(semantic).length < 8) return;
-  const text = Array.from(raw).length >= 12
-    ? raw
-    : `RSSには「${raw.replace(/[。！？!?]+$/g, '')}」と記載されています。`;
-  const key = keyOf(text);
-  if (!key || seen.has(key)) return;
+  if (!raw || BOILERPLATE_RE.test(raw) || informativeChars(raw) < 10) {
+    BOILERPLATE_RE.lastIndex = 0;
+    return;
+  }
+  BOILERPLATE_RE.lastIndex = 0;
+  const key = keyOf(raw);
+  if (key.length < 8 || seen.has(key)) return;
   seen.add(key);
-  rows.push(text);
+  rows.push(Array.from(raw).length >= 12 ? raw : `RSSには「${raw.replace(/[。！？!?]+$/g, '')}」と記載されています。`);
 }
 
 export function rssFactCandidates(description = '') {
@@ -77,8 +65,7 @@ export function rssFactCandidates(description = '') {
   if (!source) return [];
   const rows = [];
   const seen = new Set();
-  const sentences = source.match(/[^。！？!?]+[。！？!?]?/g) || [];
-  for (const part of sentences) {
+  for (const part of source.match(/[^。！？!?]+[。！？!?]?/g) || []) {
     addFact(rows, seen, part);
     if (rows.length >= 6) return rows;
   }
@@ -94,30 +81,38 @@ export function rssFactCandidates(description = '') {
 function rssEvidence(body = {}) {
   const title = clean(body?.title || '', 300);
   const description = stripBoilerplate(body?.description || '');
-  const descriptionKey = keyOf(description);
   const titleKey = keyOf(title);
-  const facts = rssFactCandidates(description);
-  const chars = informativeChars(description);
-  const titleEcho = Boolean(
-    titleKey.length >= 12
-    && descriptionKey
-    && (
-      descriptionKey === titleKey
-      || (descriptionKey.startsWith(titleKey) && descriptionKey.length - titleKey.length < 24)
-    )
-  );
-  return { title, description, facts, chars, titleEcho };
+  const descriptionKey = keyOf(description);
+  const titleEcho = Boolean(titleKey.length >= 12 && descriptionKey && (
+    descriptionKey === titleKey || (descriptionKey.startsWith(titleKey) && descriptionKey.length - titleKey.length < 24)
+  ));
+  return {
+    title,
+    description,
+    titleEcho,
+    facts: rssFactCandidates(description),
+    chars: informativeChars(description)
+  };
+}
+
+function hostnameOf(value = '') {
+  try { return new URL(String(value || ''), location.href).hostname.toLowerCase(); }
+  catch { return ''; }
+}
+
+export function sourceRecoveryKind(body = {}) {
+  const meta = clean([body?.source, body?.feedName, body?.category].filter(Boolean).join(' '), 600);
+  const host = hostnameOf(body?.url || body?.link || '');
+  if (/Google\s*ニュース|Google\s*News/i.test(meta) || host === 'news.google.com') return 'google-news';
+  if (/EE\s*Times(?:\s*Japan)?/i.test(meta) || host === 'eetimes.itmedia.co.jp') return 'eetimes';
+  return '';
 }
 
 export function isSufficientRss(body = {}) {
   const raw = clean(body?.description || '', 1800);
   if (/技術リサーチ:\s*Web調査済み/i.test(raw)) return true;
-
   const evidence = rssEvidence(body);
   if (!evidence.description || evidence.titleEcho) return false;
-
-  // 1〜2文でも具体的な事実が十分に含まれるRSSはGeminiに渡す。
-  // 「3文以上でなければ不足」とは判定せず、実質的に情報が少ない時だけローカルフォールバックへ回す。
   if (evidence.chars >= 52) return true;
   if (evidence.chars >= 36 && evidence.facts.length >= 2) return true;
   return false;
@@ -131,20 +126,13 @@ function titleFact(body = {}) {
 }
 
 export function buildGroundedShortSummary(body = {}) {
-  const evidence = rssEvidence(body);
-  const facts = evidence.facts;
-  const conclusion = facts[0] || titleFact(body);
-  const background = facts[1] || MISSING[1];
-  const impact = facts[2] || MISSING[2];
+  const facts = rssEvidence(body).facts;
+  const lines = [facts[0] || titleFact(body), facts[1] || MISSING[1], facts[2] || MISSING[2]];
   return {
     headline: clean(body?.title || '', 100) || '記事のポイント',
-    lines: [
-      { label: LABELS[0], text: conclusion },
-      { label: LABELS[1], text: background },
-      { label: LABELS[2], text: impact }
-    ],
-    short: conclusion,
-    points: [background, impact],
+    lines: LABELS.map((label, index) => ({ label, text: lines[index] })),
+    short: lines[0],
+    points: lines.slice(1),
     provider: 'rss-low-information-grounded-v2',
     model: 'local-grounded',
     contentSource: 'rss-low-information',
@@ -158,10 +146,12 @@ function parseSummaryPost(input, init = {}) {
   const method = String(init?.method || (input instanceof Request ? input.method : 'GET') || 'GET').toUpperCase();
   if (method !== 'POST' || typeof init?.body !== 'string') return null;
   let url;
-  try { url = new URL(typeof input === 'string' ? input : input?.url || '', location.href); } catch { return null; }
+  try { url = new URL(typeof input === 'string' ? input : input?.url || '', location.href); }
+  catch { return null; }
   if (url.pathname !== SUMMARY_PATH || url.searchParams.has('batch') || url.searchParams.has('stream')) return null;
   let body;
-  try { body = JSON.parse(init.body); } catch { return null; }
+  try { body = JSON.parse(init.body); }
+  catch { return null; }
   const articleId = String(body?.articleId || '').trim();
   return articleId ? { body, articleId } : null;
 }
@@ -210,33 +200,55 @@ function rssOnlyAi(input, init, parsed) {
     preferFullText: false,
     rssOnly: true
   };
-  readerTrace('summary-rss-only-ai', {
+  readerTrace('summary-rss-only-ai', { articleId: parsed.articleId, descriptionChars: body.description.length, factCount: evidence.facts.length });
+  return upstreamFetch(input, { ...init, body: JSON.stringify(body) });
+}
+
+function sourceRecoveryAi(input, init, parsed, kind) {
+  const evidence = rssEvidence(parsed.body);
+  const body = {
+    ...parsed.body,
+    description: Array.from(evidence.description).slice(0, 500).join(''),
+    // Google Newsは中間URLの解決、EE Timesは記事本文取得が必要。
+    // この2系統だけ既存の本文抽出を復活させ、抽出後は冒頭500文字だけをGeminiへ渡す。
+    preferFullText: true,
+    rssOnly: false,
+    fast: false,
+    readerSourceRecovery: kind
+  };
+  readerTrace('summary-source-recovery-ai', {
     articleId: parsed.articleId,
-    descriptionChars: Array.from(body.description).length,
-    factCount: evidence.facts.length
+    kind,
+    source: clean(parsed.body?.source || parsed.body?.feedName || '', 160),
+    urlHost: hostnameOf(parsed.body?.url || parsed.body?.link || ''),
+    rssDescriptionChars: evidence.chars
   });
   return upstreamFetch(input, { ...init, body: JSON.stringify(body) });
 }
 
-function purgeLegacySparseSummaryCache() {
+function purgeBadSummaryCacheOnce() {
   try {
+    if (localStorage.getItem(SOURCE_RECOVERY_MIGRATION_KEY) === '1') return;
     const raw = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '{}');
-    if (!raw || typeof raw !== 'object') return;
-    let changed = false;
-    for (const [key, entry] of Object.entries(raw)) {
-      const value = entry?.value || {};
-      const legacy = LEGACY_SPARSE_PROVIDERS.has(String(value?.provider || ''))
-        || String(value?.fastPath || '') === 'reader-rss-short-no-inference'
-        || String(value?.contentSource || '') === 'rss-short';
-      if (!legacy) continue;
-      delete raw[key];
-      changed = true;
+    if (raw && typeof raw === 'object') {
+      let changed = false;
+      for (const [key, entry] of Object.entries(raw)) {
+        const value = entry?.value || {};
+        const legacySparse = String(value?.provider || '') === 'rss-short-grounded-v1'
+          || String(value?.fastPath || '') === 'reader-rss-short-no-inference'
+          || String(value?.contentSource || '') === 'rss-short';
+        const targetSource = /(?:news\.google\.com|eetimes\.itmedia\.co\.jp)/i.test(String(key || ''));
+        if (!legacySparse && !targetSource) continue;
+        delete raw[key];
+        changed = true;
+      }
+      if (changed) localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(raw));
     }
-    if (changed) localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(raw));
+    localStorage.setItem(SOURCE_RECOVERY_MIGRATION_KEY, '1');
   } catch {}
 }
 
-if (typeof window !== 'undefined') purgeLegacySparseSummaryCache();
+if (typeof window !== 'undefined') purgeBadSummaryCacheOnce();
 
 if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_ONLY_SUMMARY_INSTALLED) {
   window.__PDV2_READER_RSS_ONLY_SUMMARY_INSTALLED = true;
@@ -248,6 +260,9 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_
       readerTrace('summary-prefetch-disabled', { articleId: parsed.articleId, activeArticleId: activeArticleId() });
       return Promise.resolve(disabledPrefetch(parsed));
     }
+
+    const recoveryKind = sourceRecoveryKind(parsed.body);
+    if (recoveryKind) return sourceRecoveryAi(input, init, parsed, recoveryKind);
     if (!isSufficientRss(parsed.body)) return Promise.resolve(shortResponse(parsed));
     return rssOnlyAi(input, init, parsed);
   };
@@ -255,6 +270,7 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_
   window.__PDV2_READER_RSS_ONLY_SUMMARY = {
     sufficient: body => isSufficientRss(body),
     grounded: body => buildGroundedShortSummary(body),
-    evidence: body => rssEvidence(body)
+    evidence: body => rssEvidence(body),
+    sourceRecoveryKind: body => sourceRecoveryKind(body)
   };
 }
