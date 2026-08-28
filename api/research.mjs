@@ -1,10 +1,12 @@
 import creativePapersFeed from '../server/creative-papers-feed.mjs';
 import papersFeed from '../server/papers-feed.mjs';
+import readerDeepDive from '../server/reader-deep-dive.mjs';
 import wikipedia from '../server/wikipedia.mjs';
 
 const handlers = new Map([
   ['creative-papers-feed', creativePapersFeed],
   ['papers-feed', papersFeed],
+  ['reader-deep-dive', readerDeepDive],
   ['wikipedia', wikipedia]
 ]);
 
