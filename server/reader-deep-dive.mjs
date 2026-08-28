@@ -10,6 +10,7 @@ const blocked = ['x.com','twitter.com','facebook.com','instagram.com','tiktok.co
 const tags = ['法改正','新技術','買収','投資','提携','発表','規制','決算','転換点','その他'];
 const impacts = ['high','medium','low','unknown'];
 const futureTypes = ['fact','expert','scenario'];
+const LOG_PREFIX = '[READER_DEEP_DIVE_DEBUG]';
 
 const schema = {
   type: 'object',
@@ -43,6 +44,12 @@ function left(start){return Math.max(0,TOTAL_MS-(Date.now()-start))}
 function cacheKey(b){return clean(b.articleId||b.url||b.title,700).toLowerCase()}
 function cacheGet(k){const h=cache.get(k);if(!h||Date.now()-h.ts>TTL){cache.delete(k);return null}return h.value}
 function cacheSet(k,v){cache.set(k,{ts:Date.now(),value:v});while(cache.size>48)cache.delete(cache.keys().next().value)}
+function traceId(){return `dd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`}
+function countShape(v={}){return{timeline:Array.isArray(v?.timeline)?v.timeline.length:0,perspectives:Array.isArray(v?.perspectives)?v.perspectives.length:0,regionGap:Array.isArray(v?.regionGap)?v.regionGap.length:0,future:Array.isArray(v?.future)?v.future.length:0,nextWatch:Array.isArray(v?.nextWatch)?v.nextWatch.length:0}}
+function safeError(error){return{name:clean(error?.name||'Error',80),message:clean(error?.message||String(error),500),status:Number(error?.statusCode||0)||undefined}}
+function debugLog(event,id,data={}){
+  try{console.log(`${LOG_PREFIX} ${JSON.stringify({event,traceId:id,ts:new Date().toISOString(),...data})}`)}catch{}
+}
 
 function queries(b){const seed=[clean(b.title,220),clean(b.source,90)].filter(Boolean).join(' ');return{
   timeline:`${seed} history timeline background key events turning points 経緯 発端 転換点 買収 投資 規制 技術`,
@@ -50,15 +57,24 @@ function queries(b){const seed=[clean(b.title,220),clean(b.source,90)].filter(Bo
   future:`${seed} next steps upcoming date outlook forecast analyst earnings approval launch integration schedule 今後 予定 見通し 専門家 決算 承認 日程`
 }}
 
-async function tavily(key, query, topic, timeRange, timeoutMs){
+async function tavily(key, query, topic, timeRange, timeoutMs, lane, id){
+  const started=Date.now();
+  debugLog('tavily_start',id,{lane,topic,timeRange:timeRange||null,timeoutMs,query:clean(query,520)});
   const c=new AbortController();const t=setTimeout(()=>c.abort(),Math.max(250,timeoutMs));
   try{
     const r=await fetch(TAVILY_URL,{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({
       query,search_depth:'basic',max_results:4,topic,time_range:timeRange,include_answer:false,include_raw_content:false,include_images:false,include_favicon:false,auto_parameters:false,safe_search:true,exclude_domains:blocked
     }),signal:c.signal});
-    const d=await r.json().catch(()=>({}));if(!r.ok){const e=new Error(d?.detail?.error||d?.detail||`Tavily HTTP ${r.status}`);e.statusCode=r.status;throw e}
-    return (Array.isArray(d?.results)?d.results:[]).map(x=>({title:clean(x?.title,240),url:httpUrl(x?.url),content:clean(x?.content,1000),score:Number(x?.score||0)}))
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){const e=new Error(d?.detail?.error||d?.detail||`Tavily HTTP ${r.status}`);e.statusCode=r.status;throw e}
+    const rawCount=Array.isArray(d?.results)?d.results.length:0;
+    const rows=(Array.isArray(d?.results)?d.results:[]).map(x=>({title:clean(x?.title,240),url:httpUrl(x?.url),content:clean(x?.content,1000),score:Number(x?.score||0)}))
       .filter(x=>x.url&&x.content&&!blocked.some(z=>host(x.url)===z||host(x.url).endsWith(`.${z}`))).sort((a,b)=>b.score-a.score).slice(0,4);
+    debugLog('tavily_success',id,{lane,status:r.status,elapsedMs:Date.now()-started,rawResultCount:rawCount,usableResultCount:rows.length,samples:rows.map(x=>({host:host(x.url),title:clip(x.title,100),score:Number(x.score.toFixed(3)),contentChars:x.content.length}))});
+    return rows;
+  }catch(error){
+    debugLog('tavily_error',id,{lane,elapsedMs:Date.now()-started,error:safeError(error)});
+    throw error;
   }finally{clearTimeout(t)}
 }
 
@@ -72,17 +88,32 @@ function instructions(){return [
   'nextWatchは具体的な時期と予定が本文で確認できるものだけ。各textは60文字程度まで。'
 ].join('\n')}
 
-async function gemini(groups,b,start){
-  const key=clean(process.env.GEMINI_API_KEY,300);const budget=Math.min(GEMINI_MS,left(start)-80);if(!key||budget<350)return null;
-  const model=clean(process.env.READER_DEEP_DIVE_MODEL||process.env.GEMINI_MODEL||'gemini-3.1-flash-lite',100);const c=new AbortController();const t=setTimeout(()=>c.abort(),budget);
+async function gemini(groups,b,start,id){
+  const key=clean(process.env.GEMINI_API_KEY,300);
+  const budget=Math.min(GEMINI_MS,left(start)-80);
+  if(!key){debugLog('gemini_skipped',id,{reason:'missing_GEMINI_API_KEY',budgetMs:budget});return null}
+  if(budget<350){debugLog('gemini_skipped',id,{reason:'insufficient_time_budget',budgetMs:budget,elapsedMs:Date.now()-start});return null}
+  const model=clean(process.env.READER_DEEP_DIVE_MODEL||process.env.GEMINI_MODEL||'gemini-3.1-flash-lite',100);
+  const c=new AbortController();const t=setTimeout(()=>c.abort(),budget);const started=Date.now();
+  debugLog('gemini_start',id,{model,budgetMs:budget,groupCounts:{timeline:groups.timeline?.length||0,perspectives:groups.perspectives?.length||0,future:groups.future?.length||0}});
   try{
     const prompt=`CURRENT TITLE: ${clean(b.title,260)}\nCURRENT SOURCE: ${clean(b.source,120)}\nCURRENT CATEGORY: ${clean(b.category,120)}\nCURRENT SUMMARY: ${clean(b.summary,700)}\n${packet(groups)}`;
     const r=await fetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({
       systemInstruction:{parts:[{text:instructions()}]},contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{responseMimeType:'application/json',responseJsonSchema:schema,maxOutputTokens:1600,temperature:0}
     }),signal:c.signal});
-    const d=await r.json().catch(()=>({}));if(!r.ok)return null;const text=(d?.candidates?.[0]?.content?.parts||[]).map(p=>p?.text||'').join('').trim();if(!text)return null;
-    return JSON.parse(text.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));
-  }catch{return null}finally{clearTimeout(t)}
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok){debugLog('gemini_http_error',id,{status:r.status,elapsedMs:Date.now()-started,error:clean(d?.error?.message||'Gemini HTTP error',500)});return null}
+    const text=(d?.candidates?.[0]?.content?.parts||[]).map(p=>p?.text||'').join('').trim();
+    if(!text){debugLog('gemini_empty',id,{status:r.status,elapsedMs:Date.now()-started});return null}
+    try{
+      const parsed=JSON.parse(text.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));
+      debugLog('gemini_success',id,{status:r.status,elapsedMs:Date.now()-started,textChars:text.length,rawCounts:countShape(parsed)});
+      return parsed;
+    }catch(error){debugLog('gemini_parse_error',id,{elapsedMs:Date.now()-started,textChars:text.length,error:safeError(error),textHead:clip(text,220)});return null}
+  }catch(error){
+    debugLog('gemini_error',id,{elapsedMs:Date.now()-started,error:safeError(error),budgetMs:budget});
+    return null;
+  }finally{clearTimeout(t)}
 }
 
 const months={january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12',jan:'01',feb:'02',mar:'03',apr:'04',jun:'06',jul:'07',aug:'08',sep:'09',sept:'09',oct:'10',nov:'11',dec:'12'};
@@ -105,6 +136,55 @@ function validate(raw,groups){const em=evidenceMap(groups);const allowed=new Set
   const nextWatch=(Array.isArray(raw?.nextWatch)?raw.nextWatch:[]).map(x=>{const u=httpUrl(x?.sourceUrl);if(!ok(u)||!hasYear(em,u,x?.date))return null;const date=clip(x.date,18),event=clip(x.event,58);return date&&event?{date,event,sourceUrl:u}:null}).filter(Boolean).slice(0,2);
   return{timeline,perspectives,regionGap,future,nextWatch}}
 
-async function run(b,start){const tavilyKey=clean(process.env.TAVILY_API_KEY,300);if(!tavilyKey){const e=new Error('TAVILY_API_KEY が設定されていません。');e.statusCode=503;throw e}const q=queries(b);const calls=[['timeline',tavily(tavilyKey,q.timeline,'general',null,Math.min(TAVILY_MS,left(start)))],['perspectives',tavily(tavilyKey,q.perspectives,'news','month',Math.min(TAVILY_MS,left(start)))],['future',tavily(tavilyKey,q.future,'news','year',Math.min(TAVILY_MS,left(start)))]];const settled=await Promise.allSettled(calls.map(x=>x[1]));const groups={timeline:[],perspectives:[],future:[]};settled.forEach((r,i)=>{if(r.status==='fulfilled')groups[calls[i][0]]=r.value});const fb=fallback(groups);const raw=await gemini(groups,b,start);const v=raw?validate(raw,groups):fb;return{articleId:b.articleId,generatedAt:Date.now(),timeline:v.timeline?.length?v.timeline:fb.timeline,perspectives:v.perspectives||[],regionGap:v.regionGap||[],future:v.future||[],nextWatch:v.nextWatch?.length?v.nextWatch:fb.nextWatch,sourceCount:new Set(Object.values(groups).flat().map(x=>x.url)).size,partial:settled.some(r=>r.status!=='fulfilled')||!raw,elapsedMs:Date.now()-start}}
+async function run(b,start,id){
+  const tavilyKey=clean(process.env.TAVILY_API_KEY,300);
+  debugLog('run_start',id,{articleId:clip(b.articleId,160),title:clip(b.title,180),source:clip(b.source,100),category:clip(b.category,100),hasTavilyKey:Boolean(tavilyKey),hasGeminiKey:Boolean(clean(process.env.GEMINI_API_KEY,300)),budgets:{totalMs:TOTAL_MS,tavilyMs:TAVILY_MS,geminiMs:GEMINI_MS}});
+  if(!tavilyKey){const e=new Error('TAVILY_API_KEY が設定されていません。');e.statusCode=503;debugLog('config_error',id,{missing:'TAVILY_API_KEY'});throw e}
+  const q=queries(b);
+  const calls=[
+    ['timeline',tavily(tavilyKey,q.timeline,'general',null,Math.min(TAVILY_MS,left(start)),'timeline',id)],
+    ['perspectives',tavily(tavilyKey,q.perspectives,'news','month',Math.min(TAVILY_MS,left(start)),'perspectives',id)],
+    ['future',tavily(tavilyKey,q.future,'news','year',Math.min(TAVILY_MS,left(start)),'future',id)]
+  ];
+  const settled=await Promise.allSettled(calls.map(x=>x[1]));
+  const groups={timeline:[],perspectives:[],future:[]};
+  settled.forEach((r,i)=>{if(r.status==='fulfilled')groups[calls[i][0]]=r.value});
+  debugLog('tavily_settled',id,{elapsedMs:Date.now()-start,lanes:calls.map((x,i)=>({lane:x[0],status:settled[i].status,count:settled[i].status==='fulfilled'?settled[i].value.length:0,error:settled[i].status==='rejected'?safeError(settled[i].reason):undefined})),sourceCount:new Set(Object.values(groups).flat().map(x=>x.url)).size});
+  const fb=fallback(groups);
+  debugLog('fallback_built',id,{counts:countShape(fb)});
+  const raw=await gemini(groups,b,start,id);
+  const validated=raw?validate(raw,groups):fb;
+  debugLog('validation_complete',id,{geminiUsed:Boolean(raw),rawCounts:raw?countShape(raw):null,validatedCounts:countShape(validated),fallbackCounts:countShape(fb)});
+  const value={articleId:b.articleId,generatedAt:Date.now(),timeline:validated.timeline?.length?validated.timeline:fb.timeline,perspectives:validated.perspectives||[],regionGap:validated.regionGap||[],future:validated.future||[],nextWatch:validated.nextWatch?.length?validated.nextWatch:fb.nextWatch,sourceCount:new Set(Object.values(groups).flat().map(x=>x.url)).size,partial:settled.some(r=>r.status!=='fulfilled')||!raw,elapsedMs:Date.now()-start,debugId:id};
+  debugLog('run_complete',id,{elapsedMs:value.elapsedMs,partial:value.partial,sourceCount:value.sourceCount,finalCounts:countShape(value)});
+  return value;
+}
 
-export default async function readerDeepDive(req,res){if(req.method!=='POST'){res.setHeader('Allow','POST');return res.status(405).json({error:'Method Not Allowed'})}const raw=req.body&&typeof req.body==='object'?req.body:{};const title=clean(raw.title,260);if(!title)return res.status(400).json({error:'title is required'});const b={articleId:clean(raw.articleId||raw.url||title,700),title,source:clean(raw.source,120),category:clean(raw.category,120),url:httpUrl(raw.url),summary:clean(raw.summary,700)};const key=cacheKey(b),hit=cacheGet(key);if(hit)return res.status(200).json({...hit,cache:'memory'});if(inflight.has(key)){try{return res.status(200).json({...await inflight.get(key),cache:'inflight'})}catch(e){return res.status(Number(e?.statusCode||500)).json({error:e?.message||'Deep dive failed'})}}const start=Date.now();const p=run(b,start).then(v=>(cacheSet(key,v),v)).finally(()=>inflight.delete(key));inflight.set(key,p);try{res.setHeader('Cache-Control','private, max-age=0, no-store');return res.status(200).json(await p)}catch(e){const status=Number(e?.statusCode||500);console.error('[reader-deep-dive]',{status,message:e?.message||String(e)});return res.status(status).json({error:status===503?'Tavily APIを利用できません':'深掘り情報を取得できませんでした',detail:status===503?'VercelのTAVILY_API_KEYを確認してください。':''})}}
+export default async function readerDeepDive(req,res){
+  const id=traceId();
+  if(req.method!=='POST'){debugLog('request_rejected',id,{reason:'method',method:req.method});res.setHeader('Allow','POST');return res.status(405).json({error:'Method Not Allowed',debugId:id})}
+  const raw=req.body&&typeof req.body==='object'?req.body:{};
+  const title=clean(raw.title,260);
+  if(!title){debugLog('request_rejected',id,{reason:'missing_title'});return res.status(400).json({error:'title is required',debugId:id})}
+  const b={articleId:clean(raw.articleId||raw.url||title,700),title,source:clean(raw.source,120),category:clean(raw.category,120),url:httpUrl(raw.url),summary:clean(raw.summary,700)};
+  const key=cacheKey(b),hit=cacheGet(key);
+  debugLog('request_received',id,{articleId:clip(b.articleId,160),title:clip(b.title,180),source:clip(b.source,100),category:clip(b.category,100),urlHost:host(b.url),summaryChars:b.summary.length,cacheHit:Boolean(hit),inflightHit:inflight.has(key)});
+  if(hit){debugLog('cache_hit',id,{finalCounts:countShape(hit),sourceCount:Number(hit?.sourceCount||0),originalDebugId:hit?.debugId||''});return res.status(200).json({...hit,cache:'memory',debugId:id})}
+  if(inflight.has(key)){
+    debugLog('inflight_reuse',id,{});
+    try{const value=await inflight.get(key);debugLog('inflight_complete',id,{finalCounts:countShape(value),sourceCount:Number(value?.sourceCount||0)});return res.status(200).json({...value,cache:'inflight',debugId:id})}
+    catch(error){debugLog('inflight_error',id,{error:safeError(error)});return res.status(Number(error?.statusCode||500)).json({error:error?.message||'Deep dive failed',debugId:id})}
+  }
+  const start=Date.now();
+  const p=run(b,start,id).then(v=>(cacheSet(key,v),v)).finally(()=>inflight.delete(key));
+  inflight.set(key,p);
+  try{
+    res.setHeader('Cache-Control','private, max-age=0, no-store');
+    return res.status(200).json(await p);
+  }catch(error){
+    const status=Number(error?.statusCode||500);
+    debugLog('request_error',id,{status,elapsedMs:Date.now()-start,error:safeError(error)});
+    console.error('[reader-deep-dive]',{traceId:id,status,message:error?.message||String(error)});
+    return res.status(status).json({error:status===503?'Tavily APIを利用できません':'深掘り情報を取得できませんでした',detail:status===503?'VercelのTAVILY_API_KEYを確認してください。':'',debugId:id})
+  }
+}
