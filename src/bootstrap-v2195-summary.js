@@ -6,8 +6,8 @@ import './features/reader/summary-instant-ux.js?v=21917highlight1';
 import './features/reader/reader-summary-accelerator.js?v=21924rssquality1';
 // Reader専用: 横スワイプされたページだけTavilyを1回実行し、AI要約を検索テーマに使う。Gemini整形は検索結果表示後に行う。
 import './features/reader/reader-deep-dive-page-unit.js?v=21926deepdive2';
-// Reader専用: 3秒を超えても検索を中断せず、Tavilyを最大7秒まで待つ。
-import './features/reader/reader-deep-dive-long-wait.js?v=21927deepwait1';
+// Reader専用: 3秒を超えても検索を中断せず最大7秒待ち、Fingerprint導入前の深掘りキャッシュだけ一度破棄する。
+import './features/reader/reader-deep-dive-long-wait.js?v=21928fingerprint1';
 // Reader専用: 実処理名を切り替えながら1本のプログレスバーを0→100%へ進める。
 import './features/reader/reader-recommend-loading-ui.js?v=21922loadingsingle1';
 // Reader専用: 読み込み表示を「登録配信元の最新記事を新しい順」に統一する。

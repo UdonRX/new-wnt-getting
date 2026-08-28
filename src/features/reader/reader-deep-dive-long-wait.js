@@ -1,6 +1,17 @@
 const SEARCH_ROUTE = 'reader-deep-dive';
 const SEARCH_MAX_MS = 7800;
 const SOFT_WAIT_MS = 3000;
+const FINGERPRINT_MARKER = 'reader-deep-dive-fingerprint-version';
+const FINGERPRINT_VERSION = 'fingerprint-filter-v1';
+
+function clearPreFingerprintCache() {
+  try {
+    if (localStorage.getItem(FINGERPRINT_MARKER) === FINGERPRINT_VERSION) return;
+    localStorage.removeItem('reader-deep-dive-cache-v1');
+    localStorage.removeItem('reader-deep-dive-cache-v2');
+    localStorage.setItem(FINGERPRINT_MARKER, FINGERPRINT_VERSION);
+  } catch {}
+}
 
 function parseSearch(input, init = {}) {
   const method = String(init?.method || (input instanceof Request ? input.method : 'GET') || 'GET').toUpperCase();
@@ -70,6 +81,7 @@ function observe() {
 }
 
 if (typeof window !== 'undefined') {
+  clearPreFingerprintCache();
   installLongSearchWait();
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', observe, { once: true });
   else observe();
