@@ -173,7 +173,8 @@ function installDeepUiPatchStyle() {
   style.id = 'reader-deep-ui-patch-v5';
   style.textContent = `
 .reader-focus-open .reader-story-card{position:relative}
-.reader-deep-idle-dots{bottom:142px!important;z-index:14!important}
+.reader-deep-idle-dots{bottom:12px!important;z-index:14!important}
+.reader-story-card.reader-deep-idle-ready:not(.reader-deep-enabled)>.reader-story-actions{transform:translateY(-42px)}
 .reader-story-card.reader-deep-enabled .reader-deep-idle-dots{display:none!important}
 .reader-deep-view>.reader-deep-badge{align-items:center!important;justify-content:center!important}
 `;
@@ -192,6 +193,7 @@ function syncDeepTitles(card) {
 function ensureIdleDots(card) {
   if (!(card instanceof Element) || !card.matches('.reader-story-card') || !card.closest('.reader-focus-open')) return;
   if (card.classList.contains('reader-deep-enabled')) return;
+  card.classList.add('reader-deep-idle-ready');
   if (card.querySelector(':scope > .reader-deep-idle-dots')) return;
   const wrap = document.createElement('div');
   wrap.className = 'reader-deep-dots reader-deep-idle-dots';
