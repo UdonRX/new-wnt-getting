@@ -445,32 +445,6 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   return card;
 }
 
-function installHorizontalSwipe(container, { onPrevFeed, onNextFeed }) {
-  let start = null;
-  const down = event => {
-    if (event.touches?.length !== 1) return;
-    const t = event.touches[0];
-    start = { x: t.clientX, y: t.clientY, target: event.target };
-  };
-  const up = event => {
-    if (!start || !event.changedTouches?.length) return;
-    const t = event.changedTouches[0];
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    const target = start.target;
-    start = null;
-    if (target?.closest?.('a,button,input,textarea,select')) return;
-    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
-    if (dx < 0) onNextFeed?.(); else onPrevFeed?.();
-  };
-  container.addEventListener('touchstart', down, { passive: true });
-  container.addEventListener('touchend', up, { passive: true });
-  return () => {
-    container.removeEventListener('touchstart', down);
-    container.removeEventListener('touchend', up);
-  };
-}
-
 function loadCardSummary(card, item, mode) {
   if (!card?.isConnected) return Promise.resolve(null);
   const expectedArticleId = focusItemKey(item);
@@ -603,7 +577,6 @@ export function mountFocus(host, {
 
   feed.addEventListener('scroll', onScroll, { passive: true });
   if ('onscrollend' in feed) feed.addEventListener('scrollend', onScrollEnd, { passive: true });
-  const detachHorizontal = installHorizontalSwipe(feed, { onPrevFeed, onNextFeed });
 
   // No 10-item initial batch. The active article is loaded first; once it
   // settles, only the immediate next article is prefetched.
@@ -619,7 +592,6 @@ export function mountFocus(host, {
       feed.removeEventListener('scroll', onScroll);
       if ('onscrollend' in feed) feed.removeEventListener('scrollend', onScrollEnd);
       cards.forEach(stopProgress);
-      detachHorizontal();
     },
     go(nextIndex) {
       const next = clampReaderIndex(nextIndex, rows.length);
