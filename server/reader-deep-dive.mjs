@@ -1,5 +1,5 @@
 const T='https://api.tavily.com/search',G='https://generativelanguage.googleapis.com/v1beta/models';
-const TTL=864e5,TMO=2450,GTMO=9000,LOG='[READER_DEEP_DIVE_DEBUG]';
+const TTL=864e5,TMO=7000,GTMO=9000,LOG='[READER_DEEP_DIVE_DEBUG]';
 const cache=new Map(),flight=new Map(),lanes=['timeline','perspectives','future'];
 const blocked=['x.com','twitter.com','facebook.com','instagram.com','tiktok.com','reddit.com','youtube.com','youtu.be'];
 const tags=['法改正','新技術','買収','投資','提携','発表','規制','決算','転換点','その他'], impacts=['high','medium','low','unknown'];

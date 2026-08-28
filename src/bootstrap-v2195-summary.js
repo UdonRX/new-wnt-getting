@@ -4,8 +4,10 @@ import './features/reader/summary-fetch-gate.js?v=2199summarycache1';
 import './features/reader/summary-instant-ux.js?v=21917highlight1';
 // Reader専用: RSSが実質的に短い場合だけ「記載なし」を使い、具体情報があれば1〜2文でもAIで3カード要約する。
 import './features/reader/reader-summary-accelerator.js?v=21924rssquality1';
-// Reader専用: 横スワイプされたページだけTavilyを1回実行し、AI要約を検索テーマに使う。Gemini整形は初期3秒表示後に行う。
+// Reader専用: 横スワイプされたページだけTavilyを1回実行し、AI要約を検索テーマに使う。Gemini整形は検索結果表示後に行う。
 import './features/reader/reader-deep-dive-page-unit.js?v=21926deepdive2';
+// Reader専用: 3秒を超えても検索を中断せず、Tavilyを最大7秒まで待つ。
+import './features/reader/reader-deep-dive-long-wait.js?v=21927deepwait1';
 // Reader専用: 実処理名を切り替えながら1本のプログレスバーを0→100%へ進める。
 import './features/reader/reader-recommend-loading-ui.js?v=21922loadingsingle1';
 // Reader専用: 読み込み表示を「登録配信元の最新記事を新しい順」に統一する。
