@@ -5,10 +5,11 @@ import './features/reader/summary-instant-ux.js?v=21917highlight1';
 // Reader専用: 先読みを停止し、十分なRSSはAI要約、短いRSSは取得済み事実だけで3カード化する。
 import './features/reader/reader-summary-accelerator.js?v=21919rssonly1';
 // Reader専用: 実処理名を切り替えながら1本のプログレスバーを0→100%へ進める。
-// cache-fastより先に読み込み、実ネットワークへ進んだ時だけ取得進捗を反映する（待ち時間は追加しない）。
 import './features/reader/reader-recommend-loading-ui.js?v=21922loadingsingle1';
-// Reader専用: おすすめ表示中は保存済み記事を先に使い、同期RSS更新待ちを外して2秒以内表示を狙う。
-import './features/reader/reader-recommend-cache-fast.js?v=21920recommendfast1';
+// Reader専用: 読み込み表示を「登録配信元の最新記事を新しい順」に統一する。
+import './features/reader/reader-recommend-latest-labels.js?v=21923latestlabels1';
+// Reader専用: 2分以内の新鮮なキャッシュだけ即利用し、古いキャッシュは裏で更新して最新性と速度を両立する。
+import './features/reader/reader-recommend-cache-fast.js?v=21923latestcache1';
 // v2.19.17: 記事一覧タブは完全表示なら現在位置を維持し、見切れた時だけ中央へ追従する。
 import './features/reader/reader-list-ux.js?v=21917tabs2';
 // v2.19.17: 横画面操作バーを動画と同じ時計回り90°へ回転する。
