@@ -175,6 +175,82 @@ assert.equal(fastPrepared.preparedSource, 'rss');
 assert.equal(fastPrepared.prepareReason, 'fast-rss-description-sufficient');
 assert.ok(Array.from(fastPrepared.description).length <= 500, 'Gemini入力は最大500文字');
 
+// Test 11: 160文字以上・タイトル反復ではない具体文2つなら、定型リンク文を除いてRSSを即利用する。
+let compactFastExtractorCalls = 0;
+const compactFastDescription = [
+  '新型炊飯器は加熱制御を見直し、従来機より消費電力を抑えながら炊き上がりの温度差を小さくしました。',
+  '量産工程では温度センサーの検査条件を統一し、複数ラインで同じ判定基準を使用できるようにしました。'
+].join('').repeat(2) + ' 詳細はこちら';
+const compactFastPrepared = await prepareSummaryBody({
+  title: '加熱制御を改善した新型炊飯器',
+  description: compactFastDescription,
+  url: 'https://example.com/compact-fast',
+  source: 'テスト媒体',
+  mode: 'news',
+  fast: true,
+  preferFullText: true
+}, {
+  extractor: async () => {
+    compactFastExtractorCalls += 1;
+    return { text: '呼ばれてはいけない本文です。', title: 'unexpected' };
+  }
+});
+assert.equal(compactFastExtractorCalls, 0, '160文字以上かつ具体文2つのfast RSSは元記事取得を省略');
+assert.equal(compactFastPrepared.preparedSource, 'rss');
+assert.equal(compactFastPrepared.description.includes('詳細はこちら'), false, 'RSS定型リンク文をGemini入力から除去');
+
+let titleEchoExtractorCalls = 0;
+const repeatedTitle = '新製品の量産開始に関するニュース';
+await prepareSummaryBody({
+  title: repeatedTitle,
+  description: `${repeatedTitle}。`.repeat(10),
+  url: 'https://example.com/title-echo',
+  mode: 'news',
+  fast: true,
+  preferFullText: true
+}, {
+  articleTimeoutMs: 200,
+  extractor: async () => {
+    titleEchoExtractorCalls += 1;
+    return { text: '元記事には量産開始の時期と対象工場が具体的に記載されています。品質確認の方法と今後の生産計画についても説明されています。', title: repeatedTitle };
+  }
+});
+assert.equal(titleEchoExtractorCalls, 1, 'タイトル反復だけのRSSは元記事取得を省略しない');
+
+let boilerplateExtractorCalls = 0;
+await prepareSummaryBody({
+  title: 'RSS定型文だけの記事',
+  description: '続きを読む。詳細はこちら。全文はこちら。記事はこちら。'.repeat(12),
+  url: 'https://example.com/boilerplate-only',
+  mode: 'news',
+  fast: true,
+  preferFullText: true
+}, {
+  articleTimeoutMs: 200,
+  extractor: async () => {
+    boilerplateExtractorCalls += 1;
+    return { text: '元記事には製品仕様と量産時期が具体的に記載されています。評価方法と今後の展開についても説明されています。', title: 'RSS定型文だけの記事' };
+  }
+});
+assert.equal(boilerplateExtractorCalls, 1, '続きを読む・詳細はこちらだけのRSSは元記事取得を省略しない');
+
+let oneSentenceExtractorCalls = 0;
+await prepareSummaryBody({
+  title: '具体文が一つだけの記事',
+  description: `製造工程では新しい検査方法を導入し、品質判定のばらつきを抑えました${'追加情報'.repeat(35)}。`,
+  url: 'https://example.com/one-sentence',
+  mode: 'news',
+  fast: true,
+  preferFullText: true
+}, {
+  articleTimeoutMs: 200,
+  extractor: async () => {
+    oneSentenceExtractorCalls += 1;
+    return { text: '元記事では検査方法の変更点が説明されています。量産ラインへの展開計画も具体的に記載されています。', title: '具体文が一つだけの記事' };
+  }
+});
+assert.equal(oneSentenceExtractorCalls, 1, '160文字以上でも具体文が一つだけなら元記事取得を省略しない');
+
 const gateSource = fs.readFileSync(new URL('../src/features/reader/summary-fetch-gate.js', import.meta.url), 'utf8');
 assert.match(gateSource, /prefetch-outside-active-next-slot/, 'フォーカス外prefetchを抑止');
 assert.match(gateSource, /prefetch-active-summary-not-successful/, '表示記事失敗後はprefetchしない');

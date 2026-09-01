@@ -88,4 +88,38 @@ try {
   globalThis.fetch = originalFetch;
 }
 
+let fastPayload = null;
+globalThis.fetch = async (_url, init = {}) => {
+  fastPayload = JSON.parse(String(init.body || '{}'));
+  const payload = {
+    h: '量産工程に導入した新しい温度制御',
+    c: '新方式により消費電力を抑えながら温度差を小さくしました。',
+    b: '温度センサーの検査条件を統一し、複数ラインへ展開しました。',
+    i: '品質判定のばらつきを抑え、今後の生産拡大につなげます。'
+  };
+  return new Response(JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }]
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+
+try {
+  const fastSummary = await generateStructuredSingle({
+    title: '高速要約設定の確認',
+    description: `${'速'.repeat(380)}この末尾はGeminiへ送信されない`,
+    preparedSource: 'rss',
+    source: 'テスト媒体',
+    fast: true
+  });
+  const fastPrompt = fastPayload?.contents?.[0]?.parts?.[0]?.text || '';
+  const schemaKeys = Object.keys(fastPayload?.generationConfig?.responseJsonSchema?.properties || {});
+  assert.equal(fastPayload?.generationConfig?.maxOutputTokens, 220, '高速要約の出力は最大220トークン');
+  assert.deepEqual(schemaKeys, ['h', 'c', 'b', 'i'], '高速要約は短いJSONキーを使う');
+  assert.match(fastPrompt, /最大380文字/, '高速要約入力は最大380文字');
+  assert.equal(fastPrompt.includes('この末尾はGeminiへ送信されない'), false, '380文字を超えた本文を送信しない');
+  assert.equal(fastSummary.provider, 'gemini-structured-v2195');
+  assert.equal(fastSummary.lines.length, 3);
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
 console.log('summary single preparation regression check: OK');

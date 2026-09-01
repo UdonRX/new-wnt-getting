@@ -8,9 +8,11 @@ import { setAsciiHeader, summaryServerErrorCode } from '../lib/http-response-saf
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
 const FAST_ARTICLE_PREPARE_TIMEOUT_MS = 1400;
-const FAST_RSS_MIN_CHARS = 320;
+const FAST_RSS_MIN_CHARS = 160;
+const FAST_RSS_MIN_SENTENCES = 2;
 const RESEARCH_ARTICLE_TIMEOUT_MS = 5000;
 const RESEARCH_NOISE_RE = /(?:Cookie|クッキー|JavaScript|ログイン|会員登録|お問い合わせ|プライバシーポリシー|利用規約|関連記事|おすすめ記事|広告|Copyright|無断転載|メニュー|サイト内検索|シェア(?:する|はこちら)?|ホームへ|トップページ)/i;
+const RSS_BOILERPLATE_RE = /(?:続きを読む(?:…|\.{3})?|続き(?:はこちら|を読む)|詳細(?:はこちら|を見る)|全文(?:はこちら|を読む)|記事(?:はこちら|を読む)|元記事(?:はこちら|を読む|で確認)|Read\s*more|More\s*details?)/gi;
 
 function clean(value = '', max = 6000) {
   return String(value || '')
@@ -183,11 +185,27 @@ function descriptionLooksReal(title, description) {
   if (t.length >= 12 && d.length < 220 && (d === t || d.startsWith(t) || d.includes(t.slice(0, Math.min(36, t.length))))) return false;
   return (text.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length >= 55;
 }
+function stripRssBoilerplate(value = '') {
+  return clean(String(value || '').replace(RSS_BOILERPLATE_RE, ' '));
+}
+function informativeChars(value = '') {
+  return (String(value || '').match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length;
+}
+function isTitleEcho(title, value) {
+  const titleKey = compact(title), valueKey = compact(value);
+  if (titleKey.length < 2 || !valueKey || !valueKey.includes(titleKey)) return false;
+  return valueKey.split(titleKey).join('').length < 40;
+}
+function specificRssSentences(title, description) {
+  return (description.match(/[^。！？!?.]{12,}[。！？!?.]?/g) || [])
+    .map(sentence => clean(sentence))
+    .filter(sentence => informativeChars(sentence) >= 18)
+    .filter(sentence => !GENERIC_RE.test(sentence) && !isTitleEcho(title, sentence));
+}
 function descriptionLooksFastEnough(title, description) {
-  const text = clean(description);
-  if (text.length < FAST_RSS_MIN_CHARS || !descriptionLooksReal(title, text)) return false;
-  const sentences = text.match(/[^。！？!?.]{12,}[。！？!?.]/g) || [];
-  return sentences.length >= 3;
+  const text = stripRssBoilerplate(description);
+  if (text.length < FAST_RSS_MIN_CHARS || isTitleEcho(title, text)) return false;
+  return specificRssSentences(title, text).length >= FAST_RSS_MIN_SENTENCES;
 }
 function isGoogleNewsInput(body = {}, url = '') {
   const source = clean(body.source || body.feedName || '');
@@ -203,7 +221,7 @@ export async function prepareSummaryBody(raw = {}, { extractor = extractArticleF
   const fastRss = fastRequest && descriptionLooksFastEnough(title, description);
   const preferFullText = !fastRss && (requestedFullText || googleNews);
   if (fastRss || (!preferFullText && descriptionLooksReal(title, description))) {
-    body.description = first500(description); body.preparedSource = 'rss'; body.prepareReason = fastRss ? 'fast-rss-description-sufficient' : 'rss-description-sufficient'; return body;
+    body.description = first500(fastRss ? stripRssBoilerplate(description) : description); body.preparedSource = 'rss'; body.prepareReason = fastRss ? 'fast-rss-description-sufficient' : 'rss-description-sufficient'; return body;
   }
   if (url) {
     const requestedTimeout = Number(articleTimeoutMs);
