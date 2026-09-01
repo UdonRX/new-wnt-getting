@@ -265,9 +265,9 @@ const forcedRssOnlyPrepared = await prepareSummaryBody({
     return { text: '呼ばれてはいけない元記事本文です。', title: 'unexpected' };
   }
 });
-assert.equal(forcedRssOnlyExtractorCalls, 0, '一時RSS限定比較では文字数に関係なく元記事取得を行わない');
+assert.equal(forcedRssOnlyExtractorCalls, 0, 'Readerの本番RSS要約では文字数に関係なく元記事取得を行わない');
 assert.equal(forcedRssOnlyPrepared.preparedSource, 'rss');
-assert.equal(forcedRssOnlyPrepared.prepareReason, 'forced-rss-only');
+assert.equal(forcedRssOnlyPrepared.prepareReason, 'reader-rss-only');
 
 const gateSource = fs.readFileSync(new URL('../src/features/reader/summary-fetch-gate.js', import.meta.url), 'utf8');
 assert.match(gateSource, /prefetch-outside-active-next-slot/, 'フォーカス外prefetchを抑止');

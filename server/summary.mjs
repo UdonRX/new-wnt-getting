@@ -104,6 +104,18 @@ function completeResearchText(value = '', max = 145) {
   if (index >= Math.floor(max * 0.55)) return finishResearchSentence(prefix.slice(0, index + 1));
   return '';
 }
+function compactResearchCardText(value = '', max = 64) {
+  const candidate = researchSentenceCandidates(value)[0] || cleanResearchText(value, max * 4);
+  const normalized = finishResearchSentence(candidate);
+  const chars = Array.from(normalized);
+  if (chars.length <= max) return normalized;
+
+  const prefix = chars.slice(0, Math.max(1, max - 1)).join('');
+  const boundaries = ['。', '！', '？', '、', '；', ';', '：', ':'];
+  const index = Math.max(...boundaries.map(mark => prefix.lastIndexOf(mark)));
+  const clipped = index >= Math.floor(max * 0.55) ? prefix.slice(0, index + 1) : prefix;
+  return `${clipped.replace(/[。、,;；:：\s]+$/g, '').trim()}。`;
+}
 function researchFallbackOverview(title = '', category = '') {
   const cleanedTitle = cleanResearchText(title, 92).replace(/[「」『』]+/g, '').trim();
   if (!cleanedTitle) return `${category || '生産技術'}に関わる技術・事例を扱った記事です。`;
@@ -132,50 +144,40 @@ async function researchOverviewText(body, overview, acquisition, category) {
 
   return fallback || researchFallbackOverview(body.title, category);
 }
-function researchSelectionReason(category = '') {
-  const map = {
-    '生技基礎': '用語・計算・使い分けを整理でき、生産技術の判断軸を増やせる内容だから選びました。',
-    '改善事例': '課題から対策、効果までの考え方を自工程へ置き換えやすい内容だから選びました。',
-    '技術革新': '新しい仕組みや工法を、製造や新規開発へ流用する着眼点がある内容だから選びました。',
-    '論文・研究': '研究結果や評価方法を、生産技術の仮説・検証へ置き換えやすい内容だから選びました。',
-    '製品・製造技術': '製品機能や量産工程に近く、新規開発・工程設計のヒントになる内容だから選びました。',
-    '異業種横展開': '他業種の改善原理を、自工程へ横展開するヒントが得られる内容だから選びました。'
-  };
-  return map[category] || '生産技術の知識・改善・技術着想につながる具体性があるため選びました。';
-}
-async function researchSummaryFromBody(body = {}) {
+export async function researchSummaryFromBody(body = {}) {
   const description = clean(body.description);
   if (!/技術リサーチ:\s*Web調査済み/.test(description)) return null;
   const organization = researchField(description, '対象企業/組織名', ['カテゴリ', '日付精度', '公開年', '概要', '応用着眼点', '媒体']);
   const category = researchField(description, 'カテゴリ', ['日付精度', '公開年', '概要', '応用着眼点', '媒体']);
   const overview = researchField(description, '概要', ['応用着眼点', '媒体']);
   const application = researchField(description, '応用着眼点', ['媒体']);
-  const selectionReason = researchField(description, '選別理由', ['トピック', '取得方式']);
   const acquisition = researchField(description, '取得方式');
   if (!organization || !category || !overview || !application) return null;
 
-  const overviewText = await researchOverviewText(body, overview, acquisition, category);
-  const reason = /機械採点|score|検索関連度|カテゴリ語|条件に合致/i.test(selectionReason)
-    ? researchSelectionReason(category)
-    : completeResearchText(selectionReason, 96) || researchSelectionReason(category);
-  const applicationText = completeResearchText(application, 110)
-    || '手法・原理・効果を自工程の課題へ置き換え、改善や新規技術探索の着眼点として使えます。';
+  const researchedOverview = await researchOverviewText(body, overview, acquisition, category);
+  const overviewSentences = researchSentenceCandidates(researchedOverview);
+  const conclusionText = compactResearchCardText(overviewSentences[0] || researchedOverview)
+    || compactResearchCardText(researchFallbackOverview(body.title, category));
+  const backgroundFallback = `${organization}が公開した、${category || '生産技術'}に関する技術・改善事例です。`;
+  const backgroundText = compactResearchCardText(overviewSentences[1] || backgroundFallback);
+  const applicationText = compactResearchCardText(application)
+    || '技術の要点を工程改善や新規技術探索の着眼点として活用できます。';
 
   return {
     headline: clean(body.title) || '技術リサーチ',
     lines: [
-      { label: '概要', text: overviewText },
-      { label: '選んだ理由', text: reason },
-      { label: '生技への応用', text: applicationText }
+      { label: '結論/事実', text: conclusionText },
+      { label: '背景/特徴', text: backgroundText },
+      { label: '影響/展望', text: applicationText }
     ],
-    short: overviewText,
-    points: [reason, applicationText],
-    provider: 'technology-research-prepared-v9',
+    short: conclusionText,
+    points: [backgroundText, applicationText],
+    provider: 'technology-research-prepared-v10',
     model: 'prepared',
     contentSource: /Tavily/i.test(acquisition) ? 'article+web-research' : 'web-research',
     cacheable: true,
     validated: true,
-    fastPath: 'technology-research-prepared-v9'
+    fastPath: 'technology-research-prepared-v10'
   };
 }
 function descriptionLooksReal(title, description) {
@@ -222,7 +224,7 @@ export async function prepareSummaryBody(raw = {}, { extractor = extractArticleF
   if (rssOnlyRequest) {
     body.description = first500(stripRssBoilerplate(description));
     body.preparedSource = body.description ? 'rss' : 'missing';
-    body.prepareReason = body.description ? 'forced-rss-only' : 'forced-rss-only-empty';
+    body.prepareReason = body.description ? 'reader-rss-only' : 'reader-rss-only-empty';
     return body;
   }
   const fastRss = fastRequest && descriptionLooksFastEnough(title, description);
@@ -274,7 +276,7 @@ async function routeSummaryRequest(req, res) {
     const incoming = rawBody(req);
     const preparedResearch = await researchSummaryFromBody(incoming);
     if (preparedResearch) {
-      res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Prepared-Source', 'web-research'); res.setHeader('X-Summary-Route', 'technology-research-prepared-v9');
+      res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Prepared-Source', 'web-research'); res.setHeader('X-Summary-Route', 'technology-research-prepared-v10');
       return res.status(200).json(preparedResearch);
     }
     const prepared = await prepareSummaryBody(incoming);

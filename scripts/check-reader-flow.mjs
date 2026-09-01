@@ -65,13 +65,20 @@ const forcedRssBody = buildRssOnlyAiBody({
   preferFullText: true,
   fast: false
 });
-assert.equal(Array.from(forcedRssBody.description).length, 380, '一時比較ではRSS説明文を最大380文字へ短縮');
+assert.equal(Array.from(forcedRssBody.description).length, 380, '本番RSS要約では説明文を最大380文字へ短縮');
 assert.equal(forcedRssBody.description.includes('この末尾は送信されない'), false, '380文字を超えるRSS説明文を送信しない');
-assert.equal(forcedRssBody.url, '', '一時比較では元記事URLを要約APIへ渡さない');
-assert.equal(forcedRssBody.link, '', '一時比較では元記事リンクを要約APIへ渡さない');
-assert.equal(forcedRssBody.preferFullText, false, '一時比較では元記事本文取得を要求しない');
-assert.equal(forcedRssBody.fast, true, '一時比較でも380文字・220トークンの高速Geminiを使う');
-assert.equal(forcedRssBody.rssOnlyExperiment, true, '全記事RSS限定の一時スイッチが有効');
+assert.equal(forcedRssBody.url, '', '本番RSS要約では元記事URLを要約APIへ渡さない');
+assert.equal(forcedRssBody.link, '', '本番RSS要約では元記事リンクを要約APIへ渡さない');
+assert.equal(forcedRssBody.preferFullText, false, '本番RSS要約では元記事本文取得を要求しない');
+assert.equal(forcedRssBody.fast, true, '本番RSS要約は380文字・220トークンの高速Geminiを使う');
+assert.equal('rssOnlyExperiment' in forcedRssBody, false, '一時実験用フィールドを本番リクエストへ残さない');
+
+const preparedResearchBody = buildRssOnlyAiBody({
+  title: '技術リサーチ',
+  description: `技術リサーチ: Web調査済み ｜ 対象企業/組織名: テスト機関 ｜ カテゴリ: 論文・研究 ｜ 概要: ${'研究結果。'.repeat(100)} ｜ 応用着眼点: 工程改善に活用できます。 ｜ 媒体: 公式サイト`
+});
+assert.equal(Array.from(preparedResearchBody.description).length > 380, true, '技術リサーチはRSS内の構造化3カード材料を欠落させない');
+assert.match(preparedResearchBody.description, /応用着眼点:/, '技術リサーチの影響・展望材料を保持');
 
 const focusSource = fs.readFileSync(new URL('../src/features/reader/reader-focus.js', import.meta.url), 'utf8');
 assert.equal(focusSource.includes("/api/summary?batch=1&client=reader-focus"), false, 'Reader focusからGemini 10件バッチを除去');
@@ -82,8 +89,9 @@ assert.match(focusSource, /actualCount:\s*1/, '先読みは1記事に制限');
 assert.match(focusSource, /summaryPromises\.has\(key\)/, '先読み済み記事は同じarticleIdのPromiseを再利用する');
 
 const acceleratorSource = fs.readFileSync(new URL('../src/features/reader/reader-summary-accelerator.js', import.meta.url), 'utf8');
-assert.match(acceleratorSource, /FORCE_ALL_ARTICLES_RSS_ONLY = true/, '全記事RSS限定の一時比較スイッチを有効化');
-assert.match(acceleratorSource, /localStorage\.removeItem\(SUMMARY_STORAGE_KEY\)/, '一時比較開始時に旧本文由来の要約キャッシュを破棄');
+assert.equal(acceleratorSource.includes('FORCE_ALL_ARTICLES_RSS_ONLY'), false, '一時比較スイッチを本番コードから除去');
+assert.match(acceleratorSource, /production:\s*true/, 'Reader限定のRSS本番経路を明示');
+assert.match(acceleratorSource, /localStorage\.removeItem\(SUMMARY_STORAGE_KEY\)/, '本番移行時に旧本文由来の要約キャッシュを一度だけ破棄');
 
 const instantSource = fs.readFileSync(new URL('../src/features/reader/summary-instant-ux.js', import.meta.url), 'utf8');
 assert.match(instantSource, /INSTANT_RENDER_RETRY_MS/, 'activeカード確定まで即時UXを短時間再試行');

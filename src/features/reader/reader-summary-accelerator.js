@@ -4,10 +4,7 @@ const upstreamFetch = globalThis.fetch?.bind(globalThis);
 const SUMMARY_PATH = '/api/summary';
 const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2180';
 const SOURCE_RECOVERY_MIGRATION_KEY = 'reader-summary-source-recovery-v2';
-const RSS_ONLY_EXPERIMENT_CACHE_RESET_KEY = 'reader-summary-rss-only-experiment-v1';
-// Temporary comparison switch: every displayed Reader article uses only its RSS description.
-// Set this back to false to restore source recovery and low-information local summaries.
-const FORCE_ALL_ARTICLES_RSS_ONLY = true;
+const RSS_ONLY_PRODUCTION_CACHE_RESET_KEY = 'reader-summary-rss-only-production-v1';
 const LABELS = ['結論/事実', '背景/特徴', '影響/展望'];
 const MISSING = [
   'RSSには結論として要約できる追加情報が記載されていません。',
@@ -196,15 +193,17 @@ function shortResponse(parsed) {
 
 export function buildRssOnlyAiBody(sourceBody = {}) {
   const evidence = rssEvidence(sourceBody);
+  // 技術リサーチはRSS内の構造化フィールドをサーバー側で3カードへ整形する。
+  // Geminiへは送られないため、各フィールドが380文字で欠けないようRSS記述を保持する。
+  const preparedResearch = /技術リサーチ:\s*Web調査済み/i.test(evidence.description);
   return {
     ...sourceBody,
-    description: Array.from(evidence.description).slice(0, 380).join(''),
+    description: Array.from(evidence.description).slice(0, preparedResearch ? 1800 : 380).join(''),
     url: '',
     link: '',
     preferFullText: false,
     rssOnly: true,
-    fast: true,
-    rssOnlyExperiment: FORCE_ALL_ARTICLES_RSS_ONLY
+    fast: true
   };
 }
 
@@ -259,18 +258,17 @@ function purgeBadSummaryCacheOnce() {
   } catch {}
 }
 
-function purgeSummaryCacheForRssOnlyExperimentOnce() {
-  if (!FORCE_ALL_ARTICLES_RSS_ONLY) return;
+function purgeSummaryCacheForRssOnlyProductionOnce() {
   try {
-    if (localStorage.getItem(RSS_ONLY_EXPERIMENT_CACHE_RESET_KEY) === '1') return;
+    if (localStorage.getItem(RSS_ONLY_PRODUCTION_CACHE_RESET_KEY) === '1') return;
     localStorage.removeItem(SUMMARY_STORAGE_KEY);
-    localStorage.setItem(RSS_ONLY_EXPERIMENT_CACHE_RESET_KEY, '1');
+    localStorage.setItem(RSS_ONLY_PRODUCTION_CACHE_RESET_KEY, '1');
   } catch {}
 }
 
 if (typeof window !== 'undefined') {
   purgeBadSummaryCacheOnce();
-  purgeSummaryCacheForRssOnlyExperimentOnce();
+  purgeSummaryCacheForRssOnlyProductionOnce();
 }
 
 if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_ONLY_SUMMARY_INSTALLED) {
@@ -284,10 +282,6 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_
       return Promise.resolve(disabledPrefetch(parsed));
     }
 
-    if (FORCE_ALL_ARTICLES_RSS_ONLY) return rssOnlyAi(input, init, parsed);
-    const recoveryKind = sourceRecoveryKind(parsed.body);
-    if (recoveryKind) return sourceRecoveryAi(input, init, parsed, recoveryKind);
-    if (!isSufficientRss(parsed.body)) return Promise.resolve(shortResponse(parsed));
     return rssOnlyAi(input, init, parsed);
   };
 
@@ -296,6 +290,6 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_
     grounded: body => buildGroundedShortSummary(body),
     evidence: body => rssEvidence(body),
     sourceRecoveryKind: body => sourceRecoveryKind(body),
-    forceAllArticlesRssOnly: FORCE_ALL_ARTICLES_RSS_ONLY
+    production: true
   };
 }

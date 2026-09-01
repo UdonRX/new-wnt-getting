@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { prepareSummaryBody } from '../server/summary.mjs';
+import { prepareSummaryBody, researchSummaryFromBody } from '../server/summary.mjs';
 import { generateStructuredSingle } from '../lib/summary-dispatch-v2195.mjs';
 
 const rssDescription = [
@@ -47,6 +47,23 @@ const normalRss = await prepareSummaryBody({
 
 assert.equal(normalExtractorCalls, 0, '十分な通常RSS本文は高速経路を維持する');
 assert.equal(normalRss.preparedSource, 'rss');
+
+const researchSummary = await researchSummaryFromBody({
+  title: '外注技能工の単価調査への協力願い',
+  description: [
+    '技術リサーチ: Web調査済み',
+    '対象企業/組織名: 日本プラントメンテナンス協会',
+    'カテゴリ: 論文・研究',
+    '概要: 日本プラントメンテナンス協会は1989年より毎年外注技能工の単価調査を実施しています。本調査は装置型産業の設備ユーザーを対象として支払い単価を把握することを目的としています。',
+    '応用着眼点: 設備ユーザー側の支払い価格として、保全計画や外注費評価の基準に活用できます。',
+    '媒体: 公式サイト',
+    '選別理由: 検索関連度の条件に合致したため選びました。',
+    '取得方式: RSS'
+  ].join(' ｜ ')
+});
+assert.deepEqual(researchSummary.lines.map(line => line.label), ['結論/事実', '背景/特徴', '影響/展望'], '論文研究の全カード見出しを統一');
+assert.equal(researchSummary.lines.every(line => Array.from(line.text).length <= 64), true, '論文研究の各要約をカード内に収まる64文字以内に制限');
+assert.equal(researchSummary.lines.some(line => /選んだ理由|選びました/.test(line.text)), false, '選別理由を要約カードへ表示しない');
 
 process.env.GEMINI_API_KEY = 'regression-test-key';
 const originalFetch = globalThis.fetch;
