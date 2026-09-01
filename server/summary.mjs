@@ -217,7 +217,14 @@ export async function prepareSummaryBody(raw = {}, { extractor = extractArticleF
   const title = clean(body.title), description = clean(body.description), url = clean(body.url || body.link);
   const googleNews = isGoogleNewsInput(body, url);
   const fastRequest = body.fast === true || String(body.fast || '').toLowerCase() === 'true';
+  const rssOnlyRequest = body.rssOnly === true || String(body.rssOnly || '').toLowerCase() === 'true';
   const requestedFullText = body.preferFullText === true || String(body.preferFullText || '').toLowerCase() === 'true';
+  if (rssOnlyRequest) {
+    body.description = first500(stripRssBoilerplate(description));
+    body.preparedSource = body.description ? 'rss' : 'missing';
+    body.prepareReason = body.description ? 'forced-rss-only' : 'forced-rss-only-empty';
+    return body;
+  }
   const fastRss = fastRequest && descriptionLooksFastEnough(title, description);
   const preferFullText = !fastRss && (requestedFullText || googleNews);
   if (fastRss || (!preferFullText && descriptionLooksReal(title, description))) {

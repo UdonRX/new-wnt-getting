@@ -251,6 +251,24 @@ await prepareSummaryBody({
 });
 assert.equal(oneSentenceExtractorCalls, 1, '160文字以上でも具体文が一つだけなら元記事取得を省略しない');
 
+let forcedRssOnlyExtractorCalls = 0;
+const forcedRssOnlyPrepared = await prepareSummaryBody({
+  title: '一時RSS限定比較',
+  description: 'RSSに記載された短い説明文だけを比較に使用します。元記事本文は取得しません。',
+  url: 'https://example.com/forced-rss-only',
+  fast: true,
+  preferFullText: true,
+  rssOnly: true
+}, {
+  extractor: async () => {
+    forcedRssOnlyExtractorCalls += 1;
+    return { text: '呼ばれてはいけない元記事本文です。', title: 'unexpected' };
+  }
+});
+assert.equal(forcedRssOnlyExtractorCalls, 0, '一時RSS限定比較では文字数に関係なく元記事取得を行わない');
+assert.equal(forcedRssOnlyPrepared.preparedSource, 'rss');
+assert.equal(forcedRssOnlyPrepared.prepareReason, 'forced-rss-only');
+
 const gateSource = fs.readFileSync(new URL('../src/features/reader/summary-fetch-gate.js', import.meta.url), 'utf8');
 assert.match(gateSource, /prefetch-outside-active-next-slot/, 'フォーカス外prefetchを抑止');
 assert.match(gateSource, /prefetch-active-summary-not-successful/, '表示記事失敗後はprefetchしない');

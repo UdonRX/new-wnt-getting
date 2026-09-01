@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { articleIdentity, clampReaderIndex, nextPrefetchIndices, readerFlowSnapshot, canApplyArticleResult } from '../src/features/reader/reader-flow.js';
 import { buildInstantUxRows } from '../src/features/reader/summary-instant-ux.js';
+import { buildRssOnlyAiBody } from '../src/features/reader/reader-summary-accelerator.js';
 
 const rows = Array.from({ length: 30 }, (_, index) => ({
   id: `article-${index + 1}`,
@@ -56,6 +57,22 @@ assert.equal(instantRows.some(row => !String(row?.text || '').trim()), false, '�
 assert.equal(instantRows.some(row => /AI確認中|確認しています/.test(String(row?.text || ''))), false, '待機文を即時カードへ残さない');
 assert.match(instantRows[0].text, /83％/, '短いRSSから具体的数値を即時抽出');
 
+const forcedRssBody = buildRssOnlyAiBody({
+  title: 'RSS限定比較テスト',
+  description: `${'情報'.repeat(190)}この末尾は送信されない`,
+  url: 'https://example.com/full-article',
+  link: 'https://example.com/full-article',
+  preferFullText: true,
+  fast: false
+});
+assert.equal(Array.from(forcedRssBody.description).length, 380, '一時比較ではRSS説明文を最大380文字へ短縮');
+assert.equal(forcedRssBody.description.includes('この末尾は送信されない'), false, '380文字を超えるRSS説明文を送信しない');
+assert.equal(forcedRssBody.url, '', '一時比較では元記事URLを要約APIへ渡さない');
+assert.equal(forcedRssBody.link, '', '一時比較では元記事リンクを要約APIへ渡さない');
+assert.equal(forcedRssBody.preferFullText, false, '一時比較では元記事本文取得を要求しない');
+assert.equal(forcedRssBody.fast, true, '一時比較でも380文字・220トークンの高速Geminiを使う');
+assert.equal(forcedRssBody.rssOnlyExperiment, true, '全記事RSS限定の一時スイッチが有効');
+
 const focusSource = fs.readFileSync(new URL('../src/features/reader/reader-focus.js', import.meta.url), 'utf8');
 assert.equal(focusSource.includes("/api/summary?batch=1&client=reader-focus"), false, 'Reader focusからGemini 10件バッチを除去');
 assert.equal(focusSource.includes('SUMMARY_CHUNK_SIZE'), false, '10件チャンク境界を除去');
@@ -63,6 +80,10 @@ assert.equal(focusSource.includes('pendingBatch'), false, '表示中記事が先
 assert.match(focusSource, /purpose:\s*'active'/, '表示中記事は単発summary経路を使う');
 assert.match(focusSource, /actualCount:\s*1/, '先読みは1記事に制限');
 assert.match(focusSource, /summaryPromises\.has\(key\)/, '先読み済み記事は同じarticleIdのPromiseを再利用する');
+
+const acceleratorSource = fs.readFileSync(new URL('../src/features/reader/reader-summary-accelerator.js', import.meta.url), 'utf8');
+assert.match(acceleratorSource, /FORCE_ALL_ARTICLES_RSS_ONLY = true/, '全記事RSS限定の一時比較スイッチを有効化');
+assert.match(acceleratorSource, /localStorage\.removeItem\(SUMMARY_STORAGE_KEY\)/, '一時比較開始時に旧本文由来の要約キャッシュを破棄');
 
 const instantSource = fs.readFileSync(new URL('../src/features/reader/summary-instant-ux.js', import.meta.url), 'utf8');
 assert.match(instantSource, /INSTANT_RENDER_RETRY_MS/, 'activeカード確定まで即時UXを短時間再試行');
