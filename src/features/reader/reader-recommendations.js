@@ -1,11 +1,12 @@
 const RECOMMENDATION_TIMEOUT_MS = 7000;
+const RECOMMENDATION_API_VERSION = '2';
 
 export async function loadCrossSourceRecommendations(onProgress) {
   onProgress?.(18, 'Google Newsから候補を確認中');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RECOMMENDATION_TIMEOUT_MS);
   try {
-    const response = await fetch('/api/recommendations', {
+    const response = await fetch(`/api/recommendations?v=${RECOMMENDATION_API_VERSION}`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -16,11 +17,23 @@ export async function loadCrossSourceRecommendations(onProgress) {
       const error = new Error(data?.error || `おすすめ取得エラー (${response.status})`);
       error.stage = data?.stage || 'cross-source';
       error.requestId = data?.requestId || '';
+      error.hardFallback = Boolean(data?.fallbackRequired);
       throw error;
     }
     const items = Array.isArray(data?.items) ? data.items : [];
-    if (!items.length) throw new Error('新方式のおすすめ候補が空です');
-    onProgress?.(88, '重要度・話題性・複数媒体を評価済み');
+    if (!items.length) {
+      const error = new Error('新方式のおすすめ候補が空です');
+      error.stage = 'empty-response';
+      error.hardFallback = true;
+      throw error;
+    }
+    globalThis.__PDV2_LAST_RECOMMENDATION_META = {
+      strategy: data?.strategy || 'google-news-trends-gdelt-v2',
+      cached: Boolean(data?.cached),
+      degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [],
+      at: Date.now()
+    };
+    onProgress?.(88, data?.degradedSignals?.length ? 'Google Newsを重要度中心で評価済み' : '重要度・話題性・複数媒体を評価済み');
     return items.map(item => ({
       ...item,
       _readerMode: 'news',
@@ -30,6 +43,7 @@ export async function loadCrossSourceRecommendations(onProgress) {
     if (error?.name === 'AbortError') {
       const timeoutError = new Error('新方式のおすすめ取得がタイムアウトしました');
       timeoutError.stage = 'client-timeout';
+      timeoutError.hardFallback = true;
       throw timeoutError;
     }
     throw error;
