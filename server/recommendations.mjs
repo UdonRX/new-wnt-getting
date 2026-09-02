@@ -1,6 +1,6 @@
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
-const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-v3';
+const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-v4';
 const RECOMMENDATION_TTL_MS = 10 * 60 * 1000;
 const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
@@ -23,6 +23,7 @@ const IMPORTANT_RULES = [
 ];
 const SOFT_NEWS_RE = /芸能|俳優|女優|アイドル|タレント|歌手|ドラマ|映画|アニメ|漫画|結婚|熱愛|不倫|離婚|スポーツ|野球|サッカー|Jリーグ|プロ野球|大谷|ドジャース|試合|勝利|敗戦|ゴール|得点|移籍/i;
 const LOW_VALUE_RE = /占い|ランキング|まとめ|コラム|レビュー|キャンペーン|セール|プレゼント|新商品発売|新メニュー/i;
+const BLOCKED_SOURCE_RE = /^(?:NHK|NHK NEWS|NHKニュース|日本放送協会)(?:\s|$)/i;
 
 function requestId() { return `rec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`; }
 function nowMs() { return Date.now(); }
@@ -76,6 +77,10 @@ export function parseGoogleNews(xml = '') {
       googleRank: index + 1
     };
   }).filter(Boolean);
+}
+
+export function filterBlockedSources(items) {
+  return (Array.isArray(items) ? items : []).filter(item => !BLOCKED_SOURCE_RE.test(String(item?.source || '').trim()));
 }
 
 export function filterRecentGoogleNews(items, { now = nowMs(), windowMs = RECENT_NEWS_WINDOW_MS } = {}) {
@@ -227,12 +232,16 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   const allNews = parseGoogleNews(newsResult.text);
   if (!allNews.length) throw Object.assign(new Error('Google News returned no candidates'), { stage: 'google-news', hardFallback: true });
 
-  const evaluatedAt = nowMs();
-  const news = filterRecentGoogleNews(allNews, { now: evaluatedAt });
+  const allowedNews = filterBlockedSources(allNews);
   stage.googleNewsCandidates = allNews.length;
+  stage.blockedSourceCandidates = allNews.length - allowedNews.length;
+  if (!allowedNews.length) throw Object.assign(new Error('No Google News candidates after blocked-source filtering'), { stage: 'source-filter', hardFallback: true });
+
+  const evaluatedAt = nowMs();
+  const news = filterRecentGoogleNews(allowedNews, { now: evaluatedAt });
   stage.recentWindowHours = RECENT_NEWS_WINDOW_MS / (60 * 60 * 1000);
   stage.recentCandidates = news.length;
-  if (!news.length) throw Object.assign(new Error('No Google News candidates published in the last 12 hours'), { stage: 'freshness', hardFallback: true });
+  if (!news.length) throw Object.assign(new Error('No non-NHK Google News candidates published in the last 12 hours'), { stage: 'freshness', hardFallback: true });
 
   const trendResult = await getTrends({ refresh });
   stage.googleTrendsMs = trendResult.elapsedMs;
@@ -266,7 +275,8 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   if (stage.gdeltDegraded) degradedSignals.push('gdelt');
   const diagnostics = {
     requestId: id, strategy: RECOMMENDATION_STRATEGY, totalMs: Date.now() - started,
-    candidates: allNews.length, recentCandidates: news.length, recentWindowHours: stage.recentWindowHours,
+    candidates: allNews.length, blockedSourceCandidates: stage.blockedSourceCandidates,
+    recentCandidates: news.length, recentWindowHours: stage.recentWindowHours,
     trends: trendResult.rows.length, degradedSignals, ...stage,
     ranking: ranked.slice(0, 20).map(row => ({
       id: row.id, title: row.title, source: row.source, googleRank: row.googleRank,
@@ -306,6 +316,7 @@ export default async function handler(req, res) {
     recommendationCache = { at: nowMs(), payload };
     console.log('[recommendations:success]', {
       requestId: id, items: payload.items.length, candidates: payload.diagnostics.candidates,
+      blockedSourceCandidates: payload.diagnostics.blockedSourceCandidates,
       recentCandidates: payload.diagnostics.recentCandidates, recentWindowHours: payload.diagnostics.recentWindowHours,
       trends: payload.diagnostics.trends, gdeltChecked: payload.diagnostics.gdeltChecked,
       gdeltSucceeded: payload.diagnostics.gdeltSucceeded, degradedSignals: payload.diagnostics.degradedSignals,

@@ -1,5 +1,5 @@
 const RECOMMENDATION_TIMEOUT_MS = 7000;
-const RECOMMENDATION_API_VERSION = '2';
+const RECOMMENDATION_API_VERSION = '3';
 
 export async function loadCrossSourceRecommendations(onProgress) {
   onProgress?.(18, 'Google Newsから候補を確認中');
@@ -28,7 +28,7 @@ export async function loadCrossSourceRecommendations(onProgress) {
       throw error;
     }
     globalThis.__PDV2_LAST_RECOMMENDATION_META = {
-      strategy: data?.strategy || 'google-news-trends-gdelt-v2',
+      strategy: data?.strategy || 'google-news-trends-gdelt-v4',
       cached: Boolean(data?.cached),
       degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [],
       at: Date.now()
