@@ -1,12 +1,11 @@
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
+const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-v3';
 const RECOMMENDATION_TTL_MS = 10 * 60 * 1000;
 const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
 const GDELT_TIMEOUT_MS = 2200;
 const GDELT_CHECK_COUNT = 4;
-const MAX_GOOGLE_NEWS = 20;
-const MAX_RECOMMENDATIONS = 10;
 const RECENT_NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 let recommendationCache = { at: 0, payload: null };
@@ -62,7 +61,7 @@ function cleanGoogleTitle(title = '', source = '') {
 }
 
 export function parseGoogleNews(xml = '') {
-  return itemBlocks(xml).slice(0, MAX_GOOGLE_NEWS).map((block, index) => {
+  return itemBlocks(xml).map((block, index) => {
     const source = stripHtml(xmlValue(block, 'source')) || 'Google News';
     const title = cleanGoogleTitle(xmlValue(block, 'title'), source);
     const link = stripHtml(xmlValue(block, 'link'));
@@ -98,25 +97,32 @@ export function parseGoogleTrends(xml = '') {
 }
 
 function normalize(value = '') { return String(value).toLowerCase().normalize('NFKC').replace(/[\s\p{P}\p{S}]+/gu, ''); }
-function bigrams(value = '') {
-  const text = normalize(value), set = new Set();
+function bigramsNormalized(text = '') {
+  const set = new Set();
   for (let i = 0; i < text.length - 1; i += 1) set.add(text.slice(i, i + 2));
   return set;
 }
-function similarity(a, b) {
-  const aa = bigrams(a), bb = bigrams(b);
-  if (!aa.size || !bb.size) return 0;
+function similaritySets(aa, bb) {
+  if (!aa?.size || !bb?.size) return 0;
   let same = 0;
   for (const token of aa) if (bb.has(token)) same += 1;
   return (2 * same) / (aa.size + bb.size);
 }
-function trendScore(title, trends) {
-  const nTitle = normalize(title);
+function compileTrendIndex(trends) {
+  return (Array.isArray(trends) ? trends : []).map(trend => {
+    const normalized = normalize(trend?.title || '');
+    return { title: trend?.title || '', normalized, grams: bigramsNormalized(normalized) };
+  }).filter(trend => trend.title && trend.normalized);
+}
+function trendScore(title, trendIndex) {
+  const normalizedTitle = normalize(title);
+  const titleGrams = bigramsNormalized(normalizedTitle);
   let best = 0, match = '';
-  for (const trend of Array.isArray(trends) ? trends : []) {
-    const nTrend = normalize(trend.title);
-    if (nTrend.length >= 3 && (nTitle.includes(nTrend) || nTrend.includes(nTitle))) return { score: 22, match: trend.title };
-    const sim = similarity(title, trend.title);
+  for (const trend of trendIndex) {
+    if (trend.normalized.length >= 3 && (normalizedTitle.includes(trend.normalized) || trend.normalized.includes(normalizedTitle))) {
+      return { score: 22, match: trend.title };
+    }
+    const sim = similaritySets(titleGrams, trend.grams);
     const score = sim >= 0.45 ? 16 : sim >= 0.28 ? 9 : 0;
     if (score > best) { best = score; match = trend.title; }
   }
@@ -132,8 +138,9 @@ function importanceScore(item) {
 function topRankScore(rank) { return Math.max(4, 34 - (Math.max(1, Number(rank) || 1) - 1) * 1.55); }
 
 export function preliminaryScore(items, trends) {
+  const trendIndex = compileTrendIndex(trends);
   return (Array.isArray(items) ? items : []).map(item => {
-    const trend = trendScore(item.title, trends);
+    const trend = trendScore(item.title, trendIndex);
     const importance = importanceScore(item);
     const soft = SOFT_NEWS_RE.test(`${item.title || ''} ${item.description || ''}`) && importance.score < 25;
     const score = topRankScore(item.googleRank) + trend.score + importance.score - (soft ? 10 : 0);
@@ -199,20 +206,13 @@ async function checkGdelt(item) {
 }
 
 export function finalizeSelection(rows) {
-  const sorted = [...(Array.isArray(rows) ? rows : [])].sort((a, b) => b.score - a.score || a.googleRank - b.googleRank);
-  const chosen = [];
-  let softCount = 0;
-  for (const row of sorted) {
-    if (row.soft && softCount >= 3) continue;
-    chosen.push(row);
-    if (row.soft) softCount += 1;
-    if (chosen.length >= MAX_RECOMMENDATIONS) break;
-  }
-  return chosen.map(row => ({
-    id: row.id, title: row.title, link: row.link, description: row.description, source: row.source,
-    feedName: row.feedName, pubDate: row.pubDate, publishedTimestamp: row.publishedTimestamp,
-    _readerMode: 'news', _recommendationLabel: '重要・話題ニュース'
-  }));
+  return [...(Array.isArray(rows) ? rows : [])]
+    .sort((a, b) => b.score - a.score || a.googleRank - b.googleRank)
+    .map(row => ({
+      id: row.id, title: row.title, link: row.link, description: row.description, source: row.source,
+      feedName: row.feedName, pubDate: row.pubDate, publishedTimestamp: row.publishedTimestamp,
+      _readerMode: 'news', _recommendationLabel: '重要・話題ニュース'
+    }));
 }
 
 export function requiresLegacyFallback({ googleNewsCount = 0, selectedCount = 0 } = {}) {
@@ -265,10 +265,10 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   if (stage.googleTrendsDegraded) degradedSignals.push('google-trends');
   if (stage.gdeltDegraded) degradedSignals.push('gdelt');
   const diagnostics = {
-    requestId: id, strategy: 'google-news-trends-gdelt-v2', totalMs: Date.now() - started,
+    requestId: id, strategy: RECOMMENDATION_STRATEGY, totalMs: Date.now() - started,
     candidates: allNews.length, recentCandidates: news.length, recentWindowHours: stage.recentWindowHours,
     trends: trendResult.rows.length, degradedSignals, ...stage,
-    ranking: ranked.slice(0, 12).map(row => ({
+    ranking: ranked.slice(0, 20).map(row => ({
       id: row.id, title: row.title, source: row.source, googleRank: row.googleRank,
       ageMinutes: Math.max(0, Math.round((evaluatedAt - Number(row.publishedTimestamp || 0)) / 60000)),
       topScore: Number(topRankScore(row.googleRank).toFixed(1)), trendMatch: row.trendMatch,
@@ -289,13 +289,13 @@ export default async function handler(req, res) {
   const debug = String(req.query?.debug || '') === '1';
   const refresh = String(req.query?.refresh || '') === '1';
   const id = requestId();
-  res.setHeader('X-Recommendation-Strategy', 'google-news-trends-gdelt-v2');
+  res.setHeader('X-Recommendation-Strategy', RECOMMENDATION_STRATEGY);
   res.setHeader('X-Recommendation-Request-Id', id);
 
   if (!debug && !refresh && fresh(recommendationCache, RECOMMENDATION_TTL_MS)) {
     res.setHeader('X-Recommendation-Cache', 'HIT');
     res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=600, stale-while-revalidate=1200');
-    return res.status(200).json({ strategy: 'google-news-trends-gdelt-v2', cached: true, items: recommendationCache.payload.items });
+    return res.status(200).json({ strategy: RECOMMENDATION_STRATEGY, cached: true, items: recommendationCache.payload.items });
   }
 
   res.setHeader('X-Recommendation-Cache', 'MISS');
@@ -312,7 +312,7 @@ export default async function handler(req, res) {
       elapsedMs: payload.diagnostics.totalMs
     });
     return res.status(200).json({
-      strategy: 'google-news-trends-gdelt-v2', cached: false, items: payload.items,
+      strategy: RECOMMENDATION_STRATEGY, cached: false, items: payload.items,
       degradedSignals: payload.diagnostics.degradedSignals,
       ...(debug ? { diagnostics: payload.diagnostics } : {})
     });
@@ -322,7 +322,7 @@ export default async function handler(req, res) {
     console.error('[recommendations:fallback-required]', { requestId: id, stage, name: error?.name, message: error?.message || String(error) });
     return res.status(503).json({
       error: 'Google News recommendation unavailable', fallbackRequired: true,
-      strategy: 'google-news-trends-gdelt-v2', requestId: id, stage,
+      strategy: RECOMMENDATION_STRATEGY, requestId: id, stage,
       ...(debug ? { detail: error?.message || String(error) } : {})
     });
   }
