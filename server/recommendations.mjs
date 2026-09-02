@@ -7,6 +7,7 @@ const GDELT_TIMEOUT_MS = 2200;
 const GDELT_CHECK_COUNT = 4;
 const MAX_GOOGLE_NEWS = 20;
 const MAX_RECOMMENDATIONS = 10;
+const RECENT_NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 let recommendationCache = { at: 0, payload: null };
 let trendsCache = { at: 0, rows: null };
@@ -76,6 +77,16 @@ export function parseGoogleNews(xml = '') {
       googleRank: index + 1
     };
   }).filter(Boolean);
+}
+
+export function filterRecentGoogleNews(items, { now = nowMs(), windowMs = RECENT_NEWS_WINDOW_MS } = {}) {
+  const end = Number(now);
+  const width = Number(windowMs);
+  const start = end - (Number.isFinite(width) && width > 0 ? width : RECENT_NEWS_WINDOW_MS);
+  return (Array.isArray(items) ? items : []).filter(item => {
+    const timestamp = Number(item?.publishedTimestamp || 0);
+    return Number.isFinite(timestamp) && timestamp > 0 && timestamp >= start && timestamp <= end;
+  });
 }
 
 export function parseGoogleTrends(xml = '') {
@@ -205,7 +216,7 @@ export function finalizeSelection(rows) {
 }
 
 export function requiresLegacyFallback({ googleNewsCount = 0, selectedCount = 0 } = {}) {
-  return Number(googleNewsCount) < 5 || Number(selectedCount) < 1;
+  return Number(googleNewsCount) < 1 || Number(selectedCount) < 1;
 }
 
 async function buildRecommendations({ refresh = false, debug = false, id = requestId() } = {}) {
@@ -213,8 +224,15 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   const stage = {};
   const newsResult = await fetchWithTimeout(GOOGLE_NEWS_URL, { timeoutMs: GOOGLE_TIMEOUT_MS, accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' });
   stage.googleNewsMs = newsResult.elapsedMs;
-  const news = parseGoogleNews(newsResult.text);
-  if (news.length < 5) throw Object.assign(new Error(`Google News candidates too few: ${news.length}`), { stage: 'google-news', hardFallback: true });
+  const allNews = parseGoogleNews(newsResult.text);
+  if (!allNews.length) throw Object.assign(new Error('Google News returned no candidates'), { stage: 'google-news', hardFallback: true });
+
+  const evaluatedAt = nowMs();
+  const news = filterRecentGoogleNews(allNews, { now: evaluatedAt });
+  stage.googleNewsCandidates = allNews.length;
+  stage.recentWindowHours = RECENT_NEWS_WINDOW_MS / (60 * 60 * 1000);
+  stage.recentCandidates = news.length;
+  if (!news.length) throw Object.assign(new Error('No Google News candidates published in the last 12 hours'), { stage: 'freshness', hardFallback: true });
 
   const trendResult = await getTrends({ refresh });
   stage.googleTrendsMs = trendResult.elapsedMs;
@@ -240,7 +258,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
 
   const items = finalizeSelection(ranked);
   if (requiresLegacyFallback({ googleNewsCount: news.length, selectedCount: items.length })) {
-    throw Object.assign(new Error('No recommendations after Google News ranking'), { stage: 'ranking', hardFallback: true });
+    throw Object.assign(new Error('No recommendations after recent Google News ranking'), { stage: 'ranking', hardFallback: true });
   }
 
   const degradedSignals = [];
@@ -248,9 +266,11 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   if (stage.gdeltDegraded) degradedSignals.push('gdelt');
   const diagnostics = {
     requestId: id, strategy: 'google-news-trends-gdelt-v2', totalMs: Date.now() - started,
-    candidates: news.length, trends: trendResult.rows.length, degradedSignals, ...stage,
+    candidates: allNews.length, recentCandidates: news.length, recentWindowHours: stage.recentWindowHours,
+    trends: trendResult.rows.length, degradedSignals, ...stage,
     ranking: ranked.slice(0, 12).map(row => ({
       id: row.id, title: row.title, source: row.source, googleRank: row.googleRank,
+      ageMinutes: Math.max(0, Math.round((evaluatedAt - Number(row.publishedTimestamp || 0)) / 60000)),
       topScore: Number(topRankScore(row.googleRank).toFixed(1)), trendMatch: row.trendMatch,
       trendScore: row.trendScore, importance: row.importanceCategory, importanceScore: row.importanceScore,
       gdeltIndependentSources: row.gdeltIndependentSources, gdeltScore: row.gdeltScore || 0,
@@ -286,6 +306,7 @@ export default async function handler(req, res) {
     recommendationCache = { at: nowMs(), payload };
     console.log('[recommendations:success]', {
       requestId: id, items: payload.items.length, candidates: payload.diagnostics.candidates,
+      recentCandidates: payload.diagnostics.recentCandidates, recentWindowHours: payload.diagnostics.recentWindowHours,
       trends: payload.diagnostics.trends, gdeltChecked: payload.diagnostics.gdeltChecked,
       gdeltSucceeded: payload.diagnostics.gdeltSucceeded, degradedSignals: payload.diagnostics.degradedSignals,
       elapsedMs: payload.diagnostics.totalMs
