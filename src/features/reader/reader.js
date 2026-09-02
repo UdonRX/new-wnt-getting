@@ -5,6 +5,7 @@ import { iconSvg } from '../../shared/icons.js';
 import { loadReader, readReaderCache, feedsFor } from './reader-data.js';
 import { chooseTop, heuristicRank, requestAiRank } from './reader-rank.js';
 import { mountFocus } from './reader-focus.js';
+import { loadCrossSourceRecommendations } from './reader-recommendations.js';
 import { shortDate } from '../../shared/time.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
@@ -373,6 +374,17 @@ async function loadModeRecommendations(mode, { tab = technologyTab(), onProgress
 }
 
 async function loadMixedRecommendations(onProgress, { forceSources = false } = {}) {
+  try {
+    return await loadCrossSourceRecommendations(onProgress);
+  } catch (error) {
+    console.warn('[recommendations:fallback]', {
+      stage: error?.stage || 'cross-source',
+      requestId: error?.requestId || '',
+      message: error?.message || String(error)
+    });
+    onProgress?.(18, '新方式に失敗したため登録RSSへ切替中');
+  }
+
   let completed = 0;
   const notify = text => {
     completed += 1;

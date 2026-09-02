@@ -25,6 +25,7 @@
     { "source": "/api/papers-feed", "destination": "/api/research?__route=papers-feed" },
     { "source": "/api/wikipedia", "destination": "/api/research?__route=wikipedia" },
     { "source": "/api/news-feed", "destination": "/api/feeds?__route=news-feed" },
+    { "source": "/api/recommendations", "destination": "/api/feeds?__route=recommendations" },
     { "source": "/api/rss", "destination": "/api/feeds?__route=rss" },
     { "source": "/api/twitch-eventsub", "destination": "/api/feeds?__route=twitch-eventsub" },
     { "source": "/api/twitch-feed", "destination": "/api/feeds?__route=twitch-feed" },
