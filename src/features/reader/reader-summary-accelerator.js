@@ -334,6 +334,16 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_
       return Promise.resolve(disabledPrefetch(parsed));
     }
 
+    // Google NewsのRSSリンクは出版社URLではなくnews.google.comの中間URL。
+    // 通常RSSと同じ「URLを消してRSS本文だけ」の経路へ入れると、短い見出ししか残らず
+    // 全件 unavailable になる。Google Newsだけ既存のURL解決→本文抽出経路へ戻す。
+    // それ以外のRSSは従来の高速経路を維持するため、表示速度には干渉しない。
+    const recoveryKind = sourceRecoveryKind(parsed.body);
+    if (recoveryKind === 'google-news') {
+      readerTrace('summary-google-news-recovery', { articleId: parsed.articleId });
+      return sourceRecoveryAi(input, init, parsed, recoveryKind);
+    }
+
     return rssOnlyAi(input, init, parsed);
   };
 
