@@ -5,6 +5,7 @@ const SUMMARY_PATH = '/api/summary';
 const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2180';
 const SOURCE_RECOVERY_MIGRATION_KEY = 'reader-summary-source-recovery-v2';
 const RSS_ONLY_PRODUCTION_CACHE_RESET_KEY = 'reader-summary-rss-only-production-v1';
+const LEGACY_RESEARCH_SUMMARY_MIGRATION_KEY = 'reader-summary-legacy-research-cards-v1';
 const LABELS = ['結論/事実', '背景/特徴', '影響/展望'];
 const MISSING = [
   'RSSには結論として要約できる追加情報が記載されていません。',
@@ -12,6 +13,8 @@ const MISSING = [
   'RSSには影響・今後の詳細が記載されていません。'
 ];
 const BOILERPLATE_RE = /(?:続きを読む(?:…|\.{3})?|続き(?:はこちら|を読む)|詳細(?:はこちら|を見る)|全文(?:はこちら|を読む)|記事(?:はこちら|を読む)|Read\s*more|More\s*details?)/gi;
+const LEGACY_RESEARCH_LABEL_RE = /^(?:概要|選んだ理由|選定理由|選別理由|生技への応用|対象企業\/組織名|カテゴリ・概要|応用着眼点)$/;
+const LEGACY_RESEARCH_SELECTION_TEXT_RE = /(?:選んだ理由|選定理由|選別理由|(?:だから|ため|ので)選びました|選定しました|選別しました)/;
 
 function clean(value = '', max = 3000) {
   return String(value || '')
@@ -31,6 +34,15 @@ function clean(value = '', max = 3000) {
 function stripBoilerplate(value = '') {
   return clean(String(value || '').replace(BOILERPLATE_RE, ' '), 1800)
     .replace(/[（(]?\s*(?:PR|広告|Sponsored)\s*[）)]?/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripResearchSelectionMetadata(value = '') {
+  const text = clean(value, 1800);
+  if (!/技術リサーチ:\s*Web調査済み/i.test(text)) return text;
+  return text
+    .replace(/\s*[｜|]\s*(?:選別理由|選定理由|選んだ理由)\s*[:：]\s*[^｜|]*/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -161,6 +173,12 @@ function activeArticleId() {
   return String(document.querySelector('.reader-swipe-card.is-active[data-article-id]')?.dataset?.articleId || '');
 }
 
+function readerCardExists(articleId = '') {
+  if (!articleId || typeof document === 'undefined') return false;
+  return Array.from(document.querySelectorAll('.reader-swipe-card[data-article-id]'))
+    .some(card => String(card?.dataset?.articleId || '') === articleId);
+}
+
 function jsonResponse(payload, route) {
   return new Response(JSON.stringify(payload), {
     status: 200,
@@ -196,9 +214,10 @@ export function buildRssOnlyAiBody(sourceBody = {}) {
   // 技術リサーチはRSS内の構造化フィールドをサーバー側で3カードへ整形する。
   // Geminiへは送られないため、各フィールドが380文字で欠けないようRSS記述を保持する。
   const preparedResearch = /技術リサーチ:\s*Web調査済み/i.test(evidence.description);
+  const description = preparedResearch ? stripResearchSelectionMetadata(evidence.description) : evidence.description;
   return {
     ...sourceBody,
-    description: Array.from(evidence.description).slice(0, preparedResearch ? 1800 : 380).join(''),
+    description: Array.from(description).slice(0, preparedResearch ? 1800 : 380).join(''),
     url: '',
     link: '',
     preferFullText: false,
@@ -236,6 +255,14 @@ function sourceRecoveryAi(input, init, parsed, kind) {
   return upstreamFetch(input, { ...init, body: JSON.stringify(body) });
 }
 
+export function isLegacyResearchSummary(summary = {}) {
+  const rows = Array.isArray(summary?.lines) ? summary.lines : [];
+  if (!rows.length) return false;
+  const labels = rows.map(row => clean(row?.label || '', 80));
+  if (labels.some(label => LEGACY_RESEARCH_LABEL_RE.test(label))) return true;
+  return rows.some(row => LEGACY_RESEARCH_SELECTION_TEXT_RE.test(clean(row?.text || '', 260)));
+}
+
 function purgeBadSummaryCacheOnce() {
   try {
     if (localStorage.getItem(SOURCE_RECOVERY_MIGRATION_KEY) === '1') return;
@@ -266,9 +293,27 @@ function purgeSummaryCacheForRssOnlyProductionOnce() {
   } catch {}
 }
 
+function purgeLegacyResearchSummaryCacheOnce() {
+  try {
+    if (localStorage.getItem(LEGACY_RESEARCH_SUMMARY_MIGRATION_KEY) === '1') return;
+    const raw = JSON.parse(localStorage.getItem(SUMMARY_STORAGE_KEY) || '{}');
+    if (raw && typeof raw === 'object') {
+      let changed = false;
+      for (const [key, entry] of Object.entries(raw)) {
+        if (!isLegacyResearchSummary(entry?.value || {})) continue;
+        delete raw[key];
+        changed = true;
+      }
+      if (changed) localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(raw));
+    }
+    localStorage.setItem(LEGACY_RESEARCH_SUMMARY_MIGRATION_KEY, '1');
+  } catch {}
+}
+
 if (typeof window !== 'undefined') {
   purgeBadSummaryCacheOnce();
   purgeSummaryCacheForRssOnlyProductionOnce();
+  purgeLegacyResearchSummaryCacheOnce();
 }
 
 if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_ONLY_SUMMARY_INSTALLED) {
@@ -276,6 +321,13 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_
   globalThis.fetch = function readerRssOnlySummaryFetch(input, init = {}) {
     const parsed = parseSummaryPost(input, init);
     if (!parsed) return upstreamFetch(input, init);
+
+    // Readerに実際に存在するカードのsummaryだけを本番RSS経路へ通す。
+    // 他画面・他機能が同じ /api/summary を使っても横取りしない。
+    if (!readerCardExists(parsed.articleId)) {
+      readerTrace('summary-rss-only-bypass-non-reader', { articleId: parsed.articleId });
+      return upstreamFetch(input, init);
+    }
 
     if (activeArticleId() !== parsed.articleId) {
       readerTrace('summary-prefetch-disabled', { articleId: parsed.articleId, activeArticleId: activeArticleId() });
