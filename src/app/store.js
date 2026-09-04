@@ -1,5 +1,8 @@
 import { load, save } from '../shared/storage.js';
 
+const TWITTER_RSS_BASE = 'https://diygod-x.onrender.com/twitter/list/';
+const LEGACY_TWITTER_RSS_BASE = 'https://rsshub-latest-wekl.onrender.com/twitter/list/';
+
 export const DEFAULTS = {
   weatherLocations: [{ name: '京都府', jmaCode: '260000', lat: 35.0116, lon: 135.7681 }],
   newsFeeds: [
@@ -33,7 +36,7 @@ export const DEFAULTS = {
       home:'#64d2ff', weather:'#4da5ff', news:'#ff9f0a', knowledge:'#30d158', papers:'#8e73ff', reader:'#8e73ff',
       youtube:'#ff453a', twitch:'#9146ff', twitter:'#31a7ff', wikipedia:'#c89b5b', settings:'#8e8e93'
     },
-    twitterRssBase:'https://rsshub-latest-wekl.onrender.com/twitter/list/'
+    twitterRssBase: TWITTER_RSS_BASE
   }
 };
 
@@ -52,7 +55,9 @@ export const state = {
   twitterFeeds: load('twitterFeeds', DEFAULTS.twitterFeeds),
   settings: (() => {
     const saved = load('settings', DEFAULTS.settings) || {};
-    return { ...DEFAULTS.settings, ...saved, colors: { ...DEFAULTS.settings.colors, ...(saved.colors || {}) } };
+    const merged = { ...DEFAULTS.settings, ...saved, colors: { ...DEFAULTS.settings.colors, ...(saved.colors || {}) } };
+    if (merged.twitterRssBase === LEGACY_TWITTER_RSS_BASE) merged.twitterRssBase = TWITTER_RSS_BASE;
+    return merged;
   })()
 };
 
