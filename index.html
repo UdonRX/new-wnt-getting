@@ -35,8 +35,8 @@
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
   <script>
     (()=>{
-      const BUILD='2196xsingle1';
-      const RECOVERY_KEY='pdv2:startup-recovery:2196xsingle1';
+      const BUILD='2196xnorm1';
+      const RECOVERY_KEY='pdv2:startup-recovery:2196xnorm1';
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
@@ -59,6 +59,6 @@
     })();
   </script>
   <!-- v2.19.15: 先読み済みReaderの即時3カード修正をProduction URLへ確実に再配布 -->
-  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2196xsingle1"></script>
+  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2196xnorm1"></script>
 </body>
 </html>
