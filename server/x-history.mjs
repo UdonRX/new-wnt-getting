@@ -7,7 +7,7 @@ const RSS_URL = `https://diygod-x.onrender.com${LIST_PATH}`;
 const HISTORY_KEY = 'rsshub:history:v1:7930682cb6c0217b';
 const HISTORY_MAX = 100;
 const REDIS_TIMEOUT_MS = 3500;
-// twitter.js currently persists warmed XML only below 420 kB. Keep Redis RSS safely inside that budget.
+// Keep reconstructed history responses bounded even though the browser stores normalized posts, not RSS XML.
 const MAX_RSS_BYTES = 400_000;
 
 function first(value) {
@@ -172,6 +172,8 @@ export default async function handler(req, res) {
     return res.status(405).send('Method Not Allowed');
   }
 
+  const historyOnly = String(first(req.query?.historyOnly) || '').trim() === '1';
+
   try {
     const items = await readRedisHistory();
     const { xml, count } = historyRss(items);
@@ -181,6 +183,11 @@ export default async function handler(req, res) {
     if (req.method === 'HEAD') return res.status(200).end();
     return res.status(200).send(xml);
   } catch (error) {
+    if (historyOnly) {
+      console.warn('[x-history] Redis-only read failed', error?.message || String(error));
+      setHistoryHeaders(res, 'redis-unavailable');
+      return res.status(503).json({ ok: false, error: 'X history is temporarily unavailable' });
+    }
     console.warn('[x-history] Redis unavailable; using normal RSS fallback', error?.message || String(error));
     setHistoryHeaders(res, 'rss-fallback');
     return rss(fallbackRequest(req), res);
