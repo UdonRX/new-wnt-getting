@@ -4,6 +4,7 @@ import rss from '../server/rss.mjs';
 import twitchEventsub from '../server/twitch-eventsub.mjs';
 import twitchFeed from '../server/twitch-feed.mjs';
 import weatherRain from '../server/weather-rain.mjs';
+import xHistory, { isXHistoryRequest } from '../server/x-history.mjs';
 
 const handlers = new Map([
   ['news-feed', newsFeed],
@@ -11,12 +12,14 @@ const handlers = new Map([
   ['rss', rss],
   ['twitch-eventsub', twitchEventsub],
   ['twitch-feed', twitchFeed],
-  ['weather-rain', weatherRain]
+  ['weather-rain', weatherRain],
+  ['x-history', xHistory]
 ]);
 
 export default async function handler(req, res) {
   const route = String(req.query?.__route || '').trim();
-  const target = handlers.get(route);
+  // Keep the public X URL unchanged. Only this one fixed RSS source is served from Redis history first.
+  const target = route === 'rss' && isXHistoryRequest(req) ? xHistory : handlers.get(route);
   if (!target) return res.status(404).json({ error: 'Unknown API route', route });
 
   try {
