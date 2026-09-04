@@ -2,7 +2,7 @@ import './runtime-v2195.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2195flow2';
+const BUILD='2196xsingle1';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -13,7 +13,7 @@ const SCREEN={
   weather:{path:'./features/weather/weather.js',exportName:'renderWeather',label:'天気'},
   reader:{path:'./features/reader/reader.js',exportName:'renderReader',label:'読む'},
   media:{path:'./features/media/media.js',exportName:'renderMedia',label:'動画'},
-  twitter:{path:'./features/twitter/twitter.js',exportName:'renderTwitter',label:'SNS'},
+  twitter:{path:'./features/twitter/twitter.js',exportName:'renderTwitter',label:'X'},
   wikipedia:{path:'./features/wikipedia/wikipedia.js',exportName:'renderWikipedia',label:'Wikipedia'},
   settings:{path:'./features/settings/settings.js',exportName:'renderSettings',label:'設定'}
 };
@@ -42,7 +42,7 @@ async function loadRenderer(screen,{force=false}={}){
   if(typeof renderer!=='function')throw new Error(`${config.path} に ${config.exportName} がありません`);
   return {renderer};
 }
-function loadingText(screen){if(screen==='reader')return '読むカードを準備しています…';if(screen==='twitter')return 'SNSカードを準備しています…';return `${SCREEN[screen]?.label||'画面'}を準備しています…`;}
+function loadingText(screen){if(screen==='reader')return '読むカードを準備しています…';if(screen==='twitter')return 'Xカードを準備しています…';return `${SCREEN[screen]?.label||'画面'}を準備しています…`;}
 function renderLoading(screen){if(root)root.innerHTML=`<section class="screen pd-feature-loading"><div class="card pd-feature-loading-card" role="status"><div class="pd-feature-loading-spinner"></div><div class="pd-feature-loading-title">${loadingText(screen)}</div></div></section>`;}
 
 async function clearDashboardRuntime(){
@@ -104,7 +104,7 @@ async function warmWikipediaDaily(){
   return null;
 }
 function startBackgroundJobs(){
-  // Reader候補とTwitter更新はアプリ起動直後から開始する。
+  // Reader候補とX更新はアプリ起動直後から開始する。
   preloadFeature('reader',{warm:true});
   preloadFeature('twitter',{warm:true});
   idle(()=>warmWikipediaDaily(),20);

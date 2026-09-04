@@ -18,4 +18,4 @@ import './features/reader/reader-recommend-cache-fast.js?v=21923latestcache1';
 import './features/reader/reader-list-ux.js?v=21917tabs2';
 // v2.19.17: 横画面操作バーを動画と同じ時計回り90°へ回転する。
 import './features/media/media-landscape-ui.js?v=21917landscape2';
-import './main.js?v=2196media1';
+import './main.js?v=2196xsingle1';

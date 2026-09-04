@@ -1,8 +1,5 @@
 import { load, save } from '../shared/storage.js';
 
-const TWITTER_RSS_BASE = 'https://diygod-x.onrender.com/twitter/list/';
-const LEGACY_TWITTER_RSS_BASE = 'https://rsshub-latest-wekl.onrender.com/twitter/list/';
-
 export const DEFAULTS = {
   weatherLocations: [{ name: '京都府', jmaCode: '260000', lat: 35.0116, lon: 135.7681 }],
   newsFeeds: [
@@ -24,7 +21,6 @@ export const DEFAULTS = {
   paperFeeds: [{ name:'論文', url:'/api/papers-feed' }],
   youtubeChannels: [],
   twitchChannels: [],
-  twitterFeeds: [{ name:'デフォルトリスト', id:'2087706843519111304' }],
   settings: {
     edgeEnabled: true,
     edgeWidth: 1.5,
@@ -35,8 +31,7 @@ export const DEFAULTS = {
     colors: {
       home:'#64d2ff', weather:'#4da5ff', news:'#ff9f0a', knowledge:'#30d158', papers:'#8e73ff', reader:'#8e73ff',
       youtube:'#ff453a', twitch:'#9146ff', twitter:'#31a7ff', wikipedia:'#c89b5b', settings:'#8e8e93'
-    },
-    twitterRssBase: TWITTER_RSS_BASE
+    }
   }
 };
 
@@ -52,12 +47,14 @@ export const state = {
   paperFeeds: load('paperFeeds', DEFAULTS.paperFeeds),
   youtubeChannels: load('youtubeChannels', DEFAULTS.youtubeChannels),
   twitchChannels: load('twitchChannels', DEFAULTS.twitchChannels),
-  twitterFeeds: load('twitterFeeds', DEFAULTS.twitterFeeds),
   settings: (() => {
     const saved = load('settings', DEFAULTS.settings) || {};
-    const merged = { ...DEFAULTS.settings, ...saved, colors: { ...DEFAULTS.settings.colors, ...(saved.colors || {}) } };
-    if (merged.twitterRssBase === LEGACY_TWITTER_RSS_BASE) merged.twitterRssBase = TWITTER_RSS_BASE;
-    return merged;
+    const { twitterRssBase: _legacyTwitterRssBase, ...savedSettings } = saved;
+    return {
+      ...DEFAULTS.settings,
+      ...savedSettings,
+      colors: { ...DEFAULTS.settings.colors, ...(saved.colors || {}) }
+    };
   })()
 };
 

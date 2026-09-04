@@ -106,7 +106,7 @@ export async function renderHome(root, { navigate }) {
     tile('wikipedia', 'Wikipedia', '今日の10本', '王道・考察・雑学を縦書きで', 'wikipedia', navigate, colors.wikipedia || '#c89b5b'),
     tile('youtube', 'YouTube', youtubeNew ? `新着 ${youtubeNew}件` : '新着動画', '動画・Shorts・LIVE', 'media', navigate, colors.youtube, { mediaMode: 'youtube' }),
     tile('twitch', 'Twitch', live ? `${live}件 配信中` : 'アーカイブ', 'LIVE・アーカイブ', 'media', navigate, colors.twitch, { mediaMode: 'twitch' }),
-    tile('twitter', 'SNS', '最新ポスト', 'Twitter / X リスト', 'twitter', navigate, colors.twitter)
+    tile('twitter', 'X', '最新ポスト', 'タイムライン', 'twitter', navigate, colors.twitter)
   );
   hero.append(grid);
   screen.append(hero);

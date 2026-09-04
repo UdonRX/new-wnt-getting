@@ -7,7 +7,7 @@ const NAV = [
   ['weather', '天気', 'weather'],
   ['reader', '読む', 'reader'],
   ['media', '動画', 'media'],
-  ['twitter', 'SNS', 'twitter'],
+  ['twitter', 'X', 'twitter'],
   ['wikipedia', 'Wiki', 'wikipedia']
 ];
 

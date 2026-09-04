@@ -1,25 +1,26 @@
-import { state, update } from '../../app/store.js';
-import { el, openSheet } from '../../shared/dom.js';
-import { topbar, collectionManager, centerScrollItem } from '../../shared/components.js';
+import { el } from '../../shared/dom.js';
+import { topbar } from '../../shared/components.js';
 import { parseFeed } from '../../shared/rss.js';
 import { shortDate } from '../../shared/time.js';
 import { openImageViewer } from './image-viewer.js';
 import { iconSvg } from '../../shared/icons.js';
 
-let selected = Number(localStorage.getItem('pdv2:twitterIndex') || 0);
+const X_FEED = Object.freeze({
+  name: 'X',
+  id: '2087706843519111304',
+  url: 'https://diygod-x.onrender.com/twitter/list/2087706843519111304'
+});
+
 let renderGeneration = 0;
+let warmJob = null;
 
 const AUTO_REFRESH_MS = 15 * 60 * 1000;
 const WARM_PREFIX = 'pdv2:twitterWarm:';
 const MAX_WARM_XML = 420_000;
-const warmJobs = new Map();
-let warmActive = 0;
-const warmWaiters = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function feedUrl(feed) {
-  if (feed.url) return feed.url;
-  return `${state.settings.twitterRssBase}${feed.id}`;
+  return feed.url;
 }
 
 function proxied(url, timeout = 4500) {
@@ -29,7 +30,7 @@ function proxied(url, timeout = 4500) {
 }
 
 function warmKey(feed) {
-  return `${WARM_PREFIX}${feed.id || feed.url || feed.name}`;
+  return `${WARM_PREFIX}${feed.id}`;
 }
 
 function readWarmRecord(feed) {
@@ -40,13 +41,6 @@ function readWarmRecord(feed) {
   } catch {
     return null;
   }
-}
-
-function readWarm(feed) {
-  const cached = readWarmRecord(feed);
-  if (!cached?.xml) return '';
-  if (Date.now() - cached.at >= AUTO_REFRESH_MS) return '';
-  return cached.xml;
 }
 
 function autoRefreshDue(feed) {
@@ -63,21 +57,10 @@ function saveWarm(feed, xml) {
 
 async function fetchXml(feed, { timeout = 4500 } = {}) {
   const response = await fetch(proxied(feedUrl(feed), timeout), { cache: 'no-store' });
-  if (!response.ok) throw new Error(`Twitter RSS取得エラー (${response.status})`);
+  if (!response.ok) throw new Error(`X RSS取得エラー (${response.status})`);
   const xml = await response.text();
-  if (!xml.trim()) throw new Error('Twitter RSSが空です');
+  if (!xml.trim()) throw new Error('X RSSが空です');
   return xml;
-}
-
-async function withWarmSlot(worker) {
-  if (warmActive >= 2) await new Promise(resolve => warmWaiters.push(resolve));
-  warmActive += 1;
-  try {
-    return await worker();
-  } finally {
-    warmActive = Math.max(0, warmActive - 1);
-    warmWaiters.shift()?.();
-  }
 }
 
 async function warmFeedUntilSuccess(feed, { force = false } = {}) {
@@ -88,40 +71,29 @@ async function warmFeedUntilSuccess(feed, { force = false } = {}) {
   while (true) {
     try {
       // Renderのcold start中は1回を長く待たず、5秒probe→5秒待機で起床を確認する。
-      const xml = await withWarmSlot(() => fetchXml(feed, { timeout: 5000 }));
+      const xml = await fetchXml(feed, { timeout: 5000 });
       saveWarm(feed, xml);
       return { feed: feed.name, ok: true };
     } catch (error) {
-      console.warn('[twitter-warm-retry]', feed.name, error?.message || error);
+      console.warn('[x-warm-retry]', error?.message || error);
       await sleep(5000);
     }
   }
 }
 
 function warmJobFor(feed, options = {}) {
-  const key = warmKey(feed);
-  const existing = warmJobs.get(key);
-  if (existing) return existing;
+  if (warmJob) return warmJob;
 
   const job = warmFeedUntilSuccess(feed, options).finally(() => {
-    if (warmJobs.get(key) === job) warmJobs.delete(key);
+    if (warmJob === job) warmJob = null;
   });
-  warmJobs.set(key, job);
+  warmJob = job;
   return job;
 }
 
 export async function warmTwitterFeeds({ force = false } = {}) {
-  const feeds = Array.isArray(state.twitterFeeds)
-    ? state.twitterFeeds.filter(feed => feed?.id || feed?.url)
-    : [];
-  if (!feeds.length) return [];
-
-  const targets = force
-    ? feeds.slice(0, 8)
-    : feeds.slice(0, 8).filter(autoRefreshDue);
-
-  if (!targets.length) return [];
-  return Promise.all(targets.map(feed => warmJobFor(feed, { force })));
+  if (!force && !autoRefreshDue(X_FEED)) return [];
+  return Promise.all([warmJobFor(X_FEED, { force })]);
 }
 
 function attachPullToRefresh(screen, indicator, onRefresh) {
@@ -210,25 +182,6 @@ function attachPullToRefresh(screen, indicator, onRefresh) {
     screen.removeEventListener('touchend', onTouchEnd);
     screen.removeEventListener('touchcancel', reset);
   };
-}
-
-function manage(onDone) {
-  let sheet;
-  sheet = openSheet(collectionManager({
-    items: state.twitterFeeds,
-    fields: [
-      { key: 'name', label: 'タブ名', placeholder: 'リスト名' },
-      { key: 'id', label: 'Twitter/X リストID', placeholder: '2087...' },
-      { key: 'url', label: 'RSS URL（任意）', placeholder: '空ならRSSHubを使用' }
-    ],
-    onSave: draft => {
-      update('twitterFeeds', draft);
-      sheet.close();
-      selected = 0;
-      onDone();
-      warmTwitterFeeds({ force: true }).catch(() => {});
-    }
-  }), { title: 'Twitterリスト編集' });
 }
 
 function isTwitterUrl(url = '') {
@@ -1064,38 +1017,16 @@ function tweetCard(item) {
 
 export async function renderTwitter(root, { navigate, refresh = false }) {
   const generation = ++renderGeneration;
-  if (selected >= state.twitterFeeds.length) selected = 0;
-  const feed = state.twitterFeeds[selected];
+  const feed = X_FEED;
   const screen = el('section', { class: 'screen' });
 
-  screen.append(topbar('SNS', {
-    subtitle: 'Twitter / X リスト',
+  screen.append(topbar('X', {
+    subtitle: 'タイムライン',
     actions: [
-      { label: '＋', title: '追加/編集', onClick: () => manage(() => renderTwitter(root, { navigate, refresh: true })) },
       { label: '↻', title: '更新', onClick: () => renderTwitter(root, { navigate, refresh: true }) },
       { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   }));
-
-  if (!feed) {
-    screen.append(el('div', { class: 'empty', text: 'Twitter/Xリストを追加してください' }));
-    root.replaceChildren(screen);
-    return;
-  }
-
-  const chips = el('div', { class: 'chips twitter-list-chips' });
-  state.twitterFeeds.forEach((item, index) => chips.append(el('button', {
-    class: `chip ${index === selected ? 'active' : ''}`,
-    type: 'button',
-    text: item.name,
-    onclick: () => {
-      localStorage.setItem(`pdv2:twitterScroll:${selected}`, String(window.scrollY));
-      selected = index;
-      localStorage.setItem('pdv2:twitterIndex', String(index));
-      renderTwitter(root, { navigate });
-    }
-  })));
-  screen.append(chips);
 
   const pullIndicator = el('div', { class: 'twitter-pull-refresh', 'aria-hidden': 'true' }, [
     el('span', { class: 'twitter-pull-spinner', text: '↻' }),
@@ -1105,13 +1036,7 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   screen.append(pullIndicator, host);
   root.replaceChildren(screen);
 
-  const active = chips.querySelector('.chip.active');
-  if (active) centerScrollItem(chips, active, { behavior: 'auto' });
-
-  attachPullToRefresh(screen, pullIndicator, () => {
-    localStorage.setItem(`pdv2:twitterScroll:${selected}`, '0');
-    return renderTwitter(root, { navigate, refresh: true });
-  });
+  attachPullToRefresh(screen, pullIndicator, () => renderTwitter(root, { navigate, refresh: true }));
 
   const draw = items => {
     if (generation !== renderGeneration) return;
@@ -1119,10 +1044,6 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     host.replaceChildren(...(cards.length
       ? cards
       : [el('div', { class: 'empty', text: '表示できる投稿がありません' })]));
-    requestAnimationFrame(() => window.scrollTo({
-      top: Number(localStorage.getItem(`pdv2:twitterScroll:${selected}`) || 0),
-      behavior: 'auto'
-    }));
   };
 
   try {
@@ -1138,9 +1059,8 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
       }).catch(() => {});
 
       // 起動時の強制warmが既に走っている場合は、15分キャッシュ判定より優先して完了を画面へ反映する。
-      const activeWarm = warmJobs.get(warmKey(feed));
-      if (activeWarm) {
-        redrawAfterWarm(activeWarm);
+      if (warmJob) {
+        redrawAfterWarm(warmJob);
         return;
       }
 
@@ -1150,7 +1070,7 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     }
 
     host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [
-      el('strong', { text: refresh ? 'SNSを更新しています…' : 'SNSを読み込み中…' }),
+      el('strong', { text: refresh ? 'Xを更新しています…' : 'Xを読み込み中…' }),
       el('span', { text: '取得できない場合は5秒空けて再確認します' })
     ]));
 
