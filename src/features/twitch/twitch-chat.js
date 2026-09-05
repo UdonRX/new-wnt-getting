@@ -33,6 +33,16 @@ function safeLogText(value, max = 220) {
   return String(value || '').replace(/[\r\n]+/g, ' ').slice(0, max);
 }
 
+function normalizeFragments(message) {
+  const raw = Array.isArray(message?.fragments) ? message.fragments : [];
+  return raw.map(fragment => ({
+    type: String(fragment?.type || 'text'),
+    text: String(fragment?.text || ''),
+    emoteId: String(fragment?.emote?.id || ''),
+    emoteFormat: Array.isArray(fragment?.emote?.format) ? fragment.emote.format.map(String) : []
+  })).filter(fragment => fragment.text || fragment.emoteId);
+}
+
 export async function handleTwitchOAuthReturn() {
   const params = new URLSearchParams(location.search);
   const code = params.get('code');
@@ -276,8 +286,10 @@ export function connectTwitchChat({ broadcasterId, onMessage, onStatus }) {
         const messageId = String(item.message_id || data.metadata?.message_id || crypto.randomUUID());
         if (!rememberMessage(messageId)) return;
         const user = String(item.chatter_user_name || item.chatter_user_login || '');
-        console.info(`[TWITCH CHAT] COMMENT id=${messageId} user=${safeLogText(user, 80)}`);
-        onMessage?.({ id: messageId, name: user, text: item.message?.text || '' });
+        const text = String(item.message?.text || '').replace(/[\r\n]+/g, ' ').trim();
+        const fragments = normalizeFragments(item.message);
+        console.info(`[TWITCH CHAT] COMMENT id=${messageId} user=${safeLogText(user, 80)} text=${JSON.stringify(safeLogText(text, 120))} fragments=${fragments.length}`);
+        onMessage?.({ id: messageId, name: user, text, fragments });
         if (!receivedAnyComment) {
           receivedAnyComment = true;
           setStatus('コメント受信確認済み');
