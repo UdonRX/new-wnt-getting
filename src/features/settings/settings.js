@@ -2,7 +2,7 @@ import { state, patchSettings } from '../../app/store.js';
 import { el, showToast } from '../../shared/dom.js';
 import { topbar } from '../../shared/components.js';
 import { exportAll, importAll } from '../../shared/storage.js';
-import { disconnectTwitchChat, hasTwitchChatToken } from '../twitch/twitch-chat.js';
+import { disconnectTwitchChat, getTwitchChatProfile, refreshTwitchChatStatus } from '../twitch/twitch-chat.js';
 
 function toggle(value,onChange){const b=el('button',{class:`toggle ${value?'on':''}`,type:'button','aria-pressed':String(value)});b.onclick=()=>{value=!value;b.classList.toggle('on',value);b.setAttribute('aria-pressed',String(value));onChange(value);};return b;}
 function row(label,control,detail=''){const left=el('div');left.append(el('strong',{text:label}));if(detail)left.append(el('div',{class:'setting-detail',text:detail}));return el('div',{class:'setting-row'},[left,control]);}
@@ -10,6 +10,7 @@ function range(value,min,max,step,onChange){const input=el('input',{type:'range'
 function color(value,onChange){const input=el('input',{type:'color',class:'color-input',value});input.addEventListener('input',()=>onChange(input.value));return input;}
 function downloadSettings(){const blob=new Blob([JSON.stringify(exportAll(),null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`dashboard-v2-settings-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 function importSettings(){const input=document.createElement('input');input.type='file';input.accept='application/json';input.onchange=async()=>{try{const p=JSON.parse(await input.files[0].text());importAll(p);showToast('設定を読み込みました');setTimeout(()=>location.reload(),600);}catch(err){showToast(err.message)}};input.click();}
+function twitchDetail(profile){if(!profile?.login)return 'Twitch再生画面の「Twitch連携」から接続するとLIVEコメントを表示できます。';const name=profile.displayName||profile.login;return `連携中: ${name} (@${profile.login})`;}
 
 export async function renderSettings(root,{navigate}){
   const s=state.settings;const screen=el('section',{class:'screen'});screen.append(topbar('設定',{subtitle:'見た目・データ・連携',actions:[{label:'←',title:'ホーム',onClick:()=>navigate('home')}]}));
@@ -22,6 +23,14 @@ export async function renderSettings(root,{navigate}){
 
   const data=el('div',{class:'card settings-section'});data.append(el('h2',{text:'データ'}));data.append(row('設定を書き出す',el('button',{class:'soft-button',type:'button',text:'エクスポート',onclick:downloadSettings}),'新しいVercel URLへ移すときにも使えます。'));data.append(row('設定を読み込む',el('button',{class:'soft-button',type:'button',text:'インポート',onclick:importSettings})));
   data.append(row('Gemini接続',el('button',{class:'soft-button',type:'button',text:'確認',onclick:async()=>{try{const d=await fetch('/api/rank-items?mode=gemini-check&live=1').then(r=>r.json());showToast(d.message||d.error||'確認完了',3500);}catch{showToast('接続確認に失敗')}}})));
-  data.append(row('Twitchコメント連携',el('button',{class:'soft-button',type:'button',text:hasTwitchChatToken()?'接続解除':'未接続',onclick:()=>{if(hasTwitchChatToken()){disconnectTwitchChat();showToast('Twitch連携を解除しました');location.reload();}else showToast('Twitch再生画面の「Twitch連携」から接続できます');}})));
+
+  let twitchProfile=getTwitchChatProfile();
+  const twitchButton=el('button',{class:'soft-button',type:'button',text:twitchProfile?'連携解除':'未接続'});
+  const twitchRow=row('Twitchコメント連携',twitchButton,twitchDetail(twitchProfile));
+  const updateTwitchRow=profile=>{twitchProfile=profile||null;twitchButton.textContent=twitchProfile?'連携解除':'未接続';const detail=twitchRow.querySelector('.setting-detail');if(detail)detail.textContent=twitchDetail(twitchProfile);};
+  twitchButton.onclick=async()=>{if(!twitchProfile){showToast('Twitch再生画面の「Twitch連携」から接続できます');return;}try{await disconnectTwitchChat();updateTwitchRow(null);showToast('Twitch連携を解除しました');}catch(error){showToast(error?.message||'Twitch連携解除に失敗しました');}};
+  data.append(twitchRow);
+
   screen.append(appearance,behavior,data);root.replaceChildren(screen);
+  refreshTwitchChatStatus().then(result=>{if(root.contains(screen))updateTwitchRow(result?.connected?result.user:null);}).catch(()=>{});
 }

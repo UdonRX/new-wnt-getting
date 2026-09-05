@@ -29,6 +29,7 @@
     { "source": "/api/rss", "destination": "/api/feeds?__route=rss" },
     { "source": "/api/twitch-eventsub", "destination": "/api/feeds?__route=twitch-eventsub" },
     { "source": "/api/twitch-feed", "destination": "/api/feeds?__route=twitch-feed" },
+    { "source": "/api/twitch-oauth", "destination": "/api/feeds?__route=twitch-oauth" },
     { "source": "/api/weather-rain", "destination": "/api/feeds?__route=weather-rain" },
     { "source": "/api/youtube-feed", "destination": "/api/youtube" }
   ],

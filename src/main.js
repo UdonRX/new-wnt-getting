@@ -2,7 +2,7 @@ import './runtime-v2195.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2196xnorm1';
+const BUILD='2196twitch1';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -85,7 +85,6 @@ function preloadFeature(screen,{warm=false}={}){
   const config=SCREEN[screen];if(!config)return;
   loadModule(config.path).then(module=>{
     if(screen==='reader'&&warm){
-      // v2.19.14: 初回「読む」はIndexedDBキャッシュから即おすすめを組み、RSS更新はreader-data側で裏へ回す。
       window.__PDV2_READER_WARM_CACHE_ONLY=true;
       return Promise.resolve(module.warmReaderRecommendations?.()).finally(()=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;});
     }
@@ -104,7 +103,6 @@ async function warmWikipediaDaily(){
   return null;
 }
 function startBackgroundJobs(){
-  // Reader候補とX更新はアプリ起動直後から開始する。
   preloadFeature('reader',{warm:true});
   preloadFeature('twitter',{warm:true});
   idle(()=>warmWikipediaDaily(),20);
@@ -113,12 +111,27 @@ function startBackgroundJobs(){
   idle(()=>preloadFeature('media'),700);
 }
 
+async function resolveTwitchOAuthReturn(){
+  try{
+    const module=await loadModule('./features/twitch/twitch-chat.js');
+    return await module.handleTwitchOAuthReturn?.();
+  }catch(error){
+    console.warn('[twitch-oauth]',error);
+    return null;
+  }
+}
+
 async function boot(){
   if(!root)throw new Error('#app-main が見つかりません');
   applyTheme();
-  loadModule('./features/twitch/twitch-chat.js').then(module=>module.handleTwitchOAuthReturn?.()).catch(error=>console.warn('[twitch-oauth]',error));
+  const twitchOAuth=await resolveTwitchOAuthReturn();
   renderNav(navigate);
-  await navigate('home');
+  if(twitchOAuth?.handled){
+    update('lastMediaMode','twitch');
+    await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});
+  }else{
+    await navigate('home');
+  }
   startBackgroundJobs();
   if('serviceWorker'in navigator)navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});}).catch(error=>console.warn('[sw]',error));
   window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();}catch{}});
