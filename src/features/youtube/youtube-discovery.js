@@ -1,4 +1,5 @@
 import { showToast } from '../../shared/dom.js';
+import { mountYouTubePlayer, cleanupYouTubePlayer } from './youtube-player.js';
 
 const HISTORY_KEY='pdv2:youtubeDiscoveryHistory:v1';
 const LIKES_KEY='pdv2:youtubeDiscoveryLikes:v1';
@@ -7,16 +8,14 @@ const HIDDEN_CHANNELS_KEY='pdv2:youtubeDiscoveryHiddenChannels:v1';
 const POOL_KEY='pdv2:youtubeDiscoveryPool:v1';
 const SEARCH_USAGE_KEY='pdv2:youtubeSearchUsage:v1';
 const CHANNEL_SEARCH_CACHE_KEY='pdv2:youtubeChannelSearchCache:v1';
-const CREATOR_CACHE_KEY='pdv2:youtubeCreatorShortsCache:v1';
 const POOL_TTL=6*60*60*1000;
 const CHANNEL_SEARCH_TTL=24*60*60*1000;
-const CREATOR_TTL=24*60*60*1000;
 const DISCOVERY_DAILY_SOFT_LIMIT=85;
 const SEARCH_TOTAL_SOFT_LIMIT=94;
 const HISTORY_MAX=200;
-let discoveryOverlay=null;
-let discoveryPlayer=null;
-let apiPromise=null;
+const CHANNEL_ID_RE=/^UC[A-Za-z0-9_-]{22}$/;
+let discoverySession=null;
+let discoveryLoading=null;
 
 function readJson(key,fallback){try{const value=JSON.parse(localStorage.getItem(key)||'null');return value??fallback}catch{return fallback}}
 function writeJson(key,value){try{localStorage.setItem(key,JSON.stringify(value))}catch{}}
@@ -26,7 +25,7 @@ function addUsage(kind,count){const current=usage();current[kind]=Number(current
 function allowedDiscoverySearchCount(requested){const current=usage();const byDiscover=Math.max(0,DISCOVERY_DAILY_SOFT_LIMIT-current.discover);const byTotal=Math.max(0,SEARCH_TOTAL_SOFT_LIMIT-current.discover-current.channel);return Math.max(0,Math.min(Number(requested||0),byDiscover,byTotal))}
 function setValues(key){return new Set(readJson(key,[]).map(String))}
 function saveSet(key,set,max=300){writeJson(key,[...set].slice(-max))}
-function historyRows(){return Array.isArray(readJson(HISTORY_KEY,[]))?readJson(HISTORY_KEY,[]):[]}
+function historyRows(){const value=readJson(HISTORY_KEY,[]);return Array.isArray(value)?value:[]}
 function upsertHistory(item,{delta=1,reason='open'}={}){
   const videoId=String(item?.videoId||'');if(!videoId)return;
   const rows=historyRows();const index=rows.findIndex(x=>x.videoId===videoId);const old=index>=0?rows[index]:{};
@@ -36,25 +35,26 @@ function upsertHistory(item,{delta=1,reason='open'}={}){
 export function recordYouTubeOpen(item){if(!item?.videoId||item?.kind==='live')return;upsertHistory(item,{delta:.8,reason:'open'})}
 function historyPayload(){return historyRows().slice(0,80).map(({videoId,at,score})=>({videoId,at,score}))}
 function recentlySeenIds(){return historyRows().slice(0,120).map(x=>x.videoId)}
+function normalizedName(value=''){return String(value||'').trim().toLocaleLowerCase('ja-JP')}
+function hiddenTokens(item={}){const tokens=[];const id=String(item.channelId||'').trim();const name=normalizedName(item.channelName);if(id)tokens.push(id);if(name)tokens.push(`name:${name}`);return tokens}
+function isHidden(item,hidden=setValues(HIDDEN_CHANNELS_KEY)){return hiddenTokens(item).some(token=>hidden.has(token))}
+function isAllowed(item,registeredIds=[]){
+  if(!item?.videoId)return false;
+  if(setValues(DISLIKES_KEY).has(String(item.videoId)))return false;
+  if(isHidden(item))return false;
+  const id=String(item.channelId||'');if(id&&new Set(registeredIds.map(String)).has(id))return false;
+  return true;
+}
 
 function ensureStyles(){
   if(document.getElementById('pdv2-youtube-discovery-styles'))return;
   const style=document.createElement('style');style.id='pdv2-youtube-discovery-styles';style.textContent=`
 .youtube-discovery-fab{position:fixed;z-index:118;right:max(18px,calc(env(safe-area-inset-right) + 14px));bottom:calc(var(--nav-total) + 18px);width:58px;height:58px;min-width:58px;min-height:58px;padding:0;border-radius:50%;border:1px solid color-mix(in srgb,var(--feature-color) 55%,rgba(255,255,255,.12));background:color-mix(in srgb,var(--feature-color) 84%,#11161d);color:#fff;display:grid;place-items:center;box-shadow:0 10px 28px rgba(0,0,0,.34),0 4px 14px color-mix(in srgb,var(--feature-color) 26%,transparent);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);touch-action:manipulation}.youtube-discovery-fab svg{width:27px;height:27px}.youtube-discovery-fab:active{transform:scale(.94)}
 .youtube-channel-manager{display:grid;gap:12px}.youtube-channel-search-box{display:flex;gap:8px}.youtube-channel-search-input{flex:1;min-width:0;min-height:46px;padding:0 13px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--text);font:inherit;outline:none}.youtube-channel-search-input:focus{border-color:var(--feature-color)}.youtube-channel-search-status{min-height:18px;color:var(--muted);font-size:11px}.youtube-channel-search-results,.youtube-channel-registered{display:grid;gap:8px}.youtube-channel-result,.youtube-channel-registered-row{width:100%;display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--text);text-align:left}.youtube-channel-result img{width:42px;height:42px;border-radius:50%;object-fit:cover;background:#111}.youtube-channel-result-copy{min-width:0}.youtube-channel-result-copy strong,.youtube-channel-result-copy small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.youtube-channel-result-copy small{margin-top:3px;color:var(--muted);font-size:10px}.youtube-channel-add,.youtube-channel-remove{min-width:38px;min-height:38px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--text);font-weight:800}.youtube-channel-add.is-added{color:var(--success)}.youtube-channel-manual{padding-top:4px}.youtube-channel-manual summary{color:var(--muted);font-size:11px;cursor:pointer}.youtube-channel-manual-row{display:flex;gap:8px;margin-top:8px}.youtube-channel-manual-row input{flex:1;min-width:0;min-height:42px;padding:0 11px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);color:var(--text)}
-html.youtube-discovery-open,html.youtube-discovery-open body{overflow:hidden!important;overscroll-behavior:none!important}html.youtube-discovery-open .bottom-nav{display:none!important}.youtube-discovery-player{position:fixed;z-index:420;inset:0;width:100vw;height:100dvh;background:#000;color:#fff;overflow:hidden;touch-action:none}.youtube-discovery-stage,.youtube-discovery-embed,.youtube-discovery-embed iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000}.youtube-discovery-gesture{position:absolute;z-index:3;inset:0;touch-action:none;-webkit-user-select:none;user-select:none}.youtube-discovery-shade{position:absolute;z-index:4;inset:0;pointer-events:none;background:linear-gradient(to bottom,rgba(0,0,0,.20),transparent 22%,transparent 58%,rgba(0,0,0,.74))}.youtube-discovery-close{position:absolute;z-index:8;left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));width:42px;height:42px;border:0;border-radius:50%;background:rgba(0,0,0,.52);color:#fff;font-size:19px;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.youtube-discovery-rail{position:absolute;z-index:8;right:max(12px,calc(env(safe-area-inset-right) + 6px));bottom:max(118px,calc(env(safe-area-inset-bottom) + 104px));display:grid;gap:13px}.youtube-discovery-action{width:50px;min-height:50px;padding:5px 2px;border:0;background:transparent;color:#fff;display:grid;place-items:center;gap:2px;text-shadow:0 1px 4px #000}.youtube-discovery-action span:first-child{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.48);font-size:22px;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.youtube-discovery-action small{font-size:9px}.youtube-discovery-action.is-on span:first-child{background:rgba(255,45,85,.78)}.youtube-discovery-action.is-added span:first-child{background:rgba(48,209,88,.72)}.youtube-discovery-meta{position:absolute;z-index:7;left:max(16px,env(safe-area-inset-left));right:82px;bottom:max(22px,calc(env(safe-area-inset-bottom) + 16px));display:grid;gap:6px;text-shadow:0 1px 5px #000}.youtube-discovery-channel{width:max-content;max-width:100%;padding:0;border:0;background:transparent;color:#fff;font:inherit;font-size:13px;font-weight:800;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.youtube-discovery-title{font-size:12px;line-height:1.45;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.youtube-discovery-loading{position:absolute;z-index:10;inset:0;display:grid;place-content:center;gap:12px;text-align:center;background:#000;color:#fff}.youtube-discovery-spinner{width:30px;height:30px;margin:auto;border:2px solid rgba(255,255,255,.22);border-top-color:#fff;border-radius:50%;animation:youtubeDiscoverySpin .75s linear infinite}@keyframes youtubeDiscoverySpin{to{transform:rotate(360deg)}}.youtube-discovery-menu{position:absolute;z-index:12;right:14px;bottom:max(96px,calc(env(safe-area-inset-bottom) + 84px));width:min(78vw,280px);padding:8px;border:1px solid rgba(255,255,255,.14);border-radius:16px;background:rgba(15,17,21,.92);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);display:grid;gap:6px}.youtube-discovery-menu button{min-height:44px;padding:0 12px;border:0;border-radius:11px;background:rgba(255,255,255,.08);color:#fff;text-align:left}.youtube-creator-grid{position:absolute;z-index:20;inset:0;display:flex;flex-direction:column;background:var(--bg,#090b0e);color:var(--text,#fff);touch-action:pan-y}.youtube-creator-grid-head{flex:0 0 auto;min-height:58px;padding:max(8px,env(safe-area-inset-top)) 12px 8px;display:grid;grid-template-columns:42px minmax(0,1fr) 42px;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--bg) 92%,transparent)}.youtube-creator-grid-back{width:40px;height:40px;border:0;border-radius:50%;background:var(--surface-2);color:var(--text);font-size:23px}.youtube-creator-grid-copy{min-width:0;text-align:center}.youtube-creator-grid-copy strong,.youtube-creator-grid-copy small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.youtube-creator-grid-copy small{color:var(--muted);font-size:10px}.youtube-creator-grid-body{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:2px 2px max(10px,env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-auto-rows:min-content;gap:2px;align-content:start}.youtube-creator-tile{position:relative;aspect-ratio:9/16;overflow:hidden;background:#111}.youtube-creator-tile img{width:100%;height:100%;display:block;object-fit:cover}.youtube-creator-tile span{position:absolute;left:4px;right:4px;bottom:4px;color:#fff;font-size:8px;line-height:1.2;text-shadow:0 1px 4px #000;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}.youtube-creator-grid-loading{grid-column:1/-1;min-height:45dvh;display:grid;place-content:center;text-align:center;color:var(--muted)}
+.youtube-discovery-loading-shell{position:fixed;z-index:430;inset:0;display:grid;place-content:center;gap:12px;padding:24px;text-align:center;background:#000;color:#fff}.youtube-discovery-loading-shell .youtube-discovery-spinner{width:30px;height:30px;margin:auto;border:2px solid rgba(255,255,255,.22);border-top-color:#fff;border-radius:50%;animation:youtubeDiscoverySpin .75s linear infinite}@keyframes youtubeDiscoverySpin{to{transform:rotate(360deg)}}.youtube-discovery-loading-close{position:absolute;left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));width:42px;height:42px;border:0;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:19px}
+.youtube-shorts-player .youtube-discovery-rail{position:absolute;z-index:30;right:max(12px,calc(env(safe-area-inset-right) + 6px));bottom:max(118px,calc(env(safe-area-inset-bottom) + 104px));display:grid;gap:13px}.youtube-shorts-player .youtube-discovery-action{width:50px;min-height:50px;padding:5px 2px;border:0;background:transparent;color:#fff;display:grid;place-items:center;gap:2px;text-shadow:0 1px 4px #000}.youtube-shorts-player .youtube-discovery-action span:first-child{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.48);font-size:22px;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.youtube-shorts-player .youtube-discovery-action small{font-size:9px}.youtube-shorts-player .youtube-discovery-action.is-on span:first-child{background:rgba(255,45,85,.78)}.youtube-shorts-player .youtube-discovery-action.is-added span:first-child{background:rgba(48,209,88,.72)}
 `;
   document.head.append(style);
-}
-
-function ensureApi(){
-  if(window.YT?.Player)return Promise.resolve(window.YT);if(apiPromise)return apiPromise;
-  apiPromise=new Promise((resolve,reject)=>{
-    let settled=false;const previous=window.onYouTubeIframeAPIReady;const done=()=>{if(settled||!window.YT?.Player)return;settled=true;resolve(window.YT)};
-    window.onYouTubeIframeAPIReady=()=>{try{previous?.()}catch{}done()};
-    if(!document.querySelector('script[src*="youtube.com/iframe_api"]')){const script=document.createElement('script');script.src='https://www.youtube.com/iframe_api';script.referrerPolicy='strict-origin-when-cross-origin';script.onerror=()=>{if(!settled){settled=true;reject(new Error('YouTube Player APIを読み込めませんでした'))}};document.head.append(script)}
-    const started=Date.now(),timer=setInterval(()=>{if(window.YT?.Player){clearInterval(timer);done()}else if(Date.now()-started>10000){clearInterval(timer);if(!settled){settled=true;reject(new Error('YouTube Player APIがタイムアウトしました'))}}},120);
-  }).catch(error=>{apiPromise=null;throw error});return apiPromise;
 }
 
 export async function searchYouTubeChannels(query){
@@ -64,73 +64,105 @@ export async function searchYouTubeChannels(query){
   addUsage('channel',Number(data.searchCalls||1));cache[key]={at:Date.now(),items:data.items||[]};const entries=Object.entries(cache).sort((a,b)=>Number(b[1]?.at||0)-Number(a[1]?.at||0)).slice(0,40);writeJson(CHANNEL_SEARCH_CACHE_KEY,Object.fromEntries(entries));return data.items||[];
 }
 
-function validPool(){const value=readJson(POOL_KEY,null);if(!value||Date.now()-Number(value.at||0)>POOL_TTL||!Array.isArray(value.items))return null;const disliked=setValues(DISLIKES_KEY),hidden=setValues(HIDDEN_CHANNELS_KEY);const items=value.items.filter(x=>!disliked.has(String(x.videoId))&&!hidden.has(String(x.channelId)));return items.length?{...value,items}:null}
-function savePool(items){writeJson(POOL_KEY,{at:Date.now(),items:(items||[]).slice(0,55)})}
+function validPool(){const value=readJson(POOL_KEY,null);if(!value||Date.now()-Number(value.at||0)>POOL_TTL||!Array.isArray(value.items))return null;const items=value.items.filter(item=>isAllowed(item));return items.length?{...value,items}:null}
+function savePool(items){writeJson(POOL_KEY,{at:Date.now(),items:(items||[]).filter(item=>isAllowed(item)).slice(0,55)})}
 async function requestPool({seedItems=[],registeredChannelIds=[],existingItems=[],refill=false}={}){
   const requested=allowedDiscoverySearchCount(refill?3:5);if(requested<1)throw new Error('今日のYouTube検索の安全上限に近いため、新しい発見候補の検索を停止しています。');
   const seedVideoIds=seedItems.filter(x=>String(x?.kind||'')==='short').map(x=>x.videoId).filter(Boolean).slice(0,50);
-  const hidden=[...setValues(HIDDEN_CHANNELS_KEY)],disliked=[...setValues(DISLIKES_KEY)];const excluded=[...new Set([...recentlySeenIds(),...disliked,...existingItems.map(x=>x.videoId)])].slice(0,180);
+  const hidden=[...setValues(HIDDEN_CHANNELS_KEY)].filter(x=>CHANNEL_ID_RE.test(x));const disliked=[...setValues(DISLIKES_KEY)];const excluded=[...new Set([...recentlySeenIds(),...disliked,...existingItems.map(x=>x.videoId)])].slice(0,180);
   const response=await fetch('/api/youtube-feed?action=discover',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',body:JSON.stringify({action:'discover',searchCount:requested,seedVideoIds,history:historyPayload(),registeredChannelIds,hiddenChannelIds:hidden,excludedVideoIds:excluded})});
-  const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'発見Shortsを取得できませんでした');addUsage('discover',Number(data.searchCalls||requested));return data.items||[];
-}
-async function getCreatorShorts(channelId){
-  const all=readJson(CREATOR_CACHE_KEY,{});const hit=all[channelId];if(hit&&Date.now()-Number(hit.at||0)<CREATOR_TTL)return hit;
-  const response=await fetch(`/api/youtube-feed?action=channel-shorts&channel=${encodeURIComponent(channelId)}`,{cache:'no-store'});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'投稿者のShortsを取得できませんでした');all[channelId]={at:Date.now(),channel:data.channel,items:data.items||[]};const entries=Object.entries(all).sort((a,b)=>Number(b[1]?.at||0)-Number(a[1]?.at||0)).slice(0,30);writeJson(CREATOR_CACHE_KEY,Object.fromEntries(entries));return all[channelId];
+  const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'発見Shortsを取得できませんでした');addUsage('discover',Number(data.searchCalls||requested));return(data.items||[]).filter(item=>isAllowed(item,registeredChannelIds));
 }
 
-function closeDiscovery(){
-  try{discoveryPlayer?.destroy?.()}catch{}discoveryPlayer=null;discoveryOverlay?.remove();discoveryOverlay=null;document.documentElement.classList.remove('youtube-discovery-open','media-player-open');
+function removeLoading(){discoveryLoading?.remove();discoveryLoading=null}
+function finishDiscovery({closePlayer=false,notify=true}={}){
+  const session=discoverySession;discoverySession=null;removeLoading();
+  try{session?.observer?.disconnect?.()}catch{}
+  try{session?.rootObserver?.disconnect?.()}catch{}
+  session?.rail?.remove?.();
+  if(closePlayer&&session)cleanupYouTubePlayer();
+  if(notify&&session&&!session.closedNotified){session.closedNotified=true;session.onClose?.()}
 }
-export function cleanupYouTubeDiscovery(){closeDiscovery()}
-window.addEventListener('pdv2:before-navigate',closeDiscovery);
+export function cleanupYouTubeDiscovery(){finishDiscovery({closePlayer:true,notify:false})}
+window.addEventListener('pdv2:before-navigate',()=>finishDiscovery({closePlayer:false,notify:false}));
 
 export function createDiscoveryButton(onClick){
   ensureStyles();const button=document.createElement('button');button.type='button';button.className='youtube-discovery-fab';button.setAttribute('aria-label','似ているShortsを発見');button.title='発見';button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m15.8 8.2-2.3 5.3-5.3 2.3 2.3-5.3 5.3-2.3Z"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg>';button.onclick=onClick;return button;
 }
 
+function showLoading(onClose){
+  removeLoading();const root=document.getElementById('overlay-root')||document.body;const shell=document.createElement('section');shell.className='youtube-discovery-loading-shell';shell.innerHTML='<div class="youtube-discovery-spinner"></div><strong>好みに近いShortsを探しています…</strong><small>登録済みShortsと視聴傾向から選定中</small>';const close=document.createElement('button');close.type='button';close.className='youtube-discovery-loading-close';close.textContent='✕';close.onclick=()=>{removeLoading();onClose?.()};shell.append(close);root.append(shell);discoveryLoading=shell;return shell;
+}
+function currentVideoId(overlay){const href=overlay?.querySelector('.youtube-shorts-external')?.getAttribute('href')||'';const match=String(href).match(/\/shorts\/([A-Za-z0-9_-]{11})/);return match?.[1]||''}
+function currentIndex(overlay,pool){const id=currentVideoId(overlay);return id?pool.findIndex(x=>String(x.videoId)===id):-1}
+function currentItem(overlay,pool){const index=currentIndex(overlay,pool);return index>=0?pool[index]:null}
+function nextButton(overlay){return[...overlay.querySelectorAll('button.youtube-shorts-action')].find(button=>String(button.textContent||'').includes('次'))||null}
+
 export async function openYouTubeDiscovery({seedItems=[],registeredChannelIds=[],onRegister,onClose}={}){
-  ensureStyles();closeDiscovery();document.documentElement.classList.add('youtube-discovery-open','media-player-open');
-  const root=document.getElementById('overlay-root')||document.body;const overlay=document.createElement('section');overlay.className='youtube-discovery-player';overlay.setAttribute('role','dialog');overlay.setAttribute('aria-modal','true');overlay.setAttribute('aria-label','YouTube Shorts 発見');root.append(overlay);discoveryOverlay=overlay;
-  const loading=document.createElement('div');loading.className='youtube-discovery-loading';loading.innerHTML='<div class="youtube-discovery-spinner"></div><strong>好みに近いShortsを探しています…</strong><small>登録済みShortsと視聴傾向から選定中</small>';overlay.append(loading);
-  const registeredSet=new Set(registeredChannelIds.map(String));
-  const seenSet=new Set(recentlySeenIds());
-  let pool=(validPool()?.items||[]).filter(item=>!registeredSet.has(String(item?.channelId||''))&&!seenSet.has(String(item?.videoId||'')));
-  if(pool.length<3){try{pool=await requestPool({seedItems,registeredChannelIds});savePool(pool)}catch(error){loading.innerHTML=`<strong>発見Shortsを開始できませんでした</strong><small>${String(error?.message||error)}</small>`;const back=document.createElement('button');back.type='button';back.className='youtube-discovery-close';back.textContent='✕';back.onclick=()=>{closeDiscovery();onClose?.()};loading.append(back);return null}}
-  if(!pool.length){loading.innerHTML='<strong>似ているShortsが見つかりませんでした</strong>';return null}
-  loading.remove();
-  let current=0,refilling=false,gridOpen=false,currentStarted=Date.now(),lastCommitted='';
-  const stage=document.createElement('div');stage.className='youtube-discovery-stage';const holder=document.createElement('div');holder.className='youtube-discovery-embed';holder.id=`yt-discovery-${Date.now()}`;stage.append(holder);overlay.append(stage);
-  const shade=document.createElement('div');shade.className='youtube-discovery-shade';overlay.append(shade);
-  const gesture=document.createElement('div');gesture.className='youtube-discovery-gesture';overlay.append(gesture);
-  const playHint=document.createElement('button');playHint.type='button';playHint.setAttribute('aria-label','再生を停止');playHint.textContent='▶';playHint.style.cssText='position:absolute;z-index:6;left:50%;top:50%;width:72px;height:72px;display:grid;place-items:center;padding:0 0 0 5px;border:1px solid rgba(255,255,255,.22);border-radius:50%;background:rgba(0,0,0,.52);color:#fff;font-size:30px;line-height:1;opacity:0;visibility:hidden;pointer-events:none;transform:translate(-50%,-50%) scale(.9);transition:opacity .16s ease,transform .16s ease,visibility .16s;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);text-shadow:0 1px 4px #000';overlay.append(playHint);
-  let playHintVisible=false,pausedByControl=false,actualPlayerState=null,playHintTimer=null;
-  const hidePlayHint=()=>{if(playHintTimer){clearTimeout(playHintTimer);playHintTimer=null}playHintVisible=false;playHint.style.opacity='0';playHint.style.visibility='hidden';playHint.style.pointerEvents='none';playHint.style.transform='translate(-50%,-50%) scale(.9)'};
-  const showPlayHint=()=>{if(playHintTimer)clearTimeout(playHintTimer);playHintVisible=true;playHint.textContent=pausedByControl?'Ⅱ':'▶';playHint.setAttribute('aria-label',pausedByControl?'再生を再開':'再生を停止');playHint.style.opacity='1';playHint.style.visibility='visible';playHint.style.pointerEvents='auto';playHint.style.transform='translate(-50%,-50%) scale(1)';playHintTimer=setTimeout(hidePlayHint,2000)};
-  playHint.onclick=event=>{event.stopPropagation();if(pausedByControl){pausedByControl=false;try{discoveryPlayer?.playVideo?.()}catch{}}else{pausedByControl=true;try{discoveryPlayer?.pauseVideo?.()}catch{}}showPlayHint()};
-  const close=document.createElement('button');close.type='button';close.className='youtube-discovery-close';close.textContent='✕';overlay.append(close);
-  const rail=document.createElement('div');rail.className='youtube-discovery-rail';const like=document.createElement('button'),add=document.createElement('button'),uninterested=document.createElement('button'),hide=document.createElement('button');
-  for(const [button,icon,label,aria] of [[like,'♡','興味あり','興味あり'],[add,'＋','登録','このチャンネルを登録'],[uninterested,'×','興味なし','興味なし'],[hide,'⊘','除外','このチャンネルを発見に出さない']]){button.type='button';button.className='youtube-discovery-action';button.innerHTML=`<span>${icon}</span><small>${label}</small>`;button.setAttribute('aria-label',aria);rail.append(button)}overlay.append(rail);
-  const meta=document.createElement('div');meta.className='youtube-discovery-meta';const channel=document.createElement('button');channel.type='button';channel.className='youtube-discovery-channel';const title=document.createElement('div');title.className='youtube-discovery-title';meta.append(channel,title);overlay.append(meta);
-  const item=()=>pool[current]||{};
-  const registered=()=>new Set(registeredChannelIds.map(String));
-  function updateUi(){const x=item();channel.textContent=`○ ${x.channelName||'YouTube'}`;title.textContent=x.title||'Shorts';like.classList.toggle('is-on',setValues(LIKES_KEY).has(String(x.videoId)));add.classList.toggle('is-added',registered().has(String(x.channelId)));add.querySelector('span').textContent=registered().has(String(x.channelId))?'✓':'＋';currentStarted=Date.now()}
-  function ratio(){try{const duration=Number(discoveryPlayer?.getDuration?.()||0),time=Number(discoveryPlayer?.getCurrentTime?.()||0);return duration>0?Math.max(0,Math.min(1,time/duration)):0}catch{return 0}}
-  function commit(reason){const x=item();if(!x.videoId)return;const key=`${x.videoId}:${reason}`;if(lastCommitted===key)return;lastCommitted=key;const r=reason==='ended'?1:ratio();let delta=0;if(reason==='ended'||r>=.85)delta=2.4;else if(r>=.55)delta=1.2;else if(reason==='skip'&&r<.18)delta=-.8;else if(Date.now()-currentStarted>8000)delta=.45;upsertHistory(x,{delta,reason});}
-  async function maybeRefill(){if(refilling||pool.length-current>10)return;refilling=true;try{const extra=await requestPool({seedItems,registeredChannelIds,existingItems:pool,refill:true});const seen=new Set(pool.map(x=>x.videoId));for(const x of extra)if(!seen.has(x.videoId)){seen.add(x.videoId);pool.push(x)}savePool(pool)}catch(error){console.warn('[youtube discovery refill]',error?.message||error)}finally{refilling=false}}
-  function loadIndex(next,{reason='skip'}={}){if(next<0||next>=pool.length)return false;commit(reason);current=next;lastCommitted='';pausedByControl=false;actualPlayerState=null;hidePlayHint();updateUi();try{discoveryPlayer?.loadVideoById?.({videoId:item().videoId,startSeconds:0});discoveryPlayer?.playVideo?.()}catch{}maybeRefill();return true}
-  function next(reason='skip'){if(current<pool.length-1)return loadIndex(current+1,{reason});maybeRefill();return false}
-  function previous(){return loadIndex(current-1,{reason:'navigate'})}
-  async function openGrid(){if(gridOpen||!item().channelId)return;gridOpen=true;hidePlayHint();try{discoveryPlayer?.pauseVideo?.()}catch{}const x=item(),panel=document.createElement('section');panel.className='youtube-creator-grid';const head=document.createElement('header');head.className='youtube-creator-grid-head';const back=document.createElement('button');back.type='button';back.className='youtube-creator-grid-back';back.textContent='‹';const copy=document.createElement('div');copy.className='youtube-creator-grid-copy';copy.innerHTML=`<strong>${x.channelName||'YouTube'}</strong><small>Shorts</small>`;head.append(back,copy,document.createElement('span'));const body=document.createElement('div');body.className='youtube-creator-grid-body';body.innerHTML='<div class="youtube-creator-grid-loading">Shortsを読み込み中…</div>';panel.append(head,body);overlay.append(panel);
-    const returnToVideo=()=>{panel.remove();gridOpen=false;try{if(pausedByControl)discoveryPlayer?.pauseVideo?.();else discoveryPlayer?.playVideo?.()}catch{}};back.onclick=returnToVideo;let sx=0,sy=0;panel.addEventListener('touchstart',e=>{const t=e.changedTouches?.[0];if(t){sx=t.clientX;sy=t.clientY}},{passive:true});panel.addEventListener('touchend',e=>{const t=e.changedTouches?.[0];if(!t)return;const dx=t.clientX-sx,dy=t.clientY-sy;if(sx<=42&&dx>58&&Math.abs(dx)>Math.abs(dy)*1.15)returnToVideo()},{passive:true});
-    try{const data=await getCreatorShorts(x.channelId);if(!panel.isConnected)return;body.replaceChildren();for(const short of data.items||[]){const tile=document.createElement('div');tile.className='youtube-creator-tile';const img=document.createElement('img');img.src=short.thumbnail||'';img.alt='';img.loading='lazy';const label=document.createElement('span');label.textContent=short.title||'Shorts';tile.append(img,label);body.append(tile)}if(!body.childElementCount)body.innerHTML='<div class="youtube-creator-grid-loading">Shortsが見つかりませんでした</div>'}catch(error){if(panel.isConnected)body.innerHTML=`<div class="youtube-creator-grid-loading">${String(error?.message||error)}</div>`}
+  ensureStyles();finishDiscovery({closePlayer:true,notify:false});showLoading(onClose);
+  const registeredSet=new Set(registeredChannelIds.map(String));const seenSet=new Set(recentlySeenIds());
+  let pool=(validPool()?.items||[]).filter(item=>isAllowed(item,registeredChannelIds)&&!registeredSet.has(String(item.channelId||''))&&!seenSet.has(String(item.videoId||'')));
+  if(pool.length<3){
+    try{pool=await requestPool({seedItems,registeredChannelIds});savePool(pool)}
+    catch(error){if(discoveryLoading){discoveryLoading.innerHTML=`<strong>発見Shortsを開始できませんでした</strong><small>${String(error?.message||error)}</small>`;const close=document.createElement('button');close.type='button';close.className='youtube-discovery-loading-close';close.textContent='✕';close.onclick=()=>{removeLoading();onClose?.()};discoveryLoading.append(close)}return null}
   }
-  close.onclick=()=>{hidePlayHint();commit('close');closeDiscovery();onClose?.()};channel.onclick=openGrid;
-  like.onclick=()=>{const likes=setValues(LIKES_KEY),id=String(item().videoId);if(likes.has(id)){likes.delete(id);upsertHistory(item(),{delta:-2,reason:'unlike'})}else{likes.add(id);upsertHistory(item(),{delta:5,reason:'like'});showToast('興味ありに追加しました')}saveSet(LIKES_KEY,likes)};
-  add.onclick=()=>{const x=item();if(!x.channelId)return;if(registered().has(String(x.channelId))){showToast('登録済みです');return}const ok=onRegister?.(x);if(ok!==false){registeredChannelIds.push(String(x.channelId));updateUi();showToast(`${x.channelName||'チャンネル'}を登録しました`)}};
-  uninterested.onclick=()=>{const dislikes=setValues(DISLIKES_KEY);dislikes.add(String(item().videoId));saveSet(DISLIKES_KEY,dislikes);upsertHistory(item(),{delta:-5,reason:'dislike'});showToast('興味なしを反映しました');next('dislike')};
-  hide.onclick=()=>{const hidden=setValues(HIDDEN_CHANNELS_KEY);hidden.add(String(item().channelId));saveSet(HIDDEN_CHANNELS_KEY,hidden);upsertHistory(item(),{delta:-4,reason:'hide-channel'});const channelId=String(item().channelId);pool=pool.filter((x,i)=>i<=current||String(x.channelId)!==channelId);showToast('このチャンネルを発見から除外します');next('hide-channel')};
-  let sx=0,sy=0;gesture.addEventListener('touchstart',e=>{const t=e.changedTouches?.[0];if(t){sx=t.clientX;sy=t.clientY}},{passive:true});gesture.addEventListener('touchend',e=>{if(gridOpen)return;const t=e.changedTouches?.[0];if(!t)return;const dx=t.clientX-sx,dy=t.clientY-sy,ax=Math.abs(dx),ay=Math.abs(dy);if(ax<18&&ay<18){if(playHintVisible)hidePlayHint();else showPlayHint();return}if(ax>60&&ax>ay*1.15&&dx<0){hidePlayHint();openGrid();return}if(ay>58&&ay>ax*1.15){hidePlayHint();if(dy<0)next('skip');else previous()}},{passive:true});
-  updateUi();
-  try{const YT=await ensureApi();if(!overlay.isConnected)return null;discoveryPlayer=new YT.Player(holder.id,{videoId:item().videoId,playerVars:{autoplay:1,playsinline:1,rel:0,controls:0,cc_load_policy:0,modestbranding:1,origin:location.origin},events:{onReady:event=>{try{event.target.getIframe?.().setAttribute('referrerpolicy','strict-origin-when-cross-origin');event.target.playVideo()}catch{}},onStateChange:event=>{actualPlayerState=event.data;if(event.data===YT.PlayerState.PAUSED&&!pausedByControl&&!gridOpen){setTimeout(()=>{if(!pausedByControl&&!gridOpen&&actualPlayerState===YT.PlayerState.PAUSED)try{discoveryPlayer?.playVideo?.()}catch{}},80)}else if(event.data===YT.PlayerState.PLAYING&&pausedByControl&&!gridOpen){setTimeout(()=>{if(pausedByControl&&!gridOpen&&actualPlayerState===YT.PlayerState.PLAYING)try{discoveryPlayer?.pauseVideo?.()}catch{}},80)}if(event.data===YT.PlayerState.ENDED){commit('ended');next('ended')}},onError:()=>next('error')}})}catch(error){showToast(error?.message||'Shortsプレイヤーを開始できませんでした')}
-  return{close:()=>{hidePlayHint();closeDiscovery();onClose?.()}};
+  pool=pool.filter(item=>isAllowed(item,registeredChannelIds));
+  if(!pool.length){if(discoveryLoading)discoveryLoading.innerHTML='<strong>似ているShortsが見つかりませんでした</strong>';return null}
+  removeLoading();
+
+  const controller=mountYouTubePlayer({queue:pool,index:0,shorts:true});
+  const overlay=document.querySelector('.youtube-shorts-player');
+  if(!controller||!overlay){onClose?.();return null}
+
+  const rail=document.createElement('div');rail.className='youtube-discovery-rail';
+  const like=document.createElement('button'),add=document.createElement('button'),uninterested=document.createElement('button'),hide=document.createElement('button');
+  for(const [button,icon,label,aria] of [[like,'♡','興味あり','興味あり'],[add,'＋','登録','このチャンネルを登録'],[uninterested,'×','興味なし','興味なし'],[hide,'⊘','除外','このチャンネルを発見に出さない']]){button.type='button';button.className='youtube-discovery-action';button.innerHTML=`<span>${icon}</span><small>${label}</small>`;button.setAttribute('aria-label',aria);rail.append(button)}
+  overlay.append(rail);
+
+  const session={overlay,rail,observer:null,rootObserver:null,onClose,closedNotified:false,refilling:false,lastVideoId:'',actionBusy:false};
+  discoverySession=session;
+  const registered=()=>new Set(registeredChannelIds.map(String));
+  const syncButtons=()=>{
+    if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;
+    like.classList.toggle('is-on',setValues(LIKES_KEY).has(String(item.videoId)));
+    const added=registered().has(String(item.channelId||''));add.classList.toggle('is-added',added);add.querySelector('span').textContent=added?'✓':'＋';
+  };
+  const persist=()=>savePool(pool);
+  const purgeFuture=fromIndex=>{
+    for(let i=pool.length-1;i>fromIndex;i--)if(!isAllowed(pool[i],registeredChannelIds))pool.splice(i,1);
+    persist();
+  };
+  const maybeRefill=async(force=false)=>{
+    if(session.refilling||discoverySession!==session)return;
+    const index=currentIndex(overlay,pool);const remaining=index>=0?pool.slice(index+1).filter(item=>isAllowed(item,registeredChannelIds)).length:pool.length;
+    if(!force&&remaining>10)return;session.refilling=true;
+    try{
+      const extra=await requestPool({seedItems,registeredChannelIds,existingItems:pool,refill:true});const seen=new Set(pool.map(x=>String(x.videoId)));
+      for(const item of extra)if(isAllowed(item,registeredChannelIds)&&!seen.has(String(item.videoId))){seen.add(String(item.videoId));pool.push(item)}
+      persist();const next=nextButton(overlay);if(next&&pool.length>(Math.max(0,currentIndex(overlay,pool))+1))next.disabled=false;
+    }catch(error){console.warn('[youtube discovery refill]',error?.message||error)}finally{session.refilling=false}
+  };
+  const goNext=async()=>{
+    let index=currentIndex(overlay,pool);if(index<0)return false;purgeFuture(index);
+    if(index>=pool.length-1){await maybeRefill(true);index=currentIndex(overlay,pool);purgeFuture(index)}
+    const next=nextButton(overlay);if(!next||index<0||index>=pool.length-1)return false;next.disabled=false;next.click();return true;
+  };
+  const onItemChanged=()=>{
+    if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;
+    if(!isAllowed(item,registeredChannelIds)&&!session.actionBusy){queueMicrotask(()=>goNext());return}
+    if(session.lastVideoId!==String(item.videoId)){session.lastVideoId=String(item.videoId);upsertHistory(item,{delta:.8,reason:'open'});maybeRefill()}
+    syncButtons();
+  };
+
+  like.onclick=()=>{const item=currentItem(overlay,pool);if(!item)return;const likes=setValues(LIKES_KEY),id=String(item.videoId);if(likes.has(id)){likes.delete(id);upsertHistory(item,{delta:-2,reason:'unlike'})}else{likes.add(id);upsertHistory(item,{delta:5,reason:'like'});showToast('興味ありに追加しました')}saveSet(LIKES_KEY,likes);syncButtons()};
+  add.onclick=()=>{const item=currentItem(overlay,pool);if(!item?.channelId)return;if(registered().has(String(item.channelId))){showToast('登録済みです');return}const ok=onRegister?.(item);if(ok!==false){registeredChannelIds.push(String(item.channelId));const index=currentIndex(overlay,pool);purgeFuture(index);syncButtons();showToast(`${item.channelName||'チャンネル'}を登録しました`)}};
+  uninterested.onclick=async()=>{if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const dislikes=setValues(DISLIKES_KEY);dislikes.add(String(item.videoId));saveSet(DISLIKES_KEY,dislikes);upsertHistory(item,{delta:-5,reason:'dislike'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('興味なしを反映しました');await goNext()}finally{session.actionBusy=false}};
+  hide.onclick=async()=>{if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const hidden=setValues(HIDDEN_CHANNELS_KEY);for(const token of hiddenTokens(item))hidden.add(token);saveSet(HIDDEN_CHANNELS_KEY,hidden);upsertHistory(item,{delta:-5,reason:'hide-channel'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('このチャンネルを発見から除外しました');await goNext()}finally{session.actionBusy=false}};
+
+  const external=overlay.querySelector('.youtube-shorts-external');
+  session.observer=new MutationObserver(onItemChanged);if(external)session.observer.observe(external,{attributes:true,attributeFilter:['href']});
+  const close=overlay.querySelector('.youtube-shorts-close');close?.addEventListener('click',()=>finishDiscovery({closePlayer:false,notify:true}),{once:true});
+  const parent=overlay.parentNode;session.rootObserver=new MutationObserver(()=>{if(discoverySession===session&&!overlay.isConnected)finishDiscovery({closePlayer:false,notify:true})});if(parent)session.rootObserver.observe(parent,{childList:true});
+  onItemChanged();
+  return{close:()=>{controller.close?.();finishDiscovery({closePlayer:false,notify:true})}};
 }
