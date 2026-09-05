@@ -16,7 +16,8 @@ const HISTORY_MAX=200;
 const CHANNEL_ID_RE=/^UC[A-Za-z0-9_-]{22}$/;
 let discoverySession=null;
 let discoveryLoading=null;
-let shortsInterestObserver=null;
+let pendingShortOverlayObserver=null;
+let pendingShortItem=null;
 const shortsInterestStates=new WeakMap();
 
 function readJson(key,fallback){try{const value=JSON.parse(localStorage.getItem(key)||'null');return value??fallback}catch{return fallback}}
@@ -34,7 +35,6 @@ function upsertHistory(item,{delta=1,reason='open'}={}){
   const next={videoId,channelId:String(item?.channelId||old.channelId||''),kind:String(item?.kind||old.kind||''),at:Date.now(),views:Number(old.views||0)+(reason==='open'?1:0),score:Math.max(-6,Math.min(8,Number(old.score||0)+Number(delta||0)))};
   if(index>=0)rows.splice(index,1);rows.unshift(next);writeJson(HISTORY_KEY,rows.slice(0,HISTORY_MAX));
 }
-export function recordYouTubeOpen(item){if(!item?.videoId||item?.kind==='live')return;upsertHistory(item,{delta:.8,reason:'open'})}
 function historyPayload(){return historyRows().slice(0,80).map(({videoId,at,score})=>({videoId,at,score}))}
 function recentlySeenIds(){return historyRows().slice(0,120).map(x=>x.videoId)}
 function normalizedName(value=''){return String(value||'').trim().toLocaleLowerCase('ja-JP')}
@@ -80,15 +80,26 @@ function ensureShortsInterestControl(overlay,getItem){
   overlay.querySelector('.youtube-shorts-close')?.addEventListener('click',()=>{try{state.observer?.disconnect?.()}catch{}},{once:true});
   shortsInterestStates.set(overlay,state);state.sync();return state;
 }
-function installShortsInterestObserver(){
-  const start=()=>{
-    if(shortsInterestObserver||!document.body)return;
-    shortsInterestObserver=new MutationObserver(mutations=>{for(const mutation of mutations)for(const node of mutation.addedNodes||[]){if(!(node instanceof Element))continue;if(node.matches?.('.youtube-shorts-player'))ensureShortsInterestControl(node);node.querySelectorAll?.('.youtube-shorts-player').forEach(overlay=>ensureShortsInterestControl(overlay))}});
-    shortsInterestObserver.observe(document.body,{childList:true,subtree:true});document.querySelectorAll('.youtube-shorts-player').forEach(overlay=>ensureShortsInterestControl(overlay));
+function armRegisteredShortInterest(item){
+  pendingShortItem=item||null;
+  try{pendingShortOverlayObserver?.disconnect?.()}catch{}
+  pendingShortOverlayObserver=null;
+  const attach=overlay=>{
+    if(!overlay)return false;
+    const first=pendingShortItem;pendingShortItem=null;
+    ensureShortsInterestControl(overlay,()=>{const videoId=currentVideoId(overlay);if(!videoId)return null;if(first&&String(first.videoId)===videoId)return first;return{videoId,kind:'short'}});
+    try{pendingShortOverlayObserver?.disconnect?.()}catch{}pendingShortOverlayObserver=null;return true;
   };
-  if(document.body)start();else window.addEventListener('DOMContentLoaded',start,{once:true});
+  if(document.querySelector('.youtube-shorts-player')&&attach(document.querySelector('.youtube-shorts-player')))return;
+  if(!document.body)return;
+  pendingShortOverlayObserver=new MutationObserver(mutations=>{for(const mutation of mutations)for(const node of mutation.addedNodes||[]){if(!(node instanceof Element))continue;const overlay=node.matches?.('.youtube-shorts-player')?node:node.querySelector?.('.youtube-shorts-player');if(overlay&&attach(overlay))return}});
+  pendingShortOverlayObserver.observe(document.body,{childList:true,subtree:true});
 }
-installShortsInterestObserver();
+export function recordYouTubeOpen(item){
+  if(!item?.videoId||item?.kind==='live')return;
+  upsertHistory(item,{delta:.8,reason:'open'});
+  if(item.kind==='short')armRegisteredShortInterest(item);
+}
 
 export async function searchYouTubeChannels(query){
   ensureStyles();const q=String(query||'').trim();if(q.length<2)return[];
@@ -122,7 +133,6 @@ window.addEventListener('pdv2:before-navigate',()=>finishDiscovery({closePlayer:
 export function createDiscoveryButton(onClick){
   ensureStyles();const button=document.createElement('button');button.type='button';button.className='youtube-discovery-fab';button.setAttribute('aria-label','似ているShortsを発見');button.title='発見';button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m15.8 8.2-2.3 5.3-5.3 2.3 2.3-5.3 5.3-2.3Z"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg>';button.onclick=onClick;return button;
 }
-
 function showLoading(onClose){
   removeLoading();const root=document.getElementById('overlay-root')||document.body;const shell=document.createElement('section');shell.className='youtube-discovery-loading-shell';shell.innerHTML='<div class="youtube-discovery-spinner"></div><strong>好みに近いShortsを探しています…</strong><small>登録済みShortsと視聴傾向から選定中</small>';const close=document.createElement('button');close.type='button';close.className='youtube-discovery-loading-close';close.textContent='✕';close.onclick=()=>{removeLoading();onClose?.()};shell.append(close);root.append(shell);discoveryLoading=shell;return shell;
 }
@@ -142,57 +152,34 @@ export async function openYouTubeDiscovery({seedItems=[],registeredChannelIds=[]
   if(!pool.length){if(discoveryLoading)discoveryLoading.innerHTML='<strong>似ているShortsが見つかりませんでした</strong>';return null}
   removeLoading();
 
+  // 発見Shortsも登録済みShortsも、同じ完成済みShorts内部プレーヤーを使用する。
   const controller=mountYouTubePlayer({queue:pool,index:0,shorts:true});
   const overlay=document.querySelector('.youtube-shorts-player');
   if(!controller||!overlay){onClose?.();return null}
-
   const interest=ensureShortsInterestControl(overlay,()=>currentItem(overlay,pool));
-  const rail=interest?.rail;
-  if(!rail){onClose?.();return null}
+  const rail=interest?.rail;if(!rail){onClose?.();return null}
   const add=document.createElement('button'),uninterested=document.createElement('button'),hide=document.createElement('button');
   for(const [button,icon,label,aria] of [[add,'＋','登録','このチャンネルを登録'],[uninterested,'×','興味なし','興味なし'],[hide,'⊘','除外','このチャンネルを発見に出さない']]){button.type='button';button.className='youtube-discovery-action';button.innerHTML=`<span>${icon}</span><small>${label}</small>`;button.setAttribute('aria-label',aria);rail.append(button)}
 
   const session={overlay,extraButtons:[add,uninterested,hide],observer:null,rootObserver:null,onClose,closedNotified:false,refilling:false,lastVideoId:'',actionBusy:false};
   discoverySession=session;
   const registered=()=>new Set(registeredChannelIds.map(String));
-  const syncButtons=()=>{
-    if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;
-    interest.sync();
-    const added=registered().has(String(item.channelId||''));add.classList.toggle('is-added',added);add.querySelector('span').textContent=added?'✓':'＋';
-  };
+  const syncButtons=()=>{if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;interest.sync();const added=registered().has(String(item.channelId||''));add.classList.toggle('is-added',added);add.querySelector('span').textContent=added?'✓':'＋'};
   const persist=()=>savePool(pool);
-  const purgeFuture=fromIndex=>{
-    for(let i=pool.length-1;i>fromIndex;i--)if(!isAllowed(pool[i],registeredChannelIds))pool.splice(i,1);
-    persist();
-  };
+  const purgeFuture=fromIndex=>{for(let i=pool.length-1;i>fromIndex;i--)if(!isAllowed(pool[i],registeredChannelIds))pool.splice(i,1);persist()};
   const maybeRefill=async(force=false)=>{
     if(session.refilling||discoverySession!==session)return;
-    const index=currentIndex(overlay,pool);const remaining=index>=0?pool.slice(index+1).filter(item=>isAllowed(item,registeredChannelIds)).length:pool.length;
-    if(!force&&remaining>10)return;session.refilling=true;
-    try{
-      const extra=await requestPool({seedItems,registeredChannelIds,existingItems:pool,refill:true});const seen=new Set(pool.map(x=>String(x.videoId)));
-      for(const item of extra)if(isAllowed(item,registeredChannelIds)&&!seen.has(String(item.videoId))){seen.add(String(item.videoId));pool.push(item)}
-      persist();const next=nextButton(overlay);if(next&&pool.length>(Math.max(0,currentIndex(overlay,pool))+1))next.disabled=false;
-    }catch(error){console.warn('[youtube discovery refill]',error?.message||error)}finally{session.refilling=false}
+    const index=currentIndex(overlay,pool);const remaining=index>=0?pool.slice(index+1).filter(item=>isAllowed(item,registeredChannelIds)).length:pool.length;if(!force&&remaining>10)return;session.refilling=true;
+    try{const extra=await requestPool({seedItems,registeredChannelIds,existingItems:pool,refill:true});const seen=new Set(pool.map(x=>String(x.videoId)));for(const item of extra)if(isAllowed(item,registeredChannelIds)&&!seen.has(String(item.videoId))){seen.add(String(item.videoId));pool.push(item)}persist();const next=nextButton(overlay);if(next&&pool.length>(Math.max(0,currentIndex(overlay,pool))+1))next.disabled=false}catch(error){console.warn('[youtube discovery refill]',error?.message||error)}finally{session.refilling=false}
   };
-  const goNext=async()=>{
-    let index=currentIndex(overlay,pool);if(index<0)return false;purgeFuture(index);
-    if(index>=pool.length-1){await maybeRefill(true);index=currentIndex(overlay,pool);purgeFuture(index)}
-    const next=nextButton(overlay);if(!next||index<0||index>=pool.length-1)return false;next.disabled=false;next.click();return true;
-  };
-  const onItemChanged=()=>{
-    if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;
-    if(!isAllowed(item,registeredChannelIds)&&!session.actionBusy){queueMicrotask(()=>goNext());return}
-    if(session.lastVideoId!==String(item.videoId)){session.lastVideoId=String(item.videoId);upsertHistory(item,{delta:.8,reason:'open'});maybeRefill()}
-    syncButtons();
-  };
+  const goNext=async()=>{let index=currentIndex(overlay,pool);if(index<0)return false;purgeFuture(index);if(index>=pool.length-1){await maybeRefill(true);index=currentIndex(overlay,pool);purgeFuture(index)}const next=nextButton(overlay);if(!next||index<0||index>=pool.length-1)return false;next.disabled=false;next.click();return true};
+  const onItemChanged=()=>{if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;if(!isAllowed(item,registeredChannelIds)&&!session.actionBusy){queueMicrotask(()=>goNext());return}if(session.lastVideoId!==String(item.videoId)){session.lastVideoId=String(item.videoId);upsertHistory(item,{delta:.8,reason:'open'});maybeRefill()}syncButtons()};
 
   add.onclick=()=>{const item=currentItem(overlay,pool);if(!item?.channelId)return;if(registered().has(String(item.channelId))){showToast('登録済みです');return}const ok=onRegister?.(item);if(ok!==false){registeredChannelIds.push(String(item.channelId));const index=currentIndex(overlay,pool);purgeFuture(index);syncButtons();showToast(`${item.channelName||'チャンネル'}を登録しました`)}};
   uninterested.onclick=async()=>{if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const dislikes=setValues(DISLIKES_KEY);dislikes.add(String(item.videoId));saveSet(DISLIKES_KEY,dislikes);upsertHistory(item,{delta:-5,reason:'dislike'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('興味なしを反映しました');await goNext()}finally{session.actionBusy=false}};
   hide.onclick=async()=>{if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const hidden=setValues(HIDDEN_CHANNELS_KEY);for(const token of hiddenTokens(item))hidden.add(token);saveSet(HIDDEN_CHANNELS_KEY,hidden);upsertHistory(item,{delta:-5,reason:'hide-channel'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('このチャンネルを発見から除外しました');await goNext()}finally{session.actionBusy=false}};
 
-  const external=overlay.querySelector('.youtube-shorts-external');
-  session.observer=new MutationObserver(onItemChanged);if(external)session.observer.observe(external,{attributes:true,attributeFilter:['href']});
+  const external=overlay.querySelector('.youtube-shorts-external');session.observer=new MutationObserver(onItemChanged);if(external)session.observer.observe(external,{attributes:true,attributeFilter:['href']});
   const close=overlay.querySelector('.youtube-shorts-close');close?.addEventListener('click',()=>finishDiscovery({closePlayer:false,notify:true}),{once:true});
   const parent=overlay.parentNode;session.rootObserver=new MutationObserver(()=>{if(discoverySession===session&&!overlay.isConnected)finishDiscovery({closePlayer:false,notify:true})});if(parent)session.rootObserver.observe(parent,{childList:true});
   onItemChanged();
