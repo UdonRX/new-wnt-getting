@@ -117,16 +117,44 @@ function startLandscapeViewportWatch(panel) {
   };
 }
 
+function syncCommentOverlayOrientation(panel, enabled) {
+  const lane = panel?.querySelector('.twitch-comment-overlay');
+  if (!lane) return;
+  const names = ['position','inset','left','top','width','height','min-width','min-height','transform','-webkit-transform','transform-origin','-webkit-transform-origin','z-index','overflow','pointer-events'];
+  if (!enabled) {
+    names.forEach(name => lane.style.removeProperty(name));
+    prepareCommentOverlay(lane);
+    return;
+  }
+  lane.style.setProperty('position', 'absolute', 'important');
+  lane.style.setProperty('inset', '0', 'important');
+  lane.style.setProperty('left', '0', 'important');
+  lane.style.setProperty('top', '0', 'important');
+  lane.style.setProperty('width', '100%', 'important');
+  lane.style.setProperty('height', '100%', 'important');
+  lane.style.setProperty('min-width', '0', 'important');
+  lane.style.setProperty('min-height', '0', 'important');
+  lane.style.setProperty('transform', 'none', 'important');
+  lane.style.setProperty('-webkit-transform', 'none', 'important');
+  lane.style.setProperty('transform-origin', 'center center', 'important');
+  lane.style.setProperty('-webkit-transform-origin', 'center center', 'important');
+  lane.style.setProperty('z-index', '364', 'important');
+  lane.style.setProperty('overflow', 'hidden', 'important');
+  lane.style.setProperty('pointer-events', 'none', 'important');
+}
+
 function setLandscape(panel, on) {
   if (!panel) return;
   if (landscapePanel && landscapePanel !== panel) {
     landscapePanel.classList.remove('youtube-css-landscape', 'twitch-css-landscape', 'pdv2-landscape-ui-visible');
+    syncCommentOverlayOrientation(landscapePanel, false);
     clearLandscapeViewport(landscapePanel);
     stopLandscapeViewportWatch();
   }
   const enabled = Boolean(on);
   panel.classList.remove('twitch-css-landscape');
   panel.classList.toggle('youtube-css-landscape', enabled);
+  syncCommentOverlayOrientation(panel, enabled);
   landscapePanel = enabled ? panel : null;
   document.documentElement.classList.toggle('media-player-open', enabled);
   document.documentElement.classList.toggle('youtube-landscape-open', enabled);
@@ -234,8 +262,8 @@ function drainComments(lane, scheduler) {
 
   requestAnimationFrame(() => {
     if (!comment.isConnected) return;
-    const width = Math.max(24, comment.getBoundingClientRect().width);
-    const hostWidth = Math.max(240, lane.getBoundingClientRect().width);
+    const width = Math.max(24, Number(comment.scrollWidth || comment.offsetWidth || 0));
+    const hostWidth = Math.max(240, Number(lane.clientWidth || lane.offsetWidth || 0));
     const speed = 88;
     const startX = hostWidth + 18;
     const endX = -(width + 24);
