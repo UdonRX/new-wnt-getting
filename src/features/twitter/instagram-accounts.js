@@ -38,6 +38,7 @@ export function instagramProfileUrl(username) {
 }
 
 export function openInstagramAccountManager({ onChanged } = {}) {
+  let dirty = false;
   const content = el('div', { style: 'display:grid;gap:12px;padding-bottom:8px;' });
   const help = el('div', {
     class: 'setting-detail',
@@ -99,9 +100,9 @@ export function openInstagramAccountManager({ onChanged } = {}) {
       });
       remove.addEventListener('click', () => {
         storeInstagramAccounts(instagramAccounts().filter(value => value !== username));
+        dirty = true;
         message.textContent = `@${username} を削除しました`;
         redraw();
-        onChanged?.();
       });
       row.append(accountLink, remove);
       list.append(row);
@@ -115,10 +116,11 @@ export function openInstagramAccountManager({ onChanged } = {}) {
       const accounts = instagramAccounts();
       if (accounts.includes(username)) throw new Error('そのアカウントは登録済みです。');
       storeInstagramAccounts([...accounts, username]);
+      dirty = true;
       input.value = '';
+      try { input.blur(); } catch {}
       message.textContent = `@${username} を追加しました`;
       redraw();
-      onChanged?.();
     } catch (error) {
       message.textContent = error?.message || '追加できませんでした。';
     }
@@ -131,7 +133,16 @@ export function openInstagramAccountManager({ onChanged } = {}) {
 
   content.append(help, fieldRow, message, list);
   redraw();
-  const sheet = openSheet(content, { title: 'Instagramアカウント' });
-  requestAnimationFrame(() => input.focus({ preventScroll: true }));
+  const sheet = openSheet(content, {
+    title: 'Instagramアカウント',
+    onClose: () => {
+      if (!dirty) return;
+      requestAnimationFrame(() => requestAnimationFrame(() => onChanged?.()));
+    }
+  });
+  // bottom nav はz-index:300。入力キーボードでVisualViewportが縮んでも
+  // ナビがシート上へ持ち上がって見えないよう、この管理シートだけ前面に置く。
+  sheet.backdrop.style.zIndex = '340';
+  sheet.backdrop.dataset.instagramAccountManager = '1';
   return sheet;
 }

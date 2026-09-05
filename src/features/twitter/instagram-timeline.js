@@ -6,6 +6,8 @@ import { openImageViewer } from './image-viewer.js';
 import { instagramAccounts, instagramProfileUrl, openInstagramAccountManager } from './instagram-accounts.js';
 import { makeInstagramVideoLauncher } from './instagram-video.js';
 
+const INSTAGRAM_POST_LIMIT = 12;
+
 function openExternal(url) {
   const target = String(url || '').trim();
   if (!target) return;
@@ -95,6 +97,36 @@ function mediaGallery(item) {
   return wrap;
 }
 
+function makeAccountAvatar(account, username, profileUrl) {
+  const avatarLink = el('a', {
+    href: profileUrl,
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    'aria-label': `@${username}のInstagramプロフィールを開く`,
+    style: 'width:42px;height:42px;display:grid;place-items:center;border-radius:50%;border:1px solid var(--line);background:var(--surface-2);color:var(--text-strong);text-decoration:none;overflow:hidden;'
+  });
+  const fallback = () => {
+    avatarLink.replaceChildren();
+    avatarLink.innerHTML = iconSvg('instagram', { size: 22, strokeWidth: 1.9 });
+  };
+  const avatarUrl = String(account?.avatarUrl || '').trim();
+  if (!avatarUrl) {
+    fallback();
+    return avatarLink;
+  }
+  const image = el('img', {
+    src: avatarUrl,
+    alt: `@${username}`,
+    loading: 'lazy',
+    decoding: 'async',
+    referrerpolicy: 'no-referrer',
+    style: 'display:block;width:100%;height:100%;object-fit:cover;'
+  });
+  image.addEventListener('error', fallback, { once: true });
+  avatarLink.append(image);
+  return avatarLink;
+}
+
 function instagramCard(item) {
   const username = String(item?.account?.username || '').trim();
   const profileUrl = item?.account?.profileUrl || instagramProfileUrl(username);
@@ -109,14 +141,7 @@ function instagramCard(item) {
     style: 'margin:0;padding:12px 14px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none;display:grid;grid-template-columns:42px minmax(0,1fr);column-gap:10px;align-items:start;cursor:pointer;'
   });
 
-  const avatarLink = el('a', {
-    href: profileUrl,
-    target: '_blank',
-    rel: 'noopener noreferrer',
-    'aria-label': `@${username}のInstagramプロフィールを開く`,
-    style: 'width:42px;height:42px;display:grid;place-items:center;border-radius:50%;border:1px solid var(--line);background:var(--surface-2);color:var(--text-strong);text-decoration:none;'
-  });
-  avatarLink.innerHTML = iconSvg('instagram', { size: 22, strokeWidth: 1.9 });
+  const avatarLink = makeAccountAvatar(item?.account, username, profileUrl);
 
   const content = el('div', { style: 'min-width:0;' });
   const meta = el('div', {
@@ -165,14 +190,6 @@ function instagramCard(item) {
   const gallery = mediaGallery(item);
   if (gallery) content.append(gallery);
 
-  content.append(el('a', {
-    href: permalink,
-    target: '_blank',
-    rel: 'noopener noreferrer',
-    text: 'Instagramで開く ↗',
-    style: 'display:inline-block;margin-top:8px;color:var(--muted);font-size:11.5px;text-decoration:none;'
-  }));
-
   card.append(avatarLink, content);
   const openPost = () => openExternal(permalink);
   card.addEventListener('click', event => {
@@ -203,12 +220,13 @@ async function fetchInstagramAccount(username) {
     throw new Error(data.error || `Instagram取得 HTTP ${response.status}`);
   }
 
+  const responseAccount = data.account || { username, profileUrl: instagramProfileUrl(username) };
   const items = data.items
-    .slice(0, 6)
+    .slice(0, INSTAGRAM_POST_LIMIT)
     .filter(item => item?.source === 'instagram')
     .map(item => ({
       source: 'instagram',
-      account: item.account || { username, profileUrl: instagramProfileUrl(username) },
+      account: { ...responseAccount, ...(item.account || {}) },
       id: item.id,
       externalId: item.externalId || null,
       shortcode: item.shortcode || null,
@@ -290,7 +308,7 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
       style: 'margin:12px 14px;'
     }, [
       el('strong', { text: `${accounts.length}アカウントを取得中…` }),
-      el('span', { text: '各アカウント最新6投稿を読み込みます' })
+      el('span', { text: `各アカウント最大${INSTAGRAM_POST_LIMIT}投稿を読み込みます` })
     ]));
     status.textContent = '更新中…';
 

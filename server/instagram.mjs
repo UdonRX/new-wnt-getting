@@ -4,6 +4,7 @@ const RESERVED_PROFILE_PATHS = new Set([
   'p', 'reel', 'stories'
 ]);
 const ALLOWED_VIDEO_KINDS = new Set(['auto', 'post', 'reel']);
+const PROFILE_POST_LIMIT = 12;
 const INSTAGRAM_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.1 Mobile/15E148 Safari/604.1';
 
 function first(value) {
@@ -78,6 +79,21 @@ function buildDecodedVariants(html, levels = 4) {
   return variants;
 }
 
+function normalizeHttpsUrl(value) {
+  let candidate = String(value || '').trim();
+  for (let pass = 0; pass < 3; pass += 1) candidate = decodeEscapedLayer(candidate);
+  candidate = candidate
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\\u0026/gi, '&')
+    .replace(/\\u003d/gi, '=');
+  try {
+    const url = new URL(candidate);
+    return url.protocol === 'https:' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function extractBalanced(text, startIndex, open = '[', close = ']') {
   let depth = 0;
   let quote = '';
@@ -122,6 +138,7 @@ function parseGraphqlMediaFromHtml(html) {
   let parseMethod = null;
   let decodedLevel = null;
   const parseErrors = [];
+  const collectedItems = [];
 
   for (let level = 0; level < variants.length; level += 1) {
     const input = variants[level];
@@ -139,15 +156,20 @@ function parseGraphqlMediaFromHtml(html) {
         const objects = parsed
           .map((entry) => entry?.shortcode_media || entry?.node || entry)
           .filter((entry) => entry && typeof entry === 'object');
-        if (objects.length > bestItems.length) {
-          bestItems = objects;
-          parseMethod = 'graphql_media_array';
-          decodedLevel = level;
+        if (objects.length) {
+          collectedItems.push(...objects);
+          if (decodedLevel == null) decodedLevel = level;
         }
       } catch (error) {
         if (parseErrors.length < 5) parseErrors.push(`array@level${level}: ${error.message}`);
       }
     }
+  }
+
+  const collected = dedupeMediaObjects(collectedItems);
+  if (collected.length) {
+    bestItems = collected;
+    parseMethod = 'graphql_media_arrays';
   }
 
   if (!bestItems.length) {
@@ -185,6 +207,38 @@ function parseGraphqlMediaFromHtml(html) {
   };
 }
 
+function extractProfileAvatar(html, mediaItems = []) {
+  for (const media of mediaItems || []) {
+    const candidates = [
+      media?.owner?.profile_pic_url_hd,
+      media?.owner?.profile_pic_url,
+      media?.owner?.profilePicUrl,
+      media?.user?.profile_pic_url_hd,
+      media?.user?.profile_pic_url,
+      media?.user?.profilePicUrl
+    ];
+    for (const candidate of candidates) {
+      const url = normalizeHttpsUrl(candidate);
+      if (url) return url;
+    }
+  }
+
+  for (const input of buildDecodedVariants(html, 5)) {
+    const patterns = [
+      /["']profile_pic_url_hd["']\s*:\s*["']([^"']+)["']/gi,
+      /["']profile_pic_url["']\s*:\s*["']([^"']+)["']/gi,
+      /["']profilePicUrl["']\s*:\s*["']([^"']+)["']/gi
+    ];
+    for (const pattern of patterns) {
+      for (const match of input.matchAll(pattern)) {
+        const url = normalizeHttpsUrl(match[1]);
+        if (url) return url;
+      }
+    }
+  }
+  return null;
+}
+
 function firstCaption(media) {
   if (typeof media?.caption === 'string') return media.caption;
   const edgeText = media?.edge_media_to_caption?.edges?.[0]?.node?.text;
@@ -220,7 +274,7 @@ function normalizeMediaNode(node = {}, fallbackShortcode = '') {
   };
 }
 
-function normalizeFeedItem(username, media, index) {
+function normalizeFeedItem(username, media, index, avatarUrl = null) {
   const type = String(media?.__typename || '');
   const isVideo = Boolean(media?.is_video || type === 'GraphVideo');
   const shortcode = media?.shortcode || null;
@@ -255,7 +309,8 @@ function normalizeFeedItem(username, media, index) {
     source: 'instagram',
     account: {
       username,
-      profileUrl: `https://www.instagram.com/${username}/`
+      profileUrl: `https://www.instagram.com/${username}/`,
+      avatarUrl: avatarUrl || null
     },
     id: `instagram:${username}:${shortcode || media?.id || index + 1}`,
     externalId: media?.id || null,
@@ -314,17 +369,18 @@ export async function instagramProfile(req, res) {
     }
 
     const parsed = parseGraphqlMediaFromHtml(html);
+    const avatarUrl = extractProfileAvatar(html, parsed.items);
     const items = parsed.items
-      .map((media, index) => normalizeFeedItem(target.username, media, index))
+      .map((media, index) => normalizeFeedItem(target.username, media, index, avatarUrl))
       .filter((item) => item.shortcode || item.media.length || item.text)
       .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
-      .slice(0, 6);
+      .slice(0, PROFILE_POST_LIMIT);
 
     if (!items.length) {
       res.status(502).json({
         ok: false,
         error: 'Profile Embed HTMLからgraphql_mediaを取得できませんでした。',
-        account: { username: target.username, profileUrl: target.profileUrl },
+        account: { username: target.username, profileUrl: target.profileUrl, avatarUrl },
         diagnostics: {
           htmlLength: html.length,
           parseMethod: parsed.parseMethod,
@@ -339,12 +395,14 @@ export async function instagramProfile(req, res) {
     res.status(200).json({
       ok: true,
       source: 'instagram',
-      account: { username: target.username, profileUrl: target.profileUrl },
+      account: { username: target.username, profileUrl: target.profileUrl, avatarUrl },
       count: items.length,
       items,
       diagnostics: {
         htmlLength: html.length,
         parsedCount: parsed.items.length,
+        returnedLimit: PROFILE_POST_LIMIT,
+        avatarAvailable: Boolean(avatarUrl),
         parseMethod: parsed.parseMethod,
         decodedLevel: parsed.decodedLevel,
         arrayOccurrences: parsed.arrayOccurrences,
