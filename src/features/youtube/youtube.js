@@ -1,8 +1,9 @@
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
-import { collectionManager, segmented, installShrinkingHeader } from '../../shared/components.js';
+import { segmented, installShrinkingHeader } from '../../shared/components.js';
 import { attachSwipe } from '../../shared/gestures.js';
 import { cleanupYouTubePlayer, mountYouTubePlayer } from './youtube-player.js';
+import { createDiscoveryButton, openYouTubeDiscovery, recordYouTubeOpen, searchYouTubeChannels } from './youtube-discovery.js';
 
 const TABS=['long','short','live'];
 const CACHE_KEY='pdv2:youtubeCache:kind4-lockup';
@@ -135,7 +136,48 @@ function preserveCacheFor(channels){
   loadWarnings=[];
   try{localStorage.setItem(CACHE_KEY,JSON.stringify({at:Number(previous?.at||0),complete:false,configSignature:configSignature(channels),rows:cache,warnings:[]}))}catch{}
 }
-function manage(onDone){let sheet;sheet=openSheet(collectionManager({items:state.youtubeChannels,fields:[{key:'name',label:'表示名',placeholder:'任意の名前'},{key:'value',label:'YouTube共有URL / @handle / Channel ID',placeholder:'例：https://youtube.com/@channel?si=...'}],onSave:draft=>{const channels=normalizeChannels(draft);update('youtubeChannels',channels);preserveCacheFor(channels);sheet.close();onDone?.()}}),{title:'YouTubeチャンネル編集'})}
+function saveManagedChannels(channels){const normalized=normalizeChannels(channels);update('youtubeChannels',normalized);preserveCacheFor(normalized);return normalized}
+function candidateRegistered(candidate){const id=String(candidate?.channelId||'').toLowerCase();if(!id)return false;return configuredChannels().some(ch=>channelKey(ch)===id)||cache.some(row=>String(row?.channel?.id||'').toLowerCase()===id)}
+function manage(onDone){
+  let sheet,searchTimer=0,searchGeneration=0;
+  const wrap=el('div',{class:'youtube-channel-manager'});
+  const searchInput=el('input',{class:'youtube-channel-search-input',type:'search',placeholder:'チャンネル名を検索',autocomplete:'off',autocapitalize:'off'});
+  const searchStatus=el('div',{class:'youtube-channel-search-status',text:'チャンネル名を入力すると候補を表示します'});
+  const results=el('div',{class:'youtube-channel-search-results'});
+  const registered=el('div',{class:'youtube-channel-registered'});
+  const registeredTitle=el('strong',{text:'登録中'});
+  const renderRegistered=()=>{
+    registered.replaceChildren();
+    for(const ch of configuredChannels()){
+      const key=channelKey(ch),row=cache.find(item=>rowKey(item)===key),label=configuredLabel(ch);
+      const avatar=el('span',{text:'○'});const copy=el('div',{class:'youtube-channel-result-copy'},[el('strong',{text:label}),el('small',{text:row?.channel?.id||ch.value||''})]);
+      const remove=el('button',{class:'youtube-channel-remove',type:'button','aria-label':`${label}を削除`,text:'−',onclick:()=>{const next=configuredChannels().filter(x=>channelKey(x)!==key);saveManagedChannels(next);renderRegistered();renderSearchResults(lastResults)}});
+      registered.append(el('div',{class:'youtube-channel-registered-row'},[avatar,copy,remove]));
+    }
+    if(!registered.childElementCount)registered.append(el('div',{class:'youtube-channel-search-status',text:'まだ登録されていません'}));
+  };
+  let lastResults=[];
+  const renderSearchResults=items=>{
+    lastResults=Array.isArray(items)?items:[];results.replaceChildren();
+    for(const candidate of lastResults){
+      const added=candidateRegistered(candidate),img=el('img',{src:candidate.thumbnail||'',alt:'',loading:'lazy'}),copy=el('div',{class:'youtube-channel-result-copy'},[el('strong',{text:candidate.name||'YouTube'}),el('small',{text:candidate.description||candidate.channelId})]);
+      const add=el('button',{class:`youtube-channel-add ${added?'is-added':''}`,type:'button','aria-label':added?'登録済み':'このチャンネルを登録',text:added?'✓':'＋',onclick:()=>{if(candidateRegistered(candidate))return;saveManagedChannels([...configuredChannels(),{name:candidate.name||'',value:candidate.channelId}]);renderRegistered();renderSearchResults(lastResults)}});
+      results.append(el('div',{class:'youtube-channel-result'},[img,copy,add]));
+    }
+    if(!results.childElementCount&&String(searchInput.value||'').trim())results.append(el('div',{class:'youtube-channel-search-status',text:'候補が見つかりませんでした'}));
+  };
+  const runSearch=async()=>{
+    const q=String(searchInput.value||'').trim(),min=/[^\x00-\x7F]/.test(q)?2:3;if(q.length<min){searchStatus.textContent=`${min}文字以上入力してください`;results.replaceChildren();return}
+    const my=++searchGeneration;searchStatus.textContent='検索中…';
+    try{const items=await searchYouTubeChannels(q);if(my!==searchGeneration)return;searchStatus.textContent=`${items.length}件の候補`;renderSearchResults(items)}catch(error){if(my!==searchGeneration)return;searchStatus.textContent=error?.message||'検索できませんでした';results.replaceChildren()}
+  };
+  searchInput.addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(runSearch,900)});
+  const manualInput=el('input',{type:'text',placeholder:'共有URL / @handle / Channel ID'});
+  const manualAdd=el('button',{class:'soft-button',type:'button',text:'追加',onclick:()=>{const value=normalizeChannelValue(manualInput.value);if(!value)return;saveManagedChannels([...configuredChannels(),{name:'',value}]);manualInput.value='';renderRegistered();renderSearchResults(lastResults)}});
+  const manual=el('details',{class:'youtube-channel-manual'},[el('summary',{text:'URL / @handle / Channel ID から追加'}),el('div',{class:'youtube-channel-manual-row'},[manualInput,manualAdd])]);
+  const done=el('button',{class:'primary-button full-button',type:'button',text:'完了',onclick:()=>{clearTimeout(searchTimer);sheet?.close();onDone?.()}});
+  wrap.append(el('div',{class:'youtube-channel-search-box'},[searchInput]),searchStatus,results,registeredTitle,registered,manual,done);renderRegistered();sheet=openSheet(wrap,{title:'YouTubeチャンネル追加'});setTimeout(()=>searchInput.focus(),180);
+}
 export function openYouTubeChannelManager(onDone=()=>{}){manage(onDone)}
 function normalizeKind(item){if(item?.liveType||item?.kind==='live')return'live';if(item?.kind==='videos')return'long';if(item?.kind==='shorts')return'short';return['long','short','live','unknown'].includes(item?.kind)?item.kind:'unknown'}
 function liveBadge(item){if(item?.liveType==='archive')return el('span',{class:'archive-badge',text:'配信録画'});if(item?.liveType==='upcoming')return el('span',{class:'upcoming-badge',text:'配信予定'});return el('span',{class:'live-badge',text:'LIVE'})}
@@ -172,9 +214,10 @@ export async function renderYouTube(host,{refresh=false}={}){
     const picker=el('button',{class:'soft-button channel-picker youtube-channel-picker',type:'button',onclick:()=>channelSheet(draw,()=>manage(()=>renderYouTube(host,{refresh:true})))},[el('span',{text:`チャンネル　${selectedLabel()}`}),el('span',{text:'⌄'})]);
     const tabBar=el('div',{class:'media-sticky-tabs youtube-primary-tabs'});tabBar.append(segmented([{value:'long',label:'動画'},{value:'short',label:'Shorts'},{value:'live',label:'LIVE'}],tab,changeTab));
     const playerHost=el('div',{class:'youtube-inline-player-host twitch-inline-player-host'});
-    const items=selectedRows.flatMap(row=>(row.items||[]).map(item=>({...item,kind:normalizeKind(item)}))).filter(item=>tab==='long'?(item.kind==='long'||item.kind==='unknown'):item.kind===tab).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
+    const items=selectedRows.flatMap(row=>(row.items||[]).map(item=>({...item,channelId:item.channelId||row?.channel?.id||'',kind:normalizeKind(item)}))).filter(item=>tab==='long'?(item.kind==='long'||item.kind==='unknown'):item.kind===tab).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
+    const allSeedItems=cache.flatMap(row=>(row.items||[]).map(item=>({...item,channelId:item.channelId||row?.channel?.id||'',kind:normalizeKind(item)})));
     const list=el('div',{class:'media-list media-swipe-list'});
-    items.forEach((item,index)=>{const row=el('button',{class:'media-row',type:'button',onclick:()=>{playerOpen=true;mountYouTubePlayer({host:playerHost,queue:items,index,shorts:tab==='short'})}});row.append(thumbnailNode(item,tab,index));const copy=el('div',{class:'media-row-copy'}),titleLine=el('div',{class:'media-title-line'});if(tab==='live')titleLine.append(liveBadge(item),document.createTextNode(' '));titleLine.append(el('span',{class:'media-title',text:item.title||'無題'}));copy.append(titleLine,el('div',{class:'media-meta',text:[item.channelName||'',item.liveType==='archive'?'配信アーカイブ':''].filter(Boolean).join(' ・ ')}));row.append(copy);list.append(row)});
+    items.forEach((item,index)=>{const row=el('button',{class:'media-row',type:'button',onclick:()=>{recordYouTubeOpen(item);playerOpen=true;mountYouTubePlayer({host:playerHost,queue:items,index,shorts:tab==='short'})}});row.append(thumbnailNode(item,tab,index));const copy=el('div',{class:'media-row-copy'}),titleLine=el('div',{class:'media-title-line'});if(tab==='live')titleLine.append(liveBadge(item),document.createTextNode(' '));titleLine.append(el('span',{class:'media-title',text:item.title||'無題'}));copy.append(titleLine,el('div',{class:'media-meta',text:[item.channelName||'',item.liveType==='archive'?'配信アーカイブ':''].filter(Boolean).join(' ・ ')}));row.append(copy);list.append(row)});
     if(!items.length){
       let message=refreshing?'YouTubeを更新しています…':'該当する動画が見つかりません';
       if(selected!=='all'&&!selectedRows.length&&!refreshing)message=`${selectedLabel()} は現在取得できません`;
@@ -184,6 +227,13 @@ export async function renderYouTube(host,{refresh=false}={}){
     if(refreshing&&items.length)children.push(el('div',{class:'media-warning',text:'YouTubeをバックグラウンド更新中…'}));
     if(loadWarnings.length)children.push(el('div',{class:'media-warning',text:loadWarnings.slice(0,4).join(' / ')+(loadWarnings.length>4?` / 他${loadWarnings.length-4}件`: '')}));
     children.push(list);host.replaceChildren(...children);
+    if(tab==='short'){
+      const registeredChannelIds=[...new Set(cache.map(row=>String(row?.channel?.id||'')).filter(Boolean))];
+      host.append(createDiscoveryButton(()=>{
+        playerOpen=true;
+        openYouTubeDiscovery({seedItems:allSeedItems,registeredChannelIds,onRegister:item=>{if(!item?.channelId)return false;if(candidateRegistered({channelId:item.channelId}))return true;saveManagedChannels([...configuredChannels(),{name:item.channelName||'',value:item.channelId}]);return true},onClose:()=>{playerOpen=false;renderYouTube(host,{refresh:false})}}).catch(()=>{playerOpen=false});
+      }));
+    }
     listSwipeDetach?.();listSwipeDetach=attachSwipe(list,{left:()=>cycleTab(1),right:()=>cycleTab(-1),threshold:68});if(screen)compactDetach=installShrinkingHeader(screen,{threshold:62,className:'youtube-scroll-compact'});
     playerObserver=new MutationObserver(()=>{
       if(generation!==renderGeneration)return;
