@@ -1,15 +1,70 @@
 import { el, showToast } from '../../shared/dom.js';
 import { watchPlayingTitle, clearPlayingTitle } from '../../shared/playing-title.js';
-import { connectTwitchChat, hasTwitchChatToken, startTwitchLogin } from './twitch-chat.js';
+import { connectTwitchChat, hasTwitchChatToken, refreshTwitchChatStatus, startTwitchLogin } from './twitch-chat.js';
 
+const TWITCH_PLAYBACK_KEY = 'pdv2:twitchPlayback:v1';
+const TWITCH_PLAYBACK_TTL_MS = 5 * 60 * 1000;
+const TWITCH_PLAYBACK_HEARTBEAT_MS = 30 * 1000;
 let cleanupChat = null;
 let activeHost = null;
 let landscapePanel = null;
 let landscapeViewportCleanup = null;
+let playbackHeartbeat = null;
 
 function stopChat() {
   cleanupChat?.();
   cleanupChat = null;
+}
+
+function readPlaybackRecord() {
+  try {
+    const value = JSON.parse(localStorage.getItem(TWITCH_PLAYBACK_KEY) || 'null');
+    const at = Number(value?.at || 0);
+    if (!value || !value.broadcasterId || !at || Date.now() - at > TWITCH_PLAYBACK_TTL_MS) {
+      localStorage.removeItem(TWITCH_PLAYBACK_KEY);
+      return null;
+    }
+    return value;
+  } catch {
+    try { localStorage.removeItem(TWITCH_PLAYBACK_KEY); } catch {}
+    return null;
+  }
+}
+
+function savePlaybackRecord(entry) {
+  const snapshot = entry?.snapshot;
+  const broadcasterId = String(snapshot?.broadcaster?.id || '').trim();
+  if (!broadcasterId) return;
+  try {
+    localStorage.setItem(TWITCH_PLAYBACK_KEY, JSON.stringify({
+      at: Date.now(),
+      broadcasterId,
+      broadcasterLogin: String(snapshot?.broadcaster?.login || ''),
+      videoId: String(entry?.videoId || '')
+    }));
+  } catch {}
+}
+
+function stopPlaybackHeartbeat({ clear = false } = {}) {
+  if (playbackHeartbeat) clearInterval(playbackHeartbeat);
+  playbackHeartbeat = null;
+  if (clear) {
+    try { localStorage.removeItem(TWITCH_PLAYBACK_KEY); } catch {}
+  }
+}
+
+function startPlaybackHeartbeat(entry) {
+  stopPlaybackHeartbeat({ clear: false });
+  savePlaybackRecord(entry);
+  playbackHeartbeat = setInterval(() => savePlaybackRecord(entry), TWITCH_PLAYBACK_HEARTBEAT_MS);
+}
+
+export function getRecentTwitchPlayback() {
+  return readPlaybackRecord();
+}
+
+export function clearTwitchPlaybackRecovery() {
+  stopPlaybackHeartbeat({ clear: true });
 }
 
 function orientationButtonHtml(landscape) {
@@ -93,9 +148,10 @@ function setLandscape(panel, on) {
   if (enabled) window.scrollTo({ top: 0, behavior: 'auto' });
 }
 
-export function cleanupTwitchPlayer() {
+export function cleanupTwitchPlayer({ clearRecovery = true } = {}) {
   clearPlayingTitle();
   stopChat();
+  stopPlaybackHeartbeat({ clear: clearRecovery });
   if (landscapePanel) setLandscape(landscapePanel, false);
   stopLandscapeViewportWatch();
   landscapePanel = null;
@@ -105,7 +161,11 @@ export function cleanupTwitchPlayer() {
   activeHost = null;
 }
 
-window.addEventListener('pdv2:before-navigate', cleanupTwitchPlayer);
+window.addEventListener('pdv2:before-navigate', event => {
+  const detail = event?.detail || {};
+  const stayingInTwitch = detail.screen === 'media' && detail.mediaMode === 'twitch';
+  if (!stayingInTwitch) cleanupTwitchPlayer({ clearRecovery: true });
+});
 
 function addFlying(lane, msg, density = 'normal') {
   const limit = density === 'low' ? 3 : density === 'high' ? 8 : 5;
@@ -143,6 +203,7 @@ export function mountTwitchPlayer({ host, queue, index = 0, settings }) {
   if (!host || !Array.isArray(queue) || !queue.length) return null;
 
   stopChat();
+  stopPlaybackHeartbeat({ clear: false });
   clearPlayingTitle();
   if (landscapePanel) setLandscape(landscapePanel, false);
   activeHost = host;
@@ -150,10 +211,12 @@ export function mountTwitchPlayer({ host, queue, index = 0, settings }) {
 
   const render = () => {
     stopChat();
+    stopPlaybackHeartbeat({ clear: false });
     clearPlayingTitle();
     if (landscapePanel) setLandscape(landscapePanel, false);
 
     const entry = queue[current];
+    startPlaybackHeartbeat(entry);
     const { snapshot, videoId = '' } = entry;
     const live = !videoId;
     const archive = live ? null : snapshot.archives.find(video => video.id === videoId);
@@ -173,7 +236,7 @@ export function mountTwitchPlayer({ host, queue, index = 0, settings }) {
         type: 'button',
         'aria-label': 'プレイヤーを閉じる',
         text: '✕',
-        onclick: () => cleanupTwitchPlayer()
+        onclick: () => cleanupTwitchPlayer({ clearRecovery: true })
       })
     );
 
@@ -190,7 +253,7 @@ export function mountTwitchPlayer({ host, queue, index = 0, settings }) {
 
     const info = el('div', { class: 'twitch-inline-info' });
     info.append(el('div', { class: 'player-title', text: playingTitle }));
-    const status = el('div', { class: 'source-note' });
+    const status = el('div', { class: 'source-note twitch-chat-status', 'aria-live': 'polite' });
 
     const prev = el('button', {
       class: 'player-soft', type: 'button', text: '‹ 前へ', disabled: current <= 0,
@@ -229,13 +292,34 @@ export function mountTwitchPlayer({ host, queue, index = 0, settings }) {
           status.textContent = 'コメントを停止しました';
           return;
         }
-        commentLane.querySelector('.comment-lane-placeholder')?.remove();
-        cleanupChat = connectTwitchChat({
-          broadcasterId: snapshot.broadcaster.id,
-          onMessage: message => addFlying(commentLane, message, settings?.twitchCommentDensity || 'normal'),
-          onStatus: value => { status.textContent = value; }
-        });
-        chatBtn.textContent = 'コメント停止';
+
+        console.info('[TWITCH CHAT] START');
+        chatBtn.disabled = true;
+        status.textContent = '接続中';
+        try {
+          const auth = await refreshTwitchChatStatus({ brief: true, strict: true });
+          if (!auth.connected) {
+            status.textContent = auth.error ? `Twitch認証確認失敗: ${auth.error}` : 'Twitch再連携が必要です';
+            chatBtn.textContent = 'Twitch連携';
+            return;
+          }
+          console.info('[TWITCH CHAT] AUTH_OK');
+          status.textContent = 'Twitch認証確認済み';
+          commentLane.querySelector('.comment-lane-placeholder')?.remove();
+          cleanupChat = connectTwitchChat({
+            broadcasterId: snapshot.broadcaster.id,
+            onMessage: message => addFlying(commentLane, message, settings?.twitchCommentDensity || 'normal'),
+            onStatus: value => { status.textContent = value; }
+          });
+          chatBtn.textContent = 'コメント停止';
+        } catch (error) {
+          console.error(`[TWITCH CHAT] ERROR start ${String(error?.message || error || '').slice(0, 220)}`);
+          status.textContent = error?.message || 'コメント接続エラー';
+          chatBtn.textContent = hasTwitchChatToken() ? 'コメント開始' : 'Twitch連携';
+          stopChat();
+        } finally {
+          chatBtn.disabled = false;
+        }
       };
       controls.append(chatBtn);
     }
@@ -277,5 +361,5 @@ export function mountTwitchPlayer({ host, queue, index = 0, settings }) {
   };
 
   render();
-  return { close: cleanupTwitchPlayer };
+  return { close: () => cleanupTwitchPlayer({ clearRecovery: true }) };
 }

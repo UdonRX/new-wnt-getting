@@ -2,7 +2,7 @@ import './runtime-v2195.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2196twitch1';
+const BUILD='2196twitch2';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -62,8 +62,9 @@ function renderScreenError(screen,error,options={}){
 function renderBootError(error){console.error('[pdv2] boot failed:',error);if(!root)return;root.innerHTML=`<section class="screen pd-startup-error"><div class="error-box"><strong>アプリの起動に失敗しました</strong><br><small>${safeMessage(error)}</small><div class="pd-feature-error-actions"><button type="button" class="soft-button" onclick="location.reload()">再読み込み</button></div></div></section>`;}
 
 export async function navigate(screen,options={}){
-  window.dispatchEvent(new CustomEvent('pdv2:before-navigate',{detail:{screen}}));
   if(!SCREEN[screen])screen='home';
+  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
+  window.dispatchEvent(new CustomEvent('pdv2:before-navigate',{detail:{screen,mediaMode:destinationMediaMode,source:options.source||''}}));
   if(options.readerMode)update('lastReaderMode',options.readerMode);
   if(screen==='media'&&!options.mediaMode)update('lastMediaMode','youtube');
   else if(options.mediaMode)update('lastMediaMode',options.mediaMode);
@@ -121,6 +122,16 @@ async function resolveTwitchOAuthReturn(){
   }
 }
 
+async function resolveTwitchPlaybackRecovery(){
+  try{
+    const module=await loadModule('./features/twitch/twitch-player.js');
+    return module.getRecentTwitchPlayback?.()||null;
+  }catch(error){
+    console.warn('[twitch-recovery]',error);
+    return null;
+  }
+}
+
 async function boot(){
   if(!root)throw new Error('#app-main が見つかりません');
   applyTheme();
@@ -130,7 +141,13 @@ async function boot(){
     update('lastMediaMode','twitch');
     await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});
   }else{
-    await navigate('home');
+    const twitchRecovery=await resolveTwitchPlaybackRecovery();
+    if(twitchRecovery){
+      update('lastMediaMode','twitch');
+      await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});
+    }else{
+      await navigate('home');
+    }
   }
   startBackgroundJobs();
   if('serviceWorker'in navigator)navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});}).catch(error=>console.warn('[sw]',error));

@@ -1,7 +1,7 @@
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
 import { collectionManager } from '../../shared/components.js';
-import { cleanupTwitchPlayer, mountTwitchPlayer } from './twitch-player.js';
+import { clearTwitchPlaybackRecovery, getRecentTwitchPlayback, mountTwitchPlayer } from './twitch-player.js';
 
 const CACHE_KEY='pdv2:twitchCache:v2195';
 const CACHE_FRESH_MS=30*1000;
@@ -10,9 +10,11 @@ let selected=localStorage.getItem('pdv2:twitchSelected')||'all';
 let cache=[];
 let loadErrors=[];
 let refreshTimer=null;
+const views=new WeakMap();
 function channelKey(channel){return String(channel.value||channel.url||channel.name||'').trim().toLowerCase();}
 function stopAutoRefresh(){if(refreshTimer)clearTimeout(refreshTimer);refreshTimer=null;}
-window.addEventListener('pdv2:before-navigate',stopAutoRefresh);
+function stayingInTwitch(event){const detail=event?.detail||{};return detail.screen==='media'&&detail.mediaMode==='twitch';}
+window.addEventListener('pdv2:before-navigate',event=>{if(!stayingInTwitch(event))stopAutoRefresh();});
 
 async function loadOne(channel,{force=false}={}){
   const value=channel.value||channel.url||channel.name;
@@ -90,25 +92,82 @@ function thumbnailElement(snapshot,video){
   return img;
 }
 
-export async function renderTwitch(host,{refresh=false}={}){
-  cleanupTwitchPlayer();stopAutoRefresh();
-  host.innerHTML='<div class="loading">Twitchを読み込み中...</div>';
-  if(!state.twitchChannels.length){host.replaceChildren(el('div',{class:'empty',text:'配信者を追加してください'}),el('button',{class:'primary-button full-button',type:'button',text:'Twitch配信者を追加',onclick:()=>manage(()=>renderTwitch(host,{refresh:true}))}));return;}
-  try{await loadAll(refresh);draw();}catch(error){host.replaceChildren(el('div',{class:'error-box',text:error.message}));return;}
-  if(host.isConnected)refreshTimer=setTimeout(()=>{if(host.isConnected)renderTwitch(host,{refresh:true}).catch(()=>{});},AUTO_REFRESH_MS);
+function createView(host){
+  const pickHost=el('div',{class:'twitch-picker-host'});
+  const playerHost=el('div',{class:'twitch-inline-player-host'});
+  const contentHost=el('div',{class:'twitch-list-host'});
+  host.replaceChildren(pickHost,playerHost,contentHost);
+  const view={host,pickHost,playerHost,contentHost};
+  views.set(host,view);
+  return view;
+}
 
-  function draw(){
-    if(selected!=='all'&&!cache.some(snapshot=>snapshot.broadcaster.id===selected))selected='all';
-    const rows=selected==='all'?cache:cache.filter(snapshot=>snapshot.broadcaster.id===selected);const queue=makeQueue(rows);const playerHost=el('div',{class:'twitch-inline-player-host'});
-    const play=entry=>{const index=queue.findIndex(item=>item.snapshot.broadcaster.id===entry.snapshot.broadcaster.id&&String(item.videoId||'')===String(entry.videoId||''));mountTwitchPlayer({host:playerHost,queue,index:Math.max(0,index),settings:state.settings});};
-    const pick=el('button',{class:'soft-button channel-picker',type:'button',onclick:()=>picker(draw,()=>manage(()=>renderTwitch(host,{refresh:true})))},[el('span',{text:`配信者　${selected==='all'?'すべて':rows[0]?.broadcaster.displayName||'配信者'}`}),el('span',{text:'⌄'})]);
-    const content=el('div');if(loadErrors.length)content.append(el('div',{class:'media-warning',text:loadErrors.join(' / ')}));
-    const unknownLive=rows.filter(snapshot=>snapshot.live?.statusUnknown&&!snapshot.live?.isLive);if(unknownLive.length)content.append(el('div',{class:'media-warning',text:'一部配信者のLIVE状態を再確認中です。45秒以内に自動更新します。'}));
-    const lives=rows.filter(snapshot=>snapshot.live.isLive);
-    if(lives.length){const fixed=el('div',{class:'twitch-live-zone'});lives.forEach(snapshot=>fixed.append(el('button',{class:'twitch-live-card',type:'button',onclick:()=>play({snapshot,videoId:''})},[el('div',{class:'live-badge',text:'● LIVE'}),el('div',{class:'media-title twitch-live-title',text:snapshot.live.title}),el('div',{class:'media-meta',text:`${snapshot.broadcaster.displayName} ・ ${Number(snapshot.live.viewerCount||0).toLocaleString()}人視聴`})])));content.append(fixed);}
-    const archives=rows.flatMap(snapshot=>(snapshot.archives||[]).map(video=>({snapshot,video}))).sort((a,b)=>new Date(b.video.createdAt)-new Date(a.video.createdAt));
-    if(archives.length){content.append(el('div',{class:'section-label',text:'アーカイブ'}));const list=el('div',{class:'media-list'});archives.forEach(({snapshot,video})=>list.append(el('button',{class:'media-row',type:'button',onclick:()=>play({snapshot,videoId:video.id})},[thumbnailElement(snapshot,video),el('div',{class:'media-row-copy'},[el('div',{class:'media-title',text:video.title||'アーカイブ'}),el('div',{class:'media-meta',text:snapshot.broadcaster.displayName})])])));content.append(list);}
-    if(!lives.length&&!archives.length)content.append(el('div',{class:'empty',text:'配信・アーカイブがありません'}));
-    host.replaceChildren(pick,playerHost,content);
+function maybeRestorePlayback(view,queue){
+  if(view.playerHost.childElementCount)return;
+  const recovery=getRecentTwitchPlayback();
+  if(!recovery)return;
+  const index=queue.findIndex(item=>String(item.snapshot?.broadcaster?.id||'')===String(recovery.broadcasterId||'')&&String(item.videoId||'')===String(recovery.videoId||''));
+  if(index<0){clearTwitchPlaybackRecovery();return;}
+  mountTwitchPlayer({host:view.playerHost,queue,index,settings:state.settings});
+}
+
+function draw(view){
+  if(selected!=='all'&&!cache.some(snapshot=>snapshot.broadcaster.id===selected))selected='all';
+  const rows=selected==='all'?cache:cache.filter(snapshot=>snapshot.broadcaster.id===selected);const queue=makeQueue(rows);
+  const play=entry=>{const index=queue.findIndex(item=>item.snapshot.broadcaster.id===entry.snapshot.broadcaster.id&&String(item.videoId||'')===String(entry.videoId||''));mountTwitchPlayer({host:view.playerHost,queue,index:Math.max(0,index),settings:state.settings});};
+  const pick=el('button',{class:'soft-button channel-picker',type:'button',onclick:()=>picker(()=>draw(view),()=>manage(()=>renderTwitch(view.host,{refresh:true})))},[el('span',{text:`配信者　${selected==='all'?'すべて':rows[0]?.broadcaster.displayName||'配信者'}`}),el('span',{text:'⌄'})]);
+  view.pickHost.replaceChildren(pick);
+
+  const content=el('div');if(loadErrors.length)content.append(el('div',{class:'media-warning',text:loadErrors.join(' / ')}));
+  const unknownLive=rows.filter(snapshot=>snapshot.live?.statusUnknown&&!snapshot.live?.isLive);if(unknownLive.length)content.append(el('div',{class:'media-warning',text:'一部配信者のLIVE状態を再確認中です。45秒以内に自動更新します。'}));
+  const lives=rows.filter(snapshot=>snapshot.live.isLive);
+  if(lives.length){const fixed=el('div',{class:'twitch-live-zone'});lives.forEach(snapshot=>fixed.append(el('button',{class:'twitch-live-card',type:'button',onclick:()=>play({snapshot,videoId:''})},[el('div',{class:'live-badge',text:'● LIVE'}),el('div',{class:'media-title twitch-live-title',text:snapshot.live.title}),el('div',{class:'media-meta',text:`${snapshot.broadcaster.displayName} ・ ${Number(snapshot.live.viewerCount||0).toLocaleString()}人視聴`})])));content.append(fixed);}
+  const archives=rows.flatMap(snapshot=>(snapshot.archives||[]).map(video=>({snapshot,video}))).sort((a,b)=>new Date(b.video.createdAt)-new Date(a.video.createdAt));
+  if(archives.length){content.append(el('div',{class:'section-label',text:'アーカイブ'}));const list=el('div',{class:'media-list'});archives.forEach(({snapshot,video})=>list.append(el('button',{class:'media-row',type:'button',onclick:()=>play({snapshot,videoId:video.id})},[thumbnailElement(snapshot,video),el('div',{class:'media-row-copy'},[el('div',{class:'media-title',text:video.title||'アーカイブ'}),el('div',{class:'media-meta',text:snapshot.broadcaster.displayName})])])));content.append(list);}
+  if(!lives.length&&!archives.length)content.append(el('div',{class:'empty',text:'配信・アーカイブがありません'}));
+  view.contentHost.replaceChildren(content);
+  maybeRestorePlayback(view,queue);
+}
+
+function scheduleAutoRefresh(view){
+  stopAutoRefresh();
+  if(!view?.host?.isConnected)return;
+  refreshTimer=setTimeout(async()=>{
+    refreshTimer=null;
+    if(!view.host.isConnected)return;
+    try{
+      await loadAll(true);
+      if(view.host.isConnected)draw(view);
+    }catch(error){
+      console.warn('[twitch-auto-refresh]',error?.message||error);
+    }finally{
+      if(view.host.isConnected)scheduleAutoRefresh(view);
+    }
+  },AUTO_REFRESH_MS);
+}
+
+export async function renderTwitch(host,{refresh=false}={}){
+  stopAutoRefresh();
+  let view=views.get(host);
+  const reusable=Boolean(view?.host===host&&view.pickHost?.isConnected&&view.playerHost?.isConnected&&view.contentHost?.isConnected);
+  if(!reusable)host.innerHTML='<div class="loading">Twitchを読み込み中...</div>';
+
+  if(!state.twitchChannels.length){
+    if(!reusable)view=createView(host);
+    view.pickHost.replaceChildren();
+    view.contentHost.replaceChildren(
+      el('div',{class:'empty',text:'配信者を追加してください'}),
+      el('button',{class:'primary-button full-button',type:'button',text:'Twitch配信者を追加',onclick:()=>manage(()=>renderTwitch(host,{refresh:true}))})
+    );
+    return;
   }
+
+  try{await loadAll(refresh);}catch(error){
+    if(!reusable)host.replaceChildren(el('div',{class:'error-box',text:error.message}));
+    else view.contentHost.replaceChildren(el('div',{class:'error-box',text:error.message}));
+    return;
+  }
+  if(!reusable)view=createView(host);
+  draw(view);
+  scheduleAutoRefresh(view);
 }

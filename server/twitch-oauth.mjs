@@ -56,7 +56,13 @@ export default async function handler(req, res) {
       if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
       const auth = await getValidTwitchUserToken(req, res);
       if (!auth) return res.status(200).json({ ok: true, connected: false, user: null });
-      const user = await twitchUserProfile(auth.accessToken, auth.validation);
+      const brief = String(first(req.query?.brief) || '') === '1';
+      const user = brief ? {
+        id: String(auth.validation?.user_id || ''),
+        login: String(auth.validation?.login || ''),
+        displayName: String(auth.validation?.login || ''),
+        profileImageUrl: ''
+      } : await twitchUserProfile(auth.accessToken, auth.validation);
       return res.status(200).json({ ok: true, connected: true, user });
     }
 

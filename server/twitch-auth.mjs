@@ -5,6 +5,8 @@ const REFRESH_COOKIE = 'pdv2_twitch_refresh';
 const DEFAULT_REDIRECT_URI = 'https://new-wnt-getting.vercel.app/';
 const STATE_MAX_AGE_MS = 15 * 60 * 1000;
 const REFRESH_COOKIE_MAX_AGE = 180 * 24 * 60 * 60;
+const VALIDATION_CACHE_MAX_MS = 60 * 1000;
+const validationCache = new Map();
 
 function clean(value) {
   return String(value || '').trim();
@@ -50,6 +52,28 @@ function stateSignature(payload, secret) {
   return crypto.createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
+function validationCacheKey(accessToken) {
+  return crypto.createHash('sha256').update(accessToken).digest('base64url');
+}
+
+function readValidationCache(accessToken) {
+  const key = validationCacheKey(accessToken);
+  const row = validationCache.get(key);
+  if (!row || row.expiresAt <= Date.now()) {
+    if (row) validationCache.delete(key);
+    return null;
+  }
+  return row.validation;
+}
+
+function writeValidationCache(accessToken, validation) {
+  const expiresInMs = Math.max(5000, Number(validation?.expires_in || 60) * 1000);
+  const expiresAt = Date.now() + Math.min(VALIDATION_CACHE_MAX_MS, expiresInMs);
+  validationCache.set(validationCacheKey(accessToken), { expiresAt, validation });
+  while (validationCache.size > 40) validationCache.delete(validationCache.keys().next().value);
+  return validation;
+}
+
 export function createTwitchState() {
   const { clientSecret } = twitchConfig();
   const payload = `${Date.now()}.${crypto.randomBytes(18).toString('base64url')}`;
@@ -88,13 +112,15 @@ export function clearTwitchAuthCookies(res) {
 export async function validateTwitchAccessToken(accessToken) {
   const token = clean(accessToken);
   if (!token) return null;
+  const cached = readValidationCache(token);
+  if (cached) return cached;
   const response = await fetch('https://id.twitch.tv/oauth2/validate', {
     headers: { Authorization: `OAuth ${token}` },
     signal: AbortSignal.timeout(10000)
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data?.user_id) return null;
-  return data;
+  return writeValidationCache(token, data);
 }
 
 async function refreshTwitchToken(refreshToken) {
