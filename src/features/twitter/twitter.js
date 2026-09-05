@@ -568,6 +568,94 @@ function authorLabel(author = {}) {
   return `${name} (${handle})`;
 }
 
+function makeTweetQuoteCard(quote) {
+  if (!quote || typeof quote !== 'object') return null;
+  const media = Array.isArray(quote.media) ? quote.media : [];
+  const images = media.filter(entry => entry?.type === 'image' && entry.url).map(entry => entry.url).slice(0, 4);
+  const videoMedia = media.filter(entry => entry?.type === 'video' && (entry.url || entry.poster)).slice(0, 4);
+  const text = String(quote.text || '').trim();
+  if (!quote.url && !quote.id && !text && !images.length && !videoMedia.length) return null;
+
+  const author = quote.author || {};
+  const name = String(author.name || '').trim() || String(author.handle || '').trim() || 'X';
+  const handle = String(author.handle || '').trim();
+  const card = el('article', {
+    class: 'tweet-quote-card',
+    role: 'link',
+    tabindex: '0',
+    'aria-label': '引用ポストをXで開く',
+    style: 'margin-top:10px;padding:11px;border:1px solid var(--line);border-radius:16px;background:color-mix(in srgb,var(--surface-2) 84%,transparent);cursor:pointer;overflow:hidden;'
+  });
+
+  const authorCopy = el('div', { style: 'min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden;' }, [
+    el('strong', { class: 'tweet-author-name', text: name }),
+    handle ? el('span', { class: 'media-meta', text: handle, style: 'margin:0;white-space:nowrap;' }) : null
+  ]);
+  card.append(el('div', { class: 'tweet-author-row', style: 'margin-bottom:7px;' }, [
+    makeTweetAuthorAvatar(author),
+    authorCopy
+  ]));
+
+  if (text) card.append(el('div', { class: 'tweet-text', text, style: 'font-size:.94em;' }));
+
+  if (videoMedia.length) {
+    const stack = el('div', { class: 'tweet-video-stack' });
+    videoMedia.forEach(entry => {
+      const shell = entry.url ? makeTweetVideo(quote, entry.url, entry.poster || '') : makeExternalOnlyVideo(quote, entry.poster || '');
+      shell.addEventListener('click', event => event.stopPropagation());
+      stack.append(shell);
+    });
+    card.append(stack);
+  }
+
+  if (images.length) {
+    const grid = el('div', { class: `tweet-images count-${Math.min(4, images.length)}` });
+    images.forEach(src => {
+      const button = el('button', { class: 'tweet-image-button', type: 'button', 'aria-label': '引用元の画像を拡大' });
+      const image = el('img', { src, alt: '引用元の投稿画像', loading: 'lazy', decoding: 'async' });
+      image.addEventListener('error', () => {
+        button.remove();
+        syncTweetImageGrid(grid);
+      }, { once: true });
+      button.append(image);
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const visibleImages = [...grid.querySelectorAll('.tweet-image-button img')]
+          .filter(img => img.complete && img.naturalWidth > 0)
+          .map(img => img.currentSrc || img.src)
+          .filter(Boolean);
+        const current = image.currentSrc || image.src;
+        const index = Math.max(0, visibleImages.indexOf(current));
+        if (visibleImages.length) openImageViewer(visibleImages, index);
+      });
+      grid.append(button);
+    });
+    card.append(grid);
+  }
+
+  const openQuote = () => {
+    const url = canonicalPostUrl(quote);
+    const opened = window.open(url, '_blank');
+    if (opened) {
+      try { opened.opener = null; } catch {}
+    } else {
+      window.location.assign(url);
+    }
+  };
+  card.addEventListener('click', event => {
+    if (event.defaultPrevented) return;
+    if (event.target instanceof Element && event.target.closest('button,a,video,iframe')) return;
+    openQuote();
+  });
+  card.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    openQuote();
+  });
+  return card;
+}
+
 function tweetCard(item) {
   const media = Array.isArray(item?.media) ? item.media : [];
   const images = media.filter(entry => entry?.type === 'image' && entry.url).map(entry => entry.url).slice(0, 4);
@@ -587,6 +675,9 @@ function tweetCard(item) {
     card.append(text);
   } else if (images.length && !hasVideoMedia) card.classList.add('tweet-card-photo-only');
   else if (hasVideoMedia) card.classList.add('tweet-card-media-only');
+
+  const quoteCard = makeTweetQuoteCard(item.quote);
+  if (quoteCard) card.append(quoteCard);
 
   if (videoMedia.length) {
     const stack = el('div', { class: 'tweet-video-stack' });
