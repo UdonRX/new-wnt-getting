@@ -654,6 +654,28 @@ function normalizedPosts(xml, feedName) {
   }
 }
 
+function postIdentity(item) {
+  const id = tweetIdOf(item) || String(item?.id || '').trim();
+  if (id) return `id:${id}`;
+  const raw = String(item?.url || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw, 'https://x.com/');
+    if (url.hostname === 'twitter.com' || url.hostname.endsWith('.twitter.com')) url.hostname = 'x.com';
+    url.search = '';
+    url.hash = '';
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return `url:${url.href.toLowerCase()}`;
+  } catch {
+    return `url:${raw.toLowerCase()}`;
+  }
+}
+
+function postTimestamp(item) {
+  const time = Date.parse(String(item?.createdAt || ''));
+  return Number.isFinite(time) ? time : 0;
+}
+
 export async function renderTwitter(root, { navigate, refresh = false }) {
   const generation = ++renderGeneration;
   const feed = X_FEED;
@@ -667,67 +689,163 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   }
   if (generation !== renderGeneration) return;
 
+  let requestRefresh = () => Promise.resolve();
   const screen = el('section', { class: 'screen' });
   screen.append(topbar('X', {
     subtitle: 'タイムライン',
     actions: [
-      { label: '↻', title: '更新', onClick: () => renderTwitter(root, { navigate, refresh: true }) },
+      { label: '↻', title: '更新', onClick: () => requestRefresh() },
       { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }
     ]
   }));
+
+  const updateStatus = el('div', {
+    class: 'twitter-update-status media-meta',
+    role: 'status',
+    'aria-live': 'polite',
+    'aria-atomic': 'true',
+    style: 'min-height:16px;margin:0 4px 4px;opacity:.82;'
+  });
+  updateStatus.hidden = true;
 
   const pullIndicator = el('div', { class: 'twitter-pull-refresh', 'aria-hidden': 'true' }, [
     el('span', { class: 'twitter-pull-spinner', text: '↻' }),
     el('span', { class: 'twitter-pull-label', text: '下に引いて更新' })
   ]);
   const host = el('div', { class: 'twitter-feed-host' });
-  screen.append(pullIndicator, host);
+  screen.append(updateStatus, pullIndicator, host);
 
+  let visiblePosts = [];
   const draw = posts => {
     if (generation !== renderGeneration) return;
     const list = Array.isArray(posts) ? posts : [];
     if (!list.length) return;
-    const cards = list.map(tweetCard);
-    host.replaceChildren(...cards);
+    visiblePosts = [...list];
+    host.replaceChildren(...list.map(tweetCard));
+  };
+
+  const mergeNewPosts = posts => {
+    if (generation !== renderGeneration) return 0;
+    const list = Array.isArray(posts) ? posts : [];
+    if (!list.length) return 0;
+    if (!visiblePosts.length) {
+      draw(list);
+      return list.length;
+    }
+
+    const known = new Set(visiblePosts.map(postIdentity).filter(Boolean));
+    const incoming = [];
+    for (const item of list) {
+      const identity = postIdentity(item);
+      if (!identity || known.has(identity)) continue;
+      known.add(identity);
+      incoming.push(item);
+    }
+    incoming.sort((a, b) => postTimestamp(b) - postTimestamp(a));
+
+    for (const item of incoming) {
+      const time = postTimestamp(item);
+      let index = visiblePosts.findIndex(existing => postTimestamp(existing) < time);
+      if (index < 0) index = visiblePosts.length;
+      host.insertBefore(tweetCard(item), host.children[index] || null);
+      visiblePosts.splice(index, 0, item);
+    }
+
+    while (visiblePosts.length > 100) {
+      visiblePosts.pop();
+      host.lastElementChild?.remove();
+    }
+    return incoming.length;
   };
 
   if (cached?.posts?.length) {
     draw(cached.posts);
   } else {
     host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [
-      el('strong', { text: refresh ? '保存済み履歴を確認しながら更新しています…' : 'X履歴を読み込み中…' }),
+      el('strong', { text: 'X履歴を読み込み中…' }),
       el('span', { text: 'Upstash履歴を先に確認し、Renderは裏で起動します' })
     ]));
   }
 
-  root.replaceChildren(screen);
-  attachPullToRefresh(screen, pullIndicator, () => renderTwitter(root, { navigate, refresh: true }));
+  let statusTimer = null;
+  let refreshSerial = 0;
+  const setUpdateStatus = (text = '', autoHideMs = 0) => {
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = null;
+    if (!text) {
+      updateStatus.textContent = '';
+      updateStatus.hidden = true;
+      return;
+    }
+    updateStatus.textContent = text;
+    updateStatus.hidden = false;
+    if (autoHideMs > 0) {
+      statusTimer = setTimeout(() => {
+        if (!updateStatus.isConnected) return;
+        updateStatus.textContent = '';
+        updateStatus.hidden = true;
+      }, autoHideMs);
+    }
+  };
 
-  const redrawAfterSync = job => job.then(async result => {
-    if (generation !== renderGeneration) return;
+  const applyMergedResult = async result => {
+    if (generation !== renderGeneration) return false;
     let posts = Array.isArray(result?.posts) ? result.posts : [];
     if (!posts.length) posts = (await readXPostCache()).posts || [];
-    if (generation !== renderGeneration || !posts.length) return;
-    draw(posts);
-  }).catch(error => {
+    if (generation !== renderGeneration || !posts.length) return false;
+    mergeNewPosts(posts);
+    return true;
+  };
+
+  const watchBackgroundResult = job => job.then(applyMergedResult).catch(error => {
     console.warn('[x-sync-background]', error?.message || error);
+    return false;
   });
+
+  requestRefresh = () => {
+    const serial = ++refreshSerial;
+    setUpdateStatus('更新中…');
+
+    const history = historyJobFor(feed);
+    const renderWarm = renderJobFor(feed);
+
+    history.then(async result => {
+      await applyMergedResult(result);
+      if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus('');
+    }).catch(error => {
+      console.warn('[x-manual-refresh-history]', error?.message || error);
+      if (generation === renderGeneration && serial === refreshSerial) {
+        setUpdateStatus('更新できませんでした（履歴を表示中）', 2600);
+      }
+    });
+
+    renderWarm.then(async result => {
+      await applyMergedResult(result);
+      if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus('');
+    }).catch(error => {
+      console.warn('[x-manual-refresh-render]', error?.message || error);
+    });
+
+    // Pull-to-refresh should release immediately; Render may keep waking in the background for ~1 minute.
+    return Promise.resolve();
+  };
+
+  root.replaceChildren(screen);
+  attachPullToRefresh(screen, pullIndicator, () => requestRefresh());
 
   const history = historyJobFor(feed);
   const renderWarm = renderJobFor(feed);
-  redrawAfterSync(history);
-  redrawAfterSync(renderWarm);
+  watchBackgroundResult(history);
+  watchBackgroundResult(renderWarm);
 
-  // Do not make the screen await Render wake-up. Cached posts stay visible until a merged result arrives.
+  if (refresh) requestRefresh();
+
+  // Cached posts stay visible and are never replaced while Render wakes.
   if (cached?.posts?.length) return;
 
   try {
     const first = await Promise.any([history, renderWarm]);
-    if (generation !== renderGeneration) return;
-    let posts = Array.isArray(first?.posts) ? first.posts : [];
-    if (!posts.length) posts = (await readXPostCache()).posts || [];
-    if (generation !== renderGeneration || !posts.length) return;
-    draw(posts);
+    await applyMergedResult(first);
   } catch {
     if (generation !== renderGeneration) return;
     const fallback = await readXPostCache();
