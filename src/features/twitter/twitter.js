@@ -15,12 +15,32 @@ const X_FEED = Object.freeze({
 let renderGeneration = 0;
 let historyJob = null;
 let renderWarmJob = null;
+let xNavIconObserver = null;
 
 const AUTO_REFRESH_MS = 15 * 60 * 1000;
 const LEGACY_WARM_KEY = `pdv2:twitterWarm:${X_FEED.id}`;
 const HISTORY_TIMEOUT_MS = 5000;
 const RENDER_TIMEOUT_MS = 12000;
+const X_BIRD_NAV_MARKUP = '<path style="fill:currentColor;stroke:none" d="M21.2 6.1c-.7.3-1.4.5-2.2.6.8-.5 1.4-1.2 1.7-2-.8.5-1.7.8-2.6 1A3.7 3.7 0 0 0 11.7 8c0 .3 0 .6.1.9-3.1-.2-5.9-1.7-7.8-4-.4.6-.6 1.3-.6 2.1 0 1.4.7 2.7 1.8 3.4-.6 0-1.2-.2-1.7-.5v.1c0 2 1.4 3.6 3.3 4-.3.1-.7.2-1.1.2-.3 0-.5 0-.8-.1.5 1.6 2 2.8 3.8 2.8A7.5 7.5 0 0 1 4 18.5c-.3 0-.6 0-.9-.1A10.5 10.5 0 0 0 8.8 20c6.8 0 10.6-5.7 10.6-10.6v-.5c.7-.5 1.3-1.1 1.8-1.8z"/>';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function syncXNavBirdIcon() {
+  const svg = document.querySelector('#bottom-nav .nav-item[aria-label="X"] svg');
+  if (!svg || svg.dataset.xReadOnlyBird === '1') return;
+  svg.innerHTML = X_BIRD_NAV_MARKUP;
+  svg.dataset.xReadOnlyBird = '1';
+  svg.style.fill = 'currentColor';
+  svg.style.stroke = 'none';
+}
+
+function installXNavBirdIcon() {
+  syncXNavBirdIcon();
+  if (xNavIconObserver || typeof MutationObserver === 'undefined') return;
+  const nav = document.getElementById('bottom-nav');
+  if (!nav) return;
+  xNavIconObserver = new MutationObserver(() => syncXNavBirdIcon());
+  xNavIconObserver.observe(nav, { childList: true, subtree: true });
+}
 
 function clearLegacyWarmCache() {
   try { localStorage.removeItem(LEGACY_WARM_KEY); } catch {}
@@ -106,6 +126,7 @@ function renderJobFor(feed) {
 }
 
 export async function warmTwitterFeeds({ force = false } = {}) {
+  installXNavBirdIcon();
   clearLegacyWarmCache();
   const cached = await readXPostCache();
   const shouldSyncHistory = force || cacheRefreshDue(cached);
@@ -215,42 +236,97 @@ function youtubeVideoIdFromUrl(value = '') {
   }
 }
 
-function appendLinkified(container, text) {
-  const regex = /(https?:\/\/[^\s<]+)/gi;
-  let last = 0;
-  for (const match of String(text || '').matchAll(regex)) {
-    if (match.index > last) container.append(document.createTextNode(text.slice(last, match.index)));
+function urlsFromText(value = '') {
+  const urls = [];
+  for (const match of String(value || '').matchAll(/https?:\/\/[^\s<]+/gi)) {
     const url = match[0].replace(/[),.!?。、「」]+$/, '');
-    const suffix = match[0].slice(url.length);
-    const anchor = el('a', { class: 'tweet-inline-link', href: url, target: '_blank', rel: 'noopener noreferrer', text: url });
-    anchor.addEventListener('click', event => event.stopPropagation());
-    container.append(anchor);
-    if (suffix) container.append(document.createTextNode(suffix));
-    last = match.index + match[0].length;
+    if (!url) continue;
+    try {
+      const parsed = new URL(url);
+      if (/^https?:$/.test(parsed.protocol)) urls.push(parsed.href);
+    } catch {}
   }
-  if (last < text.length) container.append(document.createTextNode(text.slice(last)));
+  return [...new Set(urls)];
+}
+
+function textWithoutUrls(value = '') {
+  return String(value || '')
+    .replace(/https?:\/\/[^\s<]+/gi, token => token.match(/[),.!?。、「」]+$/)?.[0] || '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+([、。！？!?])/g, '$1')
+    .trim();
+}
+
+function profileUrlForAuthor(author = {}) {
+  const explicit = String(author?.profileUrl || '').trim();
+  if (explicit) return explicit;
+  const handle = String(author?.handle || '').trim().replace(/^@/, '');
+  return handle ? `https://x.com/${encodeURIComponent(handle)}` : '';
+}
+
+function avatarFallbackUrl(author = {}) {
+  const handle = String(author?.handle || '').trim().replace(/^@/, '');
+  return handle ? `https://unavatar.io/x/${encodeURIComponent(handle)}?fallback=false` : '';
 }
 
 function makeTweetAuthorAvatar(author = {}) {
   const label = author.name || author.handle || 'X';
   const fallback = String(label).replace(/^@/, '').slice(0, 1).toUpperCase() || 'X';
-  const avatar = el('div', { class: 'tweet-author-avatar', text: author.avatar ? '' : fallback });
-  if (author.avatar) {
-    const image = el('img', {
-      class: 'tweet-author-avatar-image',
-      src: author.avatar,
-      alt: '',
-      loading: 'lazy',
-      decoding: 'async',
-      referrerpolicy: 'no-referrer'
-    });
-    image.addEventListener('error', () => {
-      image.remove();
-      avatar.textContent = fallback;
-    }, { once: true });
-    avatar.append(image);
+  const sources = [];
+  const primary = String(author.avatar || '').trim();
+  if (primary) {
+    sources.push(primary);
+    if (/_200x200(?=\.[a-z0-9]+(?:$|\?))/i.test(primary)) {
+      sources.push(primary.replace(/_200x200(?=\.[a-z0-9]+(?:$|\?))/i, '_normal'));
+    }
   }
+  const providerFallback = avatarFallbackUrl(author);
+  if (providerFallback && !sources.includes(providerFallback)) sources.push(providerFallback);
+
+  const avatar = el('div', { class: 'tweet-author-avatar', text: sources.length ? '' : fallback });
+  if (!sources.length) return avatar;
+
+  const image = el('img', {
+    class: 'tweet-author-avatar-image',
+    src: sources[0],
+    alt: '',
+    loading: 'lazy',
+    decoding: 'async',
+    referrerpolicy: 'no-referrer'
+  });
+  let sourceIndex = 0;
+  image.addEventListener('error', () => {
+    sourceIndex += 1;
+    if (sourceIndex < sources.length) {
+      image.src = sources[sourceIndex];
+      return;
+    }
+    image.remove();
+    avatar.textContent = fallback;
+  });
+  avatar.append(image);
   return avatar;
+}
+
+function makeTimelineAvatar(author = {}, { main = false } = {}) {
+  const avatar = makeTweetAuthorAvatar(author);
+  if (main) avatar.classList.add('tweet-main-avatar');
+  avatar.style.cssText += ';width:42px;height:42px;min-width:42px;min-height:42px;border-radius:50%;display:grid;place-items:center;background:var(--surface-2);font-size:14px;font-weight:800;line-height:1;overflow:hidden;';
+  return avatar;
+}
+
+function makeProfileAvatarLink(author = {}, { main = false } = {}) {
+  const avatar = makeTimelineAvatar(author, { main });
+  const profileUrl = profileUrlForAuthor(author);
+  if (!profileUrl) return avatar;
+  return el('a', {
+    class: 'tweet-profile-avatar-link',
+    href: profileUrl,
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    'aria-label': `${author.name || author.handle || '投稿者'}のプロフィールを開く`,
+    style: 'width:42px;height:42px;display:block;border-radius:50%;text-decoration:none;color:inherit;'
+  }, [avatar]);
 }
 
 function makeTweetYouTubeCard(videoId) {
@@ -291,6 +367,43 @@ function canonicalPostUrl(item) {
   if (item?.url) return item.url;
   const id = tweetIdOf(item);
   return id ? `https://x.com/i/status/${id}` : 'https://x.com/';
+}
+
+function comparableUrl(value = '') {
+  try {
+    const url = new URL(String(value || '').trim(), location.href);
+    if (url.hostname === 'twitter.com' || url.hostname.endsWith('.twitter.com')) url.hostname = 'x.com';
+    url.hash = '';
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return url.href.toLowerCase();
+  } catch {
+    return String(value || '').trim().toLowerCase();
+  }
+}
+
+function linkCandidatesForPost(item, author = {}) {
+  const excluded = new Set([
+    comparableUrl(canonicalPostUrl(item)),
+    comparableUrl(profileUrlForAuthor(author)),
+    comparableUrl(item?.quote?.url || '')
+  ].filter(Boolean));
+  return [...new Set([...(Array.isArray(item?.links) ? item.links : []), ...urlsFromText(item?.text || '')])]
+    .filter(Boolean)
+    .filter(url => !excluded.has(comparableUrl(url)))
+    .filter(url => {
+      try { return !new URL(url).hostname.toLowerCase().endsWith('twimg.com'); } catch { return true; }
+    });
+}
+
+function openExternalUrl(url) {
+  const target = String(url || '').trim();
+  if (!target) return;
+  const opened = window.open(target, '_blank');
+  if (opened) {
+    try { opened.opener = null; } catch {}
+  } else {
+    window.location.assign(target);
+  }
 }
 
 function proxyVideoUrl(mediaUrl, { probe = false } = {}) {
@@ -560,25 +673,18 @@ function syncTweetImageGrid(grid) {
   if (count === 0) grid.remove();
 }
 
-function authorLabel(author = {}) {
-  const name = String(author.name || '').trim();
-  const handle = String(author.handle || '').trim();
-  if (!name) return handle || 'X';
-  if (!handle || name.includes(handle)) return name;
-  return `${name} (${handle})`;
-}
-
 function makeTweetQuoteCard(quote) {
   if (!quote || typeof quote !== 'object') return null;
   const media = Array.isArray(quote.media) ? quote.media : [];
   const images = media.filter(entry => entry?.type === 'image' && entry.url).map(entry => entry.url).slice(0, 4);
   const videoMedia = media.filter(entry => entry?.type === 'video' && (entry.url || entry.poster)).slice(0, 4);
-  const text = String(quote.text || '').trim();
+  const text = textWithoutUrls(quote.text || '');
   if (!quote.url && !quote.id && !text && !images.length && !videoMedia.length) return null;
 
   const author = quote.author || {};
   const name = String(author.name || '').trim() || String(author.handle || '').trim() || 'X';
   const handle = String(author.handle || '').trim();
+  const profileUrl = profileUrlForAuthor(author);
   const card = el('article', {
     class: 'tweet-quote-card',
     role: 'link',
@@ -587,12 +693,20 @@ function makeTweetQuoteCard(quote) {
     style: 'margin-top:10px;padding:11px;border:1px solid var(--line);border-radius:16px;background:color-mix(in srgb,var(--surface-2) 84%,transparent);cursor:pointer;overflow:hidden;'
   });
 
-  const authorCopy = el('div', { style: 'min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden;' }, [
+  const authorCopyChildren = [
     el('strong', { class: 'tweet-author-name', text: name }),
     handle ? el('span', { class: 'media-meta', text: handle, style: 'margin:0;white-space:nowrap;' }) : null
-  ]);
+  ];
+  const authorCopy = profileUrl
+    ? el('a', {
+        href: profileUrl,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        style: 'min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden;text-decoration:none;color:inherit;'
+      }, authorCopyChildren)
+    : el('div', { style: 'min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden;' }, authorCopyChildren);
   card.append(el('div', { class: 'tweet-author-row', style: 'margin-bottom:7px;' }, [
-    makeTweetAuthorAvatar(author),
+    makeProfileAvatarLink(author),
     authorCopy
   ]));
 
@@ -634,23 +748,17 @@ function makeTweetQuoteCard(quote) {
     card.append(grid);
   }
 
-  const openQuote = () => {
-    const url = canonicalPostUrl(quote);
-    const opened = window.open(url, '_blank');
-    if (opened) {
-      try { opened.opener = null; } catch {}
-    } else {
-      window.location.assign(url);
-    }
-  };
+  const openQuote = () => openExternalUrl(canonicalPostUrl(quote));
   card.addEventListener('click', event => {
     if (event.defaultPrevented) return;
     if (event.target instanceof Element && event.target.closest('button,a,video,iframe')) return;
+    event.stopPropagation();
     openQuote();
   });
   card.addEventListener('keydown', event => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
+    event.stopPropagation();
     openQuote();
   });
   return card;
@@ -662,12 +770,14 @@ function tweetCard(item) {
   const videoMedia = media.filter(entry => entry?.type === 'video' && (entry.url || entry.poster)).slice(0, 4);
   const card = el('article', {
     class: 'tweet-card tweet-timeline-item',
-    style: 'margin:0;padding:12px 0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none;display:grid;grid-template-columns:42px minmax(0,1fr);column-gap:10px;align-items:start;'
+    role: 'link',
+    tabindex: '0',
+    'aria-label': 'X投稿を開く',
+    style: 'margin:0;padding:12px 14px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none;display:grid;grid-template-columns:42px minmax(0,1fr);column-gap:10px;align-items:start;cursor:pointer;'
   });
   const author = item.author || {};
-  const avatar = makeTweetAuthorAvatar(author);
-  avatar.style.cssText += ';width:42px;height:42px;min-width:42px;min-height:42px;border-radius:50%;display:grid;place-items:center;background:var(--surface-2);font-size:14px;font-weight:800;line-height:1;';
-  card.append(avatar);
+  const profileUrl = profileUrlForAuthor(author);
+  card.append(makeProfileAvatarLink(author, { main: true }));
 
   const content = el('div', { class: 'tweet-timeline-content', style: 'min-width:0;' });
   const name = String(author.name || '').trim() || String(author.handle || '').trim() || 'X';
@@ -677,16 +787,31 @@ function tweetCard(item) {
     class: 'tweet-timeline-meta',
     style: 'min-width:0;display:flex;align-items:baseline;gap:4px;overflow:hidden;white-space:nowrap;line-height:1.25;'
   });
-  meta.append(el('strong', {
-    class: 'tweet-timeline-name',
-    text: name,
-    style: 'min-width:0;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:780;color:var(--text-strong);'
-  }));
-  if (handle) meta.append(el('span', {
-    class: 'tweet-timeline-handle',
-    text: handle,
-    style: 'min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:var(--muted);'
-  }));
+  const authorMetaChildren = [
+    el('strong', {
+      class: 'tweet-timeline-name',
+      text: name,
+      style: 'min-width:0;max-width:48%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:780;color:var(--text-strong);'
+    }),
+    handle ? el('span', {
+      class: 'tweet-timeline-handle',
+      text: handle,
+      style: 'min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:var(--muted);'
+    }) : null
+  ];
+  const authorMeta = profileUrl
+    ? el('a', {
+        class: 'tweet-timeline-author-link',
+        href: profileUrl,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        style: 'min-width:0;flex:1 1 auto;display:flex;align-items:baseline;gap:4px;overflow:hidden;text-decoration:none;color:inherit;'
+      }, authorMetaChildren)
+    : el('div', {
+        class: 'tweet-timeline-author-link',
+        style: 'min-width:0;flex:1 1 auto;display:flex;align-items:baseline;gap:4px;overflow:hidden;'
+      }, authorMetaChildren);
+  meta.append(authorMeta);
   if (elapsed) {
     meta.append(
       el('span', { class: 'tweet-timeline-dot', text: '·', style: 'flex:0 0 auto;font-size:14px;color:var(--muted);' }),
@@ -703,14 +828,13 @@ function tweetCard(item) {
   }
   content.append(meta);
 
-  const displayText = String(item.text || '').trim();
+  const displayText = textWithoutUrls(item.text || '');
   if (displayText) {
-    const text = el('div', {
+    content.append(el('div', {
       class: 'tweet-text',
+      text: displayText,
       style: 'margin-top:3px;font-size:15.5px;line-height:1.45;overflow-wrap:anywhere;word-break:normal;'
-    });
-    appendLinkified(text, displayText);
-    content.append(text);
+    }));
   }
 
   const quoteCard = makeTweetQuoteCard(item.quote);
@@ -734,7 +858,9 @@ function tweetCard(item) {
         syncTweetImageGrid(grid);
       }, { once: true });
       button.append(image);
-      button.onclick = () => {
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
         const visibleImages = [...grid.querySelectorAll('.tweet-image-button img')]
           .filter(img => img.complete && img.naturalWidth > 0)
           .map(img => img.currentSrc || img.src)
@@ -742,31 +868,54 @@ function tweetCard(item) {
         const current = image.currentSrc || image.src;
         const index = Math.max(0, visibleImages.indexOf(current));
         if (visibleImages.length) openImageViewer(visibleImages, index);
-      };
+      });
       grid.append(button);
     });
     content.append(grid);
   }
 
-  const youtubeIds = [...new Set((item.links || []).map(youtubeVideoIdFromUrl).filter(Boolean))].slice(0, 3);
+  const candidates = linkCandidatesForPost(item, author);
+  const youtubeIds = [...new Set(candidates.map(youtubeVideoIdFromUrl).filter(Boolean))].slice(0, 3);
   if (youtubeIds.length) {
     const youtubeStack = el('div', { class: 'tweet-youtube-stack' });
     youtubeIds.forEach(videoId => youtubeStack.append(makeTweetYouTubeCard(videoId)));
     content.append(youtubeStack);
   }
 
-  const extra = [...new Set(item.links || [])]
-    .filter(url => !isXUrl(url))
-    .filter(url => !youtubeVideoIdFromUrl(url));
+  const extra = candidates.filter(url => !youtubeVideoIdFromUrl(url));
   if (extra.length) {
     const links = el('div', { class: 'tweet-external-links' });
-    extra.forEach(url => links.append(el('a', {
-      class: 'tweet-external-link', href: url, target: '_blank', rel: 'noopener noreferrer', text: url
-    })));
+    extra.forEach(url => {
+      const label = isXUrl(url) ? 'Xのリンク' : '外部リンク';
+      links.append(el('a', {
+        class: 'tweet-external-link',
+        href: url,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        'aria-label': `${label}を開く`,
+        style: 'display:flex;align-items:center;justify-content:space-between;gap:10px;text-decoration:none;'
+      }, [
+        el('span', { text: label }),
+        el('span', { text: '開く ↗', style: 'color:var(--muted);font-size:11px;white-space:nowrap;' })
+      ]));
+    });
     content.append(links);
   }
 
   card.append(content);
+  const openPost = () => openExternalUrl(canonicalPostUrl(item));
+  card.addEventListener('click', event => {
+    if (event.defaultPrevented) return;
+    if (event.target instanceof Element && event.target.closest('a,button,video,iframe,.tweet-quote-card')) return;
+    if (String(window.getSelection?.()?.toString() || '').trim()) return;
+    openPost();
+  });
+  card.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (event.target instanceof Element && event.target.closest('a,button')) return;
+    event.preventDefault();
+    openPost();
+  });
   return card;
 }
 
@@ -802,6 +951,7 @@ function postTimestamp(item) {
 }
 
 export async function renderTwitter(root, { navigate, refresh = false }) {
+  installXNavBirdIcon();
   const generation = ++renderGeneration;
   const feed = X_FEED;
   clearLegacyWarmCache();
@@ -839,7 +989,7 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   ]);
   const host = el('div', {
     class: 'twitter-feed-host',
-    style: 'display:block;margin:0;padding:0;background:transparent;'
+    style: 'display:block;margin:0 -14px;padding:0;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;overflow:visible;'
   });
   screen.append(updateStatus, pullIndicator, host);
 
@@ -860,6 +1010,17 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
       draw(list);
       return list.length;
     }
+
+    const freshByIdentity = new Map(list.map(item => [postIdentity(item), item]).filter(([identity]) => identity));
+    visiblePosts.forEach((existing, index) => {
+      const fresh = freshByIdentity.get(postIdentity(existing));
+      const freshAvatar = String(fresh?.author?.avatar || '').trim();
+      const currentAvatar = String(existing?.author?.avatar || '').trim();
+      if (!fresh || !freshAvatar || freshAvatar === currentAvatar) return;
+      existing.author = { ...(existing.author || {}), ...(fresh.author || {}) };
+      const avatarNode = host.children[index]?.querySelector('.tweet-main-avatar');
+      if (avatarNode) avatarNode.replaceWith(makeTimelineAvatar(existing.author, { main: true }));
+    });
 
     const known = new Set(visiblePosts.map(postIdentity).filter(Boolean));
     const incoming = [];
