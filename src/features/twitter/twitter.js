@@ -18,7 +18,6 @@ let renderWarmJob = null;
 let xNavIconObserver = null;
 
 const AUTO_REFRESH_MS = 15 * 60 * 1000;
-const LEGACY_WARM_KEY = `pdv2:twitterWarm:${X_FEED.id}`;
 const HISTORY_TIMEOUT_MS = 5000;
 const RENDER_TIMEOUT_MS = 12000;
 const X_BIRD_NAV_MARKUP = '<path style="fill:currentColor;stroke:none" d="M21.2 6.1c-.7.3-1.4.5-2.2.6.8-.5 1.4-1.2 1.7-2-.8.5-1.7.8-2.6 1A3.7 3.7 0 0 0 11.7 8c0 .3 0 .6.1.9-3.1-.2-5.9-1.7-7.8-4-.4.6-.6 1.3-.6 2.1 0 1.4.7 2.7 1.8 3.4-.6 0-1.2-.2-1.7-.5v.1c0 2 1.4 3.6 3.3 4-.3.1-.7.2-1.1.2-.3 0-.5 0-.8-.1.5 1.6 2 2.8 3.8 2.8A7.5 7.5 0 0 1 4 18.5c-.3 0-.6 0-.9-.1A10.5 10.5 0 0 0 8.8 20c6.8 0 10.6-5.7 10.6-10.6v-.5c.7-.5 1.3-1.1 1.8-1.8z"/>';
@@ -40,10 +39,6 @@ function installXNavBirdIcon() {
   if (!nav) return;
   xNavIconObserver = new MutationObserver(() => syncXNavBirdIcon());
   xNavIconObserver.observe(nav, { childList: true, subtree: true });
-}
-
-function clearLegacyWarmCache() {
-  try { localStorage.removeItem(LEGACY_WARM_KEY); } catch {}
 }
 
 function cacheRefreshDue(cache) {
@@ -127,7 +122,6 @@ function renderJobFor(feed) {
 
 export async function warmTwitterFeeds({ force = false } = {}) {
   installXNavBirdIcon();
-  clearLegacyWarmCache();
   const cached = await readXPostCache();
   const shouldSyncHistory = force || cacheRefreshDue(cached);
 
@@ -954,7 +948,6 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   installXNavBirdIcon();
   const generation = ++renderGeneration;
   const feed = X_FEED;
-  clearLegacyWarmCache();
 
   let cached = { posts: [], fetchedAt: 0 };
   try {
@@ -1011,6 +1004,12 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
       return list.length;
     }
 
+    const scrollTop = Math.max(0, Number(window.scrollY || document.scrollingElement?.scrollTop || 0));
+    const scrollAnchor = scrollTop > 1
+      ? [...host.children].find(child => child.getBoundingClientRect().bottom > 0)
+      : null;
+    const scrollAnchorTop = scrollAnchor?.getBoundingClientRect().top ?? 0;
+
     const freshByIdentity = new Map(list.map(item => [postIdentity(item), item]).filter(([identity]) => identity));
     visiblePosts.forEach((existing, index) => {
       const fresh = freshByIdentity.get(postIdentity(existing));
@@ -1043,6 +1042,11 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     while (visiblePosts.length > 100) {
       visiblePosts.pop();
       host.lastElementChild?.remove();
+    }
+
+    if (incoming.length && scrollAnchor?.isConnected) {
+      const delta = scrollAnchor.getBoundingClientRect().top - scrollAnchorTop;
+      if (Number.isFinite(delta) && Math.abs(delta) > 0.5) window.scrollBy(0, delta);
     }
     return incoming.length;
   };
