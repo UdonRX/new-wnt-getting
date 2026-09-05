@@ -236,7 +236,9 @@ function mountShortsPlayer({queue,index=0}={}) {
   const myGeneration=generation;
   let current=clampIndex(index,queue);
   let advancing=false;
-  let fallbackMode=false;
+  let ytApi=null;
+  let retryTimer=null;
+  let holderSerial=0;
   const overlayRoot=document.getElementById('overlay-root')||document.body;
   const overlay=el('section',{class:'youtube-shorts-player',role:'dialog','aria-modal':'true','aria-label':'YouTube Shortsプレーヤー'});
   shortsOverlay=overlay;
@@ -246,8 +248,6 @@ function mountShortsPlayer({queue,index=0}={}) {
   const channel=el('span',{class:'youtube-shorts-channel'});
   const top=el('header',{class:'youtube-shorts-top'},[close,el('div',{class:'youtube-shorts-meta'},[title,channel]),el('span',{class:'youtube-shorts-top-spacer','aria-hidden':'true'})]);
   const stage=el('div',{class:'youtube-shorts-stage'});
-  const holderId=`yt-v2160-shorts-${Date.now()}`;
-  stage.append(el('div',{id:holderId,class:'youtube-shorts-embed'}));
   const prev=el('button',{class:'youtube-shorts-action',type:'button',text:'‹ 前'});
   const next=el('button',{class:'youtube-shorts-action',type:'button',text:'次 ›'});
   const external=el('a',{class:'youtube-shorts-action youtube-shorts-external',target:'_blank',rel:'noopener noreferrer',text:'YouTubeで開く ↗'});
@@ -260,40 +260,57 @@ function mountShortsPlayer({queue,index=0}={}) {
     external.href=`https://www.youtube.com/shorts/${encodeURIComponent(item.videoId||'')}`;
     prev.disabled=current<=0; next.disabled=current>=queue.length-1;
   };
-  const useFallback=reason=>{
-    if(myGeneration!==generation||!overlay.isConnected) return;
-    console.warn('[youtube shorts] iframe fallback',youtubeErrorMessage(reason));
-    clearPlaybackNotice(stage);
-    try{player?.destroy?.();}catch{}
-    player=null;
-    fallbackMode=true;
-    mountIframeFallback(stage,queue[current],{shorts:true});
-  };
-  const loadIndex=nextIndex=>{
-    if(nextIndex<0||nextIndex>=queue.length) return false;
-    current=nextIndex; advancing=false; updateUi();
-    clearPlaybackNotice(stage);
-    const item=queue[current];
-    if(!fallbackMode&&player?.loadVideoById){try{player.loadVideoById({videoId:item.videoId,startSeconds:0});player.playVideo?.();}catch(error){useFallback(error);}}
-    else if(fallbackMode) mountIframeFallback(stage,item,{shorts:true});
-    return true;
-  };
   const advance=()=>{
     if(advancing||current>=queue.length-1) return;
     advancing=true;
     endedTimer=setTimeout(()=>{endedTimer=null;if(!loadIndex(current+1))advancing=false;},120);
   };
-  prev.onclick=()=>loadIndex(current-1); next.onclick=()=>loadIndex(current+1); updateUi();
-  ensureApi().then(YT=>{
-    if(myGeneration!==generation||!overlay.isConnected) return;
+  function retryInternalPlayer(YT,error,attempt){
+    if(myGeneration!==generation||!overlay.isConnected)return;
+    if(attempt<2){
+      if(retryTimer)clearTimeout(retryTimer);
+      retryTimer=setTimeout(()=>{retryTimer=null;startInternalPlayer(YT,attempt+1)},220*(attempt+1));
+      return;
+    }
+    console.warn('[youtube shorts] internal player failed',youtubeErrorMessage(error));
+    renderPlaybackError(stage,youtubeErrorMessage(error));
+  }
+  function startInternalPlayer(YT,attempt=0){
+    if(myGeneration!==generation||!overlay.isConnected)return;
+    if(retryTimer){clearTimeout(retryTimer);retryTimer=null}
+    clearPlaybackNotice(stage);
+    if(endedMonitor){clearInterval(endedMonitor);endedMonitor=null}
+    try{player?.destroy?.()}catch{}
+    player=null;
+    const holderId=`yt-v2160-shorts-${Date.now()}-${++holderSerial}`;
+    stage.replaceChildren(el('div',{id:holderId,class:'youtube-shorts-embed'}));
     try{
       player=new YT.Player(holderId,{videoId:queue[current].videoId,playerVars:{autoplay:1,playsinline:1,rel:0,cc_load_policy:0,controls:1,modestbranding:1,origin:location.origin},events:{
         onReady:event=>{try{event.target.getIframe?.().setAttribute('referrerpolicy','strict-origin-when-cross-origin');event.target.playVideo();}catch{} endedMonitor=setInterval(()=>{if(myGeneration!==generation||!overlay.isConnected)return;try{if(player?.getPlayerState?.()===YT.PlayerState.ENDED)advance();}catch{}},650);},
         onStateChange:event=>{if(event.data===YT.PlayerState.PLAYING)advancing=false;if(event.data===YT.PlayerState.ENDED)advance();},
-        onError:event=>{const code=Number(event?.data||0);if(code===5||code===153)useFallback(event);else if(code===101||code===150)renderExternalPlaybackFallback(stage,queue[current],{shorts:true});else renderPlaybackError(stage,youtubeErrorMessage(event));}
+        onError:event=>{const code=Number(event?.data||0);if(code===5||code===153)retryInternalPlayer(YT,event,attempt);else if(code===101||code===150)renderExternalPlaybackFallback(stage,queue[current],{shorts:true});else renderPlaybackError(stage,youtubeErrorMessage(event));}
       }});
-    }catch(error){useFallback(error);}
-  }).catch(error=>useFallback(error));
+    }catch(error){retryInternalPlayer(YT,error,attempt)}
+  }
+  const loadIndex=nextIndex=>{
+    if(nextIndex<0||nextIndex>=queue.length) return false;
+    current=nextIndex; advancing=false; updateUi();
+    clearPlaybackNotice(stage);
+    const item=queue[current];
+    if(player?.loadVideoById){
+      try{player.loadVideoById({videoId:item.videoId,startSeconds:0});player.playVideo?.();}
+      catch(error){if(ytApi)startInternalPlayer(ytApi,0);else renderPlaybackError(stage,youtubeErrorMessage(error));}
+    }else if(ytApi){
+      startInternalPlayer(ytApi,0);
+    }
+    return true;
+  };
+  prev.onclick=()=>loadIndex(current-1); next.onclick=()=>loadIndex(current+1); updateUi();
+  ensureApi().then(YT=>{
+    if(myGeneration!==generation||!overlay.isConnected) return;
+    ytApi=YT;
+    startInternalPlayer(YT,0);
+  }).catch(error=>renderPlaybackError(stage,youtubeErrorMessage(error)));
   return {close:cleanupYouTubePlayer};
 }
 
