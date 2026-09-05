@@ -3,7 +3,8 @@ import { el, showToast } from '../../shared/dom.js';
 import { iconSvg } from '../../shared/icons.js';
 import { load, save } from '../../shared/storage.js';
 import { openInstagramAccountManager } from './instagram-accounts.js';
-import { renderInstagramTimeline } from './instagram-timeline.js?v=2197igcache1';
+import { renderInstagramTimeline } from './instagram-timeline.js';
+import { disposeInstagramImageFastPath, installInstagramImageFastPath } from './instagram-image-fast.js';
 
 export { warmTwitterFeeds };
 
@@ -88,6 +89,7 @@ function enhanceXChrome(root, options, generation) {
 }
 
 export async function renderSNS(root, options = {}) {
+  disposeInstagramImageFastPath(root);
   const generation = ++snsRenderGeneration;
   const mode = currentMode(options.snsMode);
   save(SNS_MODE_KEY, mode);
@@ -98,9 +100,12 @@ export async function renderSNS(root, options = {}) {
       isCurrent: value => value === snsRenderGeneration,
       modeSegment: makeModeSegment(root, options, 'instagram')
     });
+    installInstagramImageFastPath(root);
     return;
   }
 
+  // Xは既存renderTwitterをそのまま使う。DOM監視はX本体が描画されるまでの一回だけに限定し、
+  // SNS用タイトル/ボタンの書き換えをMutationObserver自身が再検知し続けないようにする。
   let observer = null;
   const enhanceOnce = () => {
     const done = enhanceXChrome(root, options, generation);
