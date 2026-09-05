@@ -1,5 +1,5 @@
-// v2.19.9: Instagram画像は表示直前に先読みし、投稿/スライド単位で実画像レスポンスを端末へ保持する。
-const CACHE_NAME='personal-dashboard-v2-19-9-sns-imagefast2';
+// v2.19.9: Instagram多アカウント安定化と全追加シートの固定×を新しいSW世代で再配布する。
+const CACHE_NAME='personal-dashboard-v2-19-9-sns-multi-stability1';
 const INSTAGRAM_MEDIA_CACHE='pdv2-instagram-media-v1';
 const INSTAGRAM_MEDIA_PREFIX='/__pdv2_ig_media/';
 const INSTAGRAM_MEDIA_MAX_ENTRIES=360;
@@ -8,12 +8,12 @@ const APP_SHELL=[
   '/','/index.html','/manifest.webmanifest',
   '/src/styles/tokens.css','/src/styles/base.css','/src/styles/navigation.css','/src/styles/screens.css','/src/styles/app.css','/src/styles/motion.css','/src/styles/v2181.css','/src/styles/v2182.css','/src/styles/v2189.css','/src/styles/v2194.css','/src/styles/v2195.css',
   '/src/bootstrap-v2195-summary.js','/src/main.js','/src/runtime-v2182.js','/src/runtime-v2184.js','/src/runtime-v2185.js','/src/runtime-v2192.js','/src/runtime-v2195.js','/src/app/router.js','/src/app/store.js',
-  '/src/shared/components.js','/src/shared/dom.js','/src/shared/gestures.js','/src/shared/icons.js','/src/shared/playing-title.js','/src/shared/reader-debug.js','/src/shared/rss.js','/src/shared/storage.js','/src/shared/time.js',
+  '/src/shared/components.js','/src/shared/dom.js','/src/shared/sheet-close-global.js','/src/shared/gestures.js','/src/shared/icons.js','/src/shared/playing-title.js','/src/shared/reader-debug.js','/src/shared/rss.js','/src/shared/storage.js','/src/shared/time.js',
   '/src/features/home/home.js','/src/features/weather/weather.js','/src/features/weather/weather-api.js','/src/features/weather/weather-icons.js','/src/features/weather/weather-sources.js',
   '/src/features/reader/reader.js','/src/features/reader/reader-data.js','/src/features/reader/reader-flow.js','/src/features/reader/reader-focus.js','/src/features/reader/reader-rank.js','/src/features/reader/summary-request-coordinator.js','/src/features/reader/summary-fetch-gate.js',
   '/src/features/media/media.js','/src/features/youtube/youtube.js','/src/features/youtube/youtube-player.js',
   '/src/features/twitch/twitch.js','/src/features/twitch/twitch-player.js','/src/features/twitch/twitch-chat.js',
-  '/src/features/twitter/twitter.js','/src/features/twitter/sns.js','/src/features/twitter/instagram-accounts.js','/src/features/twitter/instagram-timeline.js','/src/features/twitter/instagram-video.js','/src/features/twitter/instagram-cache.js','/src/features/twitter/instagram-image-fast.js','/src/features/twitter/image-viewer.js','/src/features/wikipedia/wikipedia.js','/src/features/settings/settings.js',
+  '/src/features/twitter/twitter.js','/src/features/twitter/sns.js','/src/features/twitter/instagram-accounts.js','/src/features/twitter/instagram-timeline.js','/src/features/twitter/instagram-video.js','/src/features/twitter/instagram-cache.js','/src/features/twitter/instagram-image-fast.js','/src/features/twitter/instagram-stability.js','/src/features/twitter/image-viewer.js','/src/features/wikipedia/wikipedia.js','/src/features/settings/settings.js',
   '/shared/paper-creative-keywords.js','/icons/icon-192.png','/icons/icon-512.png'
 ];
 function canonicalRequest(request){try{const url=new URL(request.url);return new Request(new URL(url.pathname,self.location.origin).href,{method:'GET',headers:request.headers,credentials:request.credentials,mode:request.mode==='navigate'?'same-origin':request.mode});}catch{return null;}}

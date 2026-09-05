@@ -5,6 +5,7 @@ import { load, save } from '../../shared/storage.js';
 import { openInstagramAccountManager } from './instagram-accounts.js';
 import { renderInstagramTimeline } from './instagram-timeline.js';
 import { disposeInstagramImageFastPath, installInstagramImageFastPath } from './instagram-image-fast.js';
+import { disposeInstagramStability, installInstagramStability } from './instagram-stability.js';
 
 export { warmTwitterFeeds };
 
@@ -90,11 +91,13 @@ function enhanceXChrome(root, options, generation) {
 
 export async function renderSNS(root, options = {}) {
   disposeInstagramImageFastPath(root);
+  disposeInstagramStability(root);
   const generation = ++snsRenderGeneration;
   const mode = currentMode(options.snsMode);
   save(SNS_MODE_KEY, mode);
 
   if (mode === 'instagram') {
+    installInstagramStability(root);
     renderInstagramTimeline(root, options, {
       generation,
       isCurrent: value => value === snsRenderGeneration,
