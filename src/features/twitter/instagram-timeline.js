@@ -5,8 +5,18 @@ import { relativeTime } from '../../shared/time.js';
 import { openImageViewer } from './image-viewer.js';
 import { instagramAccounts, instagramProfileUrl, openInstagramAccountManager } from './instagram-accounts.js';
 import { makeInstagramVideoLauncher } from './instagram-video.js';
+import {
+  deleteInstagramCachesExcept,
+  isInstagramCacheFresh,
+  readInstagramCaches,
+  writeInstagramCache
+} from './instagram-cache.js';
 
 const INSTAGRAM_PAGE_SIZE = 12;
+const CACHE_FRESH_MS = 5 * 60 * 1000;
+const QUALITY_BATCH_SIZE = 6;
+const qualityQueue = new Map();
+let qualityTimer = 0;
 
 function openExternal(url) {
   const target = String(url || '').trim();
@@ -17,6 +27,51 @@ function openExternal(url) {
   } else {
     window.location.assign(target);
   }
+}
+
+function itemKey(item) {
+  return String(item?.id || `${item?.account?.username || ''}:${item?.shortcode || ''}`).trim();
+}
+
+function itemTimestamp(item) {
+  return Number(item?.timestamp || 0);
+}
+
+function mergeMediaQuality(freshMedia, cachedMedia) {
+  const fresh = Array.isArray(freshMedia) ? freshMedia : [];
+  const cached = Array.isArray(cachedMedia) ? cachedMedia : [];
+  return fresh.map((entry, index) => {
+    const old = cached[index] || {};
+    return {
+      ...entry,
+      highResUrl: entry?.highResUrl || old?.highResUrl || '',
+      width: entry?.width || old?.width || null,
+      height: entry?.height || old?.height || null,
+      qualityResolvedAt: entry?.qualityResolvedAt || old?.qualityResolvedAt || null
+    };
+  });
+}
+
+function mergeItemPreferQuality(fresh, cached) {
+  if (!cached) return fresh;
+  return {
+    ...cached,
+    ...fresh,
+    account: { ...(cached.account || {}), ...(fresh.account || {}) },
+    media: mergeMediaQuality(fresh.media, cached.media)
+  };
+}
+
+function dedupeSort(items) {
+  const seen = new Set();
+  return (Array.isArray(items) ? items : [])
+    .filter(item => {
+      const key = itemKey(item);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
 }
 
 function relativeInstagramTime(item) {
@@ -43,13 +98,51 @@ function absoluteInstagramTime(item) {
   }
 }
 
-function mediaGallery(item) {
-  const media = Array.isArray(item?.media) ? item.media.filter(entry => entry?.url || entry?.posterUrl) : [];
-  if (!media.length) return null;
+function qualityResolved(item) {
+  const media = Array.isArray(item?.media) ? item.media : [];
+  const images = media.filter(entry => entry?.kind !== 'video' && (entry?.url || entry?.posterUrl));
+  return !images.length || images.every(entry => Boolean(entry?.highResUrl));
+}
 
-  const imageUrls = media
-    .filter(entry => entry.kind !== 'video' && (entry.url || entry.posterUrl))
-    .map(entry => entry.url || entry.posterUrl);
+async function flushQualityQueue() {
+  qualityTimer = 0;
+  const batch = [...qualityQueue.entries()].slice(0, QUALITY_BATCH_SIZE);
+  if (!batch.length) return;
+  batch.forEach(([shortcode]) => qualityQueue.delete(shortcode));
+  const shortcodes = batch.map(([shortcode]) => shortcode);
+  const query = new URLSearchParams({ shortcodes: shortcodes.join(',') });
+
+  try {
+    const response = await fetch(`/api/instagram-image?${query}`, {
+      headers: { Accept: 'application/json' },
+      cache: 'force-cache',
+      signal: AbortSignal.timeout(12000)
+    });
+    const data = await response.json().catch(() => ({}));
+    const resolved = data?.resolved || {};
+    batch.forEach(([shortcode, jobs]) => {
+      const result = resolved[shortcode];
+      if (!result || !Array.isArray(result.images) || !result.images.length) return;
+      jobs.forEach(job => job.apply(result.images));
+    });
+  } catch (error) {
+    console.warn('[instagram-image-quality]', error?.message || error);
+  } finally {
+    if (qualityQueue.size && !qualityTimer) qualityTimer = window.setTimeout(flushQualityQueue, 120);
+  }
+}
+
+function enqueueQualityResolution(shortcode, apply) {
+  if (!shortcode) return;
+  const jobs = qualityQueue.get(shortcode) || [];
+  jobs.push({ apply });
+  qualityQueue.set(shortcode, jobs);
+  if (!qualityTimer) qualityTimer = window.setTimeout(flushQualityQueue, 70);
+}
+
+function mediaGallery(item, onQualityChanged) {
+  const media = Array.isArray(item?.media) ? item.media.filter(entry => entry?.url || entry?.posterUrl || entry?.highResUrl) : [];
+  if (!media.length) return null;
 
   const wrap = el('div', {
     class: 'instagram-media-gallery',
@@ -65,21 +158,33 @@ function mediaGallery(item) {
     });
 
     if (entry.kind === 'video') {
-      slide.append(makeInstagramVideoLauncher(item, entry));
+      slide.append(makeInstagramVideoLauncher(item, {
+        ...entry,
+        posterUrl: entry.highResUrl || entry.posterUrl || entry.url || ''
+      }));
     } else {
-      const src = entry.url || entry.posterUrl;
+      const originalSrc = entry.url || entry.posterUrl || '';
+      const src = entry.highResUrl || originalSrc;
       const image = el('img', {
         src,
         alt: 'Instagram投稿画像',
         loading: 'lazy',
         decoding: 'async',
-        style: 'display:block;width:100%;height:auto;max-height:68vh;object-fit:contain;background:#0d0d0f;'
+        'data-instagram-media-index': String(index),
+        style: 'display:block;width:100%;height:auto;max-height:68vh;object-fit:contain;background:#0d0d0f;image-rendering:auto;'
       });
+      image.addEventListener('error', () => {
+        if (entry.highResUrl && originalSrc && image.src !== originalSrc) image.src = originalSrc;
+      }, { once: true });
       image.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
-        const currentIndex = Math.max(0, imageUrls.indexOf(src));
-        if (imageUrls.length) openImageViewer(imageUrls, currentIndex);
+        const currentUrls = media
+          .filter(value => value.kind !== 'video' && (value.highResUrl || value.url || value.posterUrl))
+          .map(value => value.highResUrl || value.url || value.posterUrl);
+        const currentSrc = entry.highResUrl || originalSrc;
+        const currentIndex = Math.max(0, currentUrls.indexOf(currentSrc));
+        if (currentUrls.length) openImageViewer(currentUrls, currentIndex);
       });
       slide.append(image);
     }
@@ -94,6 +199,38 @@ function mediaGallery(item) {
   });
 
   wrap.append(strip);
+
+  if (!qualityResolved(item) && item?.shortcode) {
+    const resolve = () => enqueueQualityResolution(item.shortcode, images => {
+      let changed = false;
+      media.forEach((entry, index) => {
+        if (entry.kind === 'video') return;
+        const resolved = images[index] || (images.length === 1 ? images[0] : null);
+        const highResUrl = String(resolved?.url || '').trim();
+        if (!highResUrl || highResUrl === entry.highResUrl) return;
+        entry.highResUrl = highResUrl;
+        entry.width = resolved?.width || entry.width || null;
+        entry.height = resolved?.height || entry.height || null;
+        entry.qualityResolvedAt = Date.now();
+        const image = wrap.querySelector(`img[data-instagram-media-index="${index}"]`);
+        if (image) image.src = highResUrl;
+        changed = true;
+      });
+      if (changed) onQualityChanged?.(item);
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(entries => {
+        if (!entries.some(entry => entry.isIntersecting)) return;
+        observer.disconnect();
+        resolve();
+      }, { rootMargin: '1100px 0px' });
+      observer.observe(wrap);
+    } else {
+      resolve();
+    }
+  }
+
   return wrap;
 }
 
@@ -127,7 +264,7 @@ function makeAccountAvatar(account, username, profileUrl) {
   return avatarLink;
 }
 
-function instagramCard(item) {
+function instagramCard(item, onQualityChanged) {
   const username = String(item?.account?.username || '').trim();
   const profileUrl = item?.account?.profileUrl || instagramProfileUrl(username);
   const permalink = item?.permalink || profileUrl;
@@ -138,11 +275,11 @@ function instagramCard(item) {
     role: 'link',
     tabindex: '0',
     'aria-label': 'Instagram投稿を開く',
+    'data-instagram-item-key': itemKey(item),
     style: 'margin:0;padding:12px 14px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none;display:grid;grid-template-columns:42px minmax(0,1fr);column-gap:10px;align-items:start;cursor:pointer;'
   });
 
   const avatarLink = makeAccountAvatar(item?.account, username, profileUrl);
-
   const content = el('div', { style: 'min-width:0;' });
   const meta = el('div', {
     style: 'min-width:0;display:flex;align-items:center;gap:4px;overflow:hidden;white-space:nowrap;line-height:1.25;'
@@ -184,7 +321,7 @@ function instagramCard(item) {
     }));
   }
 
-  const gallery = mediaGallery(item);
+  const gallery = mediaGallery(item, onQualityChanged);
   if (gallery) content.append(gallery);
 
   card.append(avatarLink, content);
@@ -203,14 +340,6 @@ function instagramCard(item) {
     openPost();
   });
   return card;
-}
-
-function itemKey(item) {
-  return String(item?.id || `${item?.account?.username || ''}:${item?.shortcode || ''}`).trim();
-}
-
-function itemTimestamp(item) {
-  return Number(item?.timestamp || 0);
 }
 
 function normalizeResponseItem(item, username, responseAccount) {
@@ -247,7 +376,6 @@ async function fetchInstagramAccount(username, cursor = '') {
   if (!response.ok || !data.ok || !Array.isArray(data.items)) {
     throw new Error(data.error || `Instagram取得 HTTP ${response.status}`);
   }
-
   const responseAccount = data.account || { username, profileUrl: instagramProfileUrl(username) };
   return {
     username,
@@ -262,12 +390,14 @@ async function fetchInstagramAccount(username, cursor = '') {
 }
 
 export function renderInstagramTimeline(root, options, { generation, isCurrent, modeSegment }) {
-  let refreshNow = () => {};
   let refreshSerial = 0;
   let loadMoreBusy = false;
   let visibleItems = [];
   let pageCursors = new Map();
+  let cacheRecords = new Map();
+  let cacheQueues = new Map();
   let sentinelObserver = null;
+  let disposed = false;
 
   const screen = el('section', { class: 'screen sns-screen instagram-screen' });
   const header = topbar('SNS', {
@@ -278,14 +408,14 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
         title: 'Instagramアカウントを追加・管理',
         onClick: () => openInstagramAccountManager({
           onChanged: () => {
-            if (isCurrent(generation)) refreshNow();
+            if (isCurrent(generation)) refreshNow(true);
           }
         })
       },
       {
         html: iconSvg('refresh', { size: 20 }),
         title: '更新',
-        onClick: () => refreshNow()
+        onClick: () => refreshNow(true)
       },
       {
         html: iconSvg('settings', { size: 20 }),
@@ -317,52 +447,69 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
   root.replaceChildren(screen);
 
   const activeCursorEntries = () => [...pageCursors.entries()].filter(([, cursor]) => Boolean(cursor));
+  const cachedQueueCount = () => [...cacheQueues.values()].reduce((sum, items) => sum + (Array.isArray(items) ? items.length : 0), 0);
+  const hasMore = () => cachedQueueCount() > 0 || activeCursorEntries().length > 0;
+
+  const persistQualityItem = async updatedItem => {
+    if (disposed) return;
+    const username = String(updatedItem?.account?.username || '').toLowerCase();
+    const record = cacheRecords.get(username);
+    if (!record) return;
+    const key = itemKey(updatedItem);
+    const items = record.items.map(item => itemKey(item) === key ? mergeItemPreferQuality(updatedItem, item) : item);
+    const next = { ...record, items, updatedAt: Date.now() };
+    cacheRecords.set(username, next);
+    await writeInstagramCache(next);
+  };
+
+  const makeCard = item => instagramCard(item, persistQualityItem);
+
   const updateSentinel = (text = '') => {
-    const hasMore = activeCursorEntries().length > 0;
     sentinel.textContent = text || '';
-    sentinel.style.display = hasMore || text ? 'block' : 'none';
-    if (!hasMore && sentinelObserver) sentinelObserver.disconnect();
+    sentinel.style.display = hasMore() || text ? 'block' : 'none';
+    if (!hasMore() && sentinelObserver) sentinelObserver.disconnect();
   };
 
   const replaceItems = items => {
-    const seen = new Set();
-    visibleItems = (Array.isArray(items) ? items : [])
-      .filter(item => {
-        const key = itemKey(item);
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
-    listHost.replaceChildren(...visibleItems.map(instagramCard));
+    visibleItems = dedupeSort(items);
+    listHost.replaceChildren(...visibleItems.map(makeCard));
   };
 
   const mergeItems = items => {
     const known = new Set(visibleItems.map(itemKey).filter(Boolean));
-    const incoming = (Array.isArray(items) ? items : [])
-      .filter(item => {
-        const key = itemKey(item);
-        if (!key || known.has(key)) return false;
-        known.add(key);
-        return true;
-      })
-      .sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
-
+    const incoming = dedupeSort(items).filter(item => {
+      const key = itemKey(item);
+      if (!key || known.has(key)) return false;
+      known.add(key);
+      return true;
+    });
     for (const item of incoming) {
       const timestamp = itemTimestamp(item);
       let index = visibleItems.findIndex(existing => itemTimestamp(existing) < timestamp);
       if (index < 0) index = visibleItems.length;
-      listHost.insertBefore(instagramCard(item), listHost.children[index] || null);
+      listHost.insertBefore(makeCard(item), listHost.children[index] || null);
       visibleItems.splice(index, 0, item);
     }
     return incoming.length;
   };
 
+  const syncQueue = username => {
+    const record = cacheRecords.get(username);
+    if (!record) {
+      cacheQueues.set(username, []);
+      return;
+    }
+    const visible = new Set(visibleItems.map(itemKey));
+    cacheQueues.set(username, record.items.filter(item => !visible.has(itemKey(item))));
+  };
+
+  const syncAllQueues = accounts => accounts.forEach(syncQueue);
+
   const observeSentinel = loadMore => {
     sentinelObserver?.disconnect();
-    if (!('IntersectionObserver' in window) || !activeCursorEntries().length) return;
+    if (!('IntersectionObserver' in window) || !hasMore()) return;
     sentinelObserver = new IntersectionObserver(entries => {
-      if (!screen.isConnected) {
+      if (!screen.isConnected || disposed) {
         sentinelObserver?.disconnect();
         return;
       }
@@ -371,87 +518,132 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     sentinelObserver.observe(sentinel);
   };
 
+  const persistNetworkPage = async (username, result, { initial = false } = {}) => {
+    const old = cacheRecords.get(username) || { username, items: [], nextCursor: '', checkedAt: 0, updatedAt: 0 };
+    const oldByKey = new Map(old.items.map(item => [itemKey(item), item]));
+    const fresh = result.items.map(item => mergeItemPreferQuality(item, oldByKey.get(itemKey(item))));
+    const combined = dedupeSort([...fresh, ...old.items]);
+    const oldHadDeepHistory = old.items.length > result.items.length && Boolean(old.nextCursor);
+    const nextCursor = initial && oldHadDeepHistory ? old.nextCursor : (result.nextCursor || '');
+    const next = {
+      username,
+      items: combined,
+      nextCursor,
+      checkedAt: initial ? Date.now() : old.checkedAt,
+      updatedAt: Date.now()
+    };
+    cacheRecords.set(username, next);
+    pageCursors.set(username, nextCursor);
+    await writeInstagramCache(next);
+    return { old, next, fresh };
+  };
+
+  const revealCachedPage = () => {
+    const incoming = [];
+    for (const [username, queue] of cacheQueues.entries()) {
+      if (!Array.isArray(queue) || !queue.length) continue;
+      const page = queue.splice(0, INSTAGRAM_PAGE_SIZE);
+      incoming.push(...page);
+      cacheQueues.set(username, queue);
+    }
+    if (!incoming.length) return 0;
+    return mergeItems(incoming);
+  };
+
   const loadMore = async () => {
-    if (loadMoreBusy || !isCurrent(generation) || !screen.isConnected) return;
+    if (loadMoreBusy || !isCurrent(generation) || !screen.isConnected || disposed) return;
+
+    const cachedAdded = revealCachedPage();
+    if (cachedAdded) {
+      updateSentinel();
+      observeSentinel(loadMore);
+      return;
+    }
+
     const entries = activeCursorEntries();
     if (!entries.length) return updateSentinel();
     loadMoreBusy = true;
     updateSentinel('過去の投稿を読み込み中…');
 
     const results = await Promise.allSettled(entries.map(([username, cursor]) => fetchInstagramAccount(username, cursor)));
-    if (!isCurrent(generation) || !screen.isConnected) return;
+    if (!isCurrent(generation) || !screen.isConnected || disposed) return;
 
     const incoming = [];
-    entries.forEach(([username], index) => {
+    for (let index = 0; index < entries.length; index += 1) {
+      const [username] = entries[index];
       const result = results[index];
       if (result.status === 'fulfilled') {
         incoming.push(...result.value.items);
-        pageCursors.set(username, result.value.nextCursor || '');
+        await persistNetworkPage(username, result.value, { initial: false });
       } else {
         console.warn('[instagram-load-more]', username, result.reason?.message || result.reason);
         pageCursors.set(username, '');
+        const old = cacheRecords.get(username);
+        if (old) {
+          const next = { ...old, nextCursor: '', updatedAt: Date.now() };
+          cacheRecords.set(username, next);
+          writeInstagramCache(next).catch(() => {});
+        }
       }
-    });
+    }
 
     const added = mergeItems(incoming);
+    syncAllQueues(entries.map(([username]) => username));
     loadMoreBusy = false;
     updateSentinel();
     if (added) {
       status.textContent = `${visibleItems.length}投稿を表示中`;
       setTimeout(() => {
         if (status.isConnected && isCurrent(generation) && !loadMoreBusy) status.textContent = '';
-      }, 1400);
+      }, 1200);
     }
     observeSentinel(loadMore);
   };
 
-  const refreshFeed = async () => {
-    const serial = ++refreshSerial;
-    sentinelObserver?.disconnect();
-    pageCursors = new Map();
-    visibleItems = [];
-    loadMoreBusy = false;
-    const accounts = instagramAccounts();
-    status.textContent = '';
-    if (!accounts.length) {
+  const fetchInitialTargets = async (accounts, targets, serial, hadCache) => {
+    if (!targets.length) return;
+    if (!hadCache) {
       listHost.replaceChildren(el('div', {
-        style: 'margin:14px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--muted);line-height:1.55;'
+        class: 'twitter-wake-status',
+        style: 'margin:12px 14px;'
       }, [
-        el('strong', { text: 'Instagramアカウントを登録してください', style: 'display:block;color:var(--text-strong);margin-bottom:4px;' }),
-        el('span', { text: '上部の＋から @username / username / profile URL を追加できます。' })
+        el('strong', { text: `${targets.length}アカウントを取得中…` }),
+        el('span', { text: `初回だけ最新${INSTAGRAM_PAGE_SIZE}投稿を読み込みます` })
       ]));
-      updateSentinel();
-      return;
+      status.textContent = '更新中…';
     }
 
-    listHost.replaceChildren(el('div', {
-      class: 'twitter-wake-status',
-      style: 'margin:12px 14px;'
-    }, [
-      el('strong', { text: `${accounts.length}アカウントを取得中…` }),
-      el('span', { text: `各アカウント最新${INSTAGRAM_PAGE_SIZE}投稿を読み込みます` })
-    ]));
-    status.textContent = '更新中…';
-    updateSentinel();
+    const results = await Promise.allSettled(targets.map(username => fetchInstagramAccount(username)));
+    if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected || disposed) return;
+    if (!hadCache) {
+      visibleItems = [];
+      listHost.replaceChildren();
+    }
 
-    const results = await Promise.allSettled(accounts.map(username => fetchInstagramAccount(username)));
-    if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected) return;
-
-    const merged = [];
     let ok = 0;
-    results.forEach((result, index) => {
-      const username = accounts[index];
-      if (result.status === 'fulfilled') {
-        ok += 1;
-        merged.push(...result.value.items);
-        pageCursors.set(username, result.value.nextCursor || '');
-      } else {
-        pageCursors.set(username, '');
-        console.warn('[instagram-account-fetch]', result.reason?.message || result.reason);
+    let newCount = 0;
+    for (let index = 0; index < targets.length; index += 1) {
+      const username = targets[index];
+      const result = results[index];
+      if (result.status !== 'fulfilled') {
+        console.warn('[instagram-account-fetch]', username, result.reason?.message || result.reason);
+        continue;
       }
-    });
+      ok += 1;
+      const old = cacheRecords.get(username);
+      const oldKeys = new Set((old?.items || []).map(itemKey));
+      const persisted = await persistNetworkPage(username, result.value, { initial: true });
+      const newItems = persisted.fresh.filter(item => !oldKeys.has(itemKey(item)));
+      newCount += newItems.length;
+      if (!old?.items?.length) {
+        mergeItems(persisted.next.items.slice(0, INSTAGRAM_PAGE_SIZE));
+      } else if (newItems.length) {
+        mergeItems(newItems);
+      }
+      syncQueue(username);
+    }
 
-    if (!merged.length) {
+    if (!visibleItems.length) {
       listHost.replaceChildren(el('div', {
         style: 'margin:14px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--muted);line-height:1.55;'
       }, [
@@ -463,27 +655,90 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
       return;
     }
 
-    replaceItems(merged);
-    const failed = accounts.length - ok;
-    status.textContent = `${ok}/${accounts.length}アカウント · ${visibleItems.length}投稿${failed ? ` · ${failed}件失敗` : ''}`;
     updateSentinel();
     observeSentinel(loadMore);
-    if (!failed) {
-      setTimeout(() => {
-        if (status.isConnected && isCurrent(generation) && !loadMoreBusy) status.textContent = '';
-      }, 1800);
+    if (hadCache) {
+      status.textContent = newCount ? `新着${newCount}件を追加` : '';
+    } else {
+      status.textContent = `${ok}/${accounts.length}アカウント · ${visibleItems.length}投稿`;
     }
+    if (status.textContent) setTimeout(() => {
+      if (status.isConnected && isCurrent(generation) && !loadMoreBusy) status.textContent = '';
+    }, 1400);
   };
 
-  refreshNow = () => {
-    if (!isCurrent(generation)) return;
-    refreshFeed().catch(error => {
-      if (!isCurrent(generation)) return;
-      console.error('[instagram-refresh]', error);
-      status.textContent = 'Instagramを更新できませんでした';
+  const refreshNow = async (force = false) => {
+    const serial = ++refreshSerial;
+    sentinelObserver?.disconnect();
+    loadMoreBusy = false;
+    const accounts = instagramAccounts();
+    await deleteInstagramCachesExcept(accounts).catch(() => {});
+    if (!accounts.length) {
+      visibleItems = [];
+      cacheRecords = new Map();
+      cacheQueues = new Map();
+      pageCursors = new Map();
+      listHost.replaceChildren(el('div', {
+        style: 'margin:14px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--muted);line-height:1.55;'
+      }, [
+        el('strong', { text: 'Instagramアカウントを登録してください', style: 'display:block;color:var(--text-strong);margin-bottom:4px;' }),
+        el('span', { text: '上部の＋から @username / username / profile URL を追加できます。' })
+      ]));
+      status.textContent = '';
+      updateSentinel();
+      return;
+    }
+
+    const loaded = await readInstagramCaches(accounts);
+    if (!isCurrent(generation) || serial !== refreshSerial || disposed) return;
+    cacheRecords = loaded;
+    pageCursors = new Map();
+    cacheQueues = new Map();
+
+    const cachedInitial = [];
+    accounts.forEach(username => {
+      const record = cacheRecords.get(username);
+      if (!record) return;
+      cachedInitial.push(...record.items.slice(0, INSTAGRAM_PAGE_SIZE));
+      pageCursors.set(username, record.nextCursor || '');
     });
+    replaceItems(cachedInitial);
+    syncAllQueues(accounts);
+
+    const hadCache = visibleItems.length > 0;
+    if (hadCache) {
+      status.textContent = '';
+      updateSentinel();
+      observeSentinel(loadMore);
+    }
+
+    const targets = force
+      ? accounts
+      : accounts.filter(username => {
+          const record = cacheRecords.get(username);
+          return !record?.items?.length || !isInstagramCacheFresh(record, CACHE_FRESH_MS);
+        });
+
+    if (!targets.length) return;
+    if (hadCache && !force) {
+      setTimeout(() => {
+        if (serial === refreshSerial && isCurrent(generation) && screen.isConnected && !disposed) {
+          fetchInitialTargets(accounts, targets, serial, true).catch(error => console.warn('[instagram-background-refresh]', error));
+        }
+      }, 60);
+      return;
+    }
+    await fetchInitialTargets(accounts, targets, serial, hadCache);
   };
 
-  window.addEventListener('pdv2:before-navigate', () => sentinelObserver?.disconnect(), { once: true });
-  refreshNow();
+  const dispose = () => {
+    disposed = true;
+    sentinelObserver?.disconnect();
+  };
+  window.addEventListener('pdv2:before-navigate', dispose, { once: true });
+  refreshNow(false).catch(error => {
+    if (!isCurrent(generation) || disposed) return;
+    console.error('[instagram-refresh]', error);
+    status.textContent = 'Instagramを更新できませんでした';
+  });
 }

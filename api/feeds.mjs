@@ -1,4 +1,5 @@
 import newsFeed from '../server/news-feed.mjs';
+import instagramImage from '../server/instagram-image.mjs';
 import { instagramProfile, instagramVideo } from '../server/instagram.mjs';
 import recommendations from '../server/recommendations.mjs';
 import rss from '../server/rss.mjs';
@@ -11,6 +12,7 @@ import xHistory, { isXHistoryRequest } from '../server/x-history.mjs';
 const handlers = new Map([
   ['news-feed', newsFeed],
   ['instagram-profile', instagramProfile],
+  ['instagram-image', instagramImage],
   ['instagram-video', instagramVideo],
   ['recommendations', recommendations],
   ['rss', rss],

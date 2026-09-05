@@ -32,6 +32,7 @@
     { "source": "/api/twitch-oauth", "destination": "/api/feeds?__route=twitch-oauth" },
     { "source": "/api/weather-rain", "destination": "/api/feeds?__route=weather-rain" },
     { "source": "/api/instagram-profile", "destination": "/api/feeds?__route=instagram-profile" },
+    { "source": "/api/instagram-image", "destination": "/api/feeds?__route=instagram-image" },
     { "source": "/api/instagram-video", "destination": "/api/feeds?__route=instagram-video" },
     { "source": "/api/youtube-feed", "destination": "/api/youtube" }
   ],
