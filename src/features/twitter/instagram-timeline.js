@@ -6,7 +6,7 @@ import { openImageViewer } from './image-viewer.js';
 import { instagramAccounts, instagramProfileUrl, openInstagramAccountManager } from './instagram-accounts.js';
 import { makeInstagramVideoLauncher } from './instagram-video.js';
 
-const INSTAGRAM_POST_LIMIT = 12;
+const INSTAGRAM_PAGE_SIZE = 12;
 
 function openExternal(url) {
   const target = String(url || '').trim();
@@ -165,17 +165,14 @@ function instagramCard(item) {
   ]);
   meta.append(author);
   if (elapsed) {
-    meta.append(
-      el('span', { text: '·', style: 'flex:0 0 auto;font-size:14px;color:var(--muted);' }),
-      el('a', {
-        href: permalink,
-        target: '_blank',
-        rel: 'noopener noreferrer',
-        text: elapsed,
-        title: absoluteInstagramTime(item),
-        style: 'flex:0 0 auto;font-size:14px;color:var(--muted);text-decoration:none;'
-      })
-    );
+    meta.append(el('a', {
+      href: permalink,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      text: elapsed,
+      title: absoluteInstagramTime(item),
+      style: 'flex:0 0 auto;margin-left:2px;font-size:14px;color:var(--muted);text-decoration:none;'
+    }));
   }
   content.append(meta);
 
@@ -208,12 +205,43 @@ function instagramCard(item) {
   return card;
 }
 
-async function fetchInstagramAccount(username) {
+function itemKey(item) {
+  return String(item?.id || `${item?.account?.username || ''}:${item?.shortcode || ''}`).trim();
+}
+
+function itemTimestamp(item) {
+  return Number(item?.timestamp || 0);
+}
+
+function normalizeResponseItem(item, username, responseAccount) {
+  return {
+    source: 'instagram',
+    account: { ...responseAccount, ...(item.account || {}) },
+    id: item.id,
+    externalId: item.externalId || null,
+    shortcode: item.shortcode || null,
+    text: String(item.text || ''),
+    timestamp: Number.isFinite(Number(item.timestamp)) ? Number(item.timestamp) : null,
+    timestampIso: item.timestampIso || null,
+    media: Array.isArray(item.media) ? item.media : [],
+    mediaType: item.mediaType || 'image',
+    permalink: item.permalink || instagramProfileUrl(username),
+    reelPermalink: item.reelPermalink || null
+  };
+}
+
+async function fetchInstagramAccount(username, cursor = '') {
   const started = performance.now();
-  const response = await fetch(`/api/instagram-profile?username=${encodeURIComponent(username)}&t=${Date.now()}`, {
+  const query = new URLSearchParams({
+    username,
+    limit: String(INSTAGRAM_PAGE_SIZE),
+    t: String(Date.now())
+  });
+  if (cursor) query.set('cursor', cursor);
+  const response = await fetch(`/api/instagram-profile?${query}`, {
     headers: { Accept: 'application/json' },
     cache: 'no-store',
-    signal: AbortSignal.timeout(13000)
+    signal: AbortSignal.timeout(cursor ? 16000 : 13000)
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.ok || !Array.isArray(data.items)) {
@@ -221,27 +249,13 @@ async function fetchInstagramAccount(username) {
   }
 
   const responseAccount = data.account || { username, profileUrl: instagramProfileUrl(username) };
-  const items = data.items
-    .slice(0, INSTAGRAM_POST_LIMIT)
-    .filter(item => item?.source === 'instagram')
-    .map(item => ({
-      source: 'instagram',
-      account: { ...responseAccount, ...(item.account || {}) },
-      id: item.id,
-      externalId: item.externalId || null,
-      shortcode: item.shortcode || null,
-      text: String(item.text || ''),
-      timestamp: Number.isFinite(Number(item.timestamp)) ? Number(item.timestamp) : null,
-      timestampIso: item.timestampIso || null,
-      media: Array.isArray(item.media) ? item.media : [],
-      mediaType: item.mediaType || 'image',
-      permalink: item.permalink || instagramProfileUrl(username),
-      reelPermalink: item.reelPermalink || null
-    }));
-
   return {
     username,
-    items,
+    items: data.items
+      .filter(item => item?.source === 'instagram')
+      .map(item => normalizeResponseItem(item, username, responseAccount)),
+    nextCursor: data.hasMore && data.nextCursor ? String(data.nextCursor) : '',
+    hasMore: Boolean(data.hasMore && data.nextCursor),
     ms: Math.round(performance.now() - started),
     diagnostics: data.diagnostics || null
   };
@@ -250,6 +264,11 @@ async function fetchInstagramAccount(username) {
 export function renderInstagramTimeline(root, options, { generation, isCurrent, modeSegment }) {
   let refreshNow = () => {};
   let refreshSerial = 0;
+  let loadMoreBusy = false;
+  let visibleItems = [];
+  let pageCursors = new Map();
+  let sentinelObserver = null;
+
   const screen = el('section', { class: 'screen sns-screen instagram-screen' });
   const header = topbar('SNS', {
     subtitle: 'Instagramタイムライン',
@@ -286,73 +305,172 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     class: 'twitter-feed-host instagram-feed-host',
     style: 'display:block;margin:0 -14px;padding:0;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;overflow:visible;'
   });
+  const listHost = el('div', { class: 'instagram-feed-list' });
+  const sentinel = el('div', {
+    class: 'instagram-load-more-sentinel',
+    role: 'status',
+    'aria-live': 'polite',
+    style: 'min-height:1px;padding:10px 14px 18px;text-align:center;color:var(--muted);font-size:12px;'
+  });
+  host.append(listHost, sentinel);
   screen.append(header, status, host, modeSegment);
   root.replaceChildren(screen);
 
+  const activeCursorEntries = () => [...pageCursors.entries()].filter(([, cursor]) => Boolean(cursor));
+  const updateSentinel = (text = '') => {
+    const hasMore = activeCursorEntries().length > 0;
+    sentinel.textContent = text || '';
+    sentinel.style.display = hasMore || text ? 'block' : 'none';
+    if (!hasMore && sentinelObserver) sentinelObserver.disconnect();
+  };
+
+  const replaceItems = items => {
+    const seen = new Set();
+    visibleItems = (Array.isArray(items) ? items : [])
+      .filter(item => {
+        const key = itemKey(item);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
+    listHost.replaceChildren(...visibleItems.map(instagramCard));
+  };
+
+  const mergeItems = items => {
+    const known = new Set(visibleItems.map(itemKey).filter(Boolean));
+    const incoming = (Array.isArray(items) ? items : [])
+      .filter(item => {
+        const key = itemKey(item);
+        if (!key || known.has(key)) return false;
+        known.add(key);
+        return true;
+      })
+      .sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
+
+    for (const item of incoming) {
+      const timestamp = itemTimestamp(item);
+      let index = visibleItems.findIndex(existing => itemTimestamp(existing) < timestamp);
+      if (index < 0) index = visibleItems.length;
+      listHost.insertBefore(instagramCard(item), listHost.children[index] || null);
+      visibleItems.splice(index, 0, item);
+    }
+    return incoming.length;
+  };
+
+  const observeSentinel = loadMore => {
+    sentinelObserver?.disconnect();
+    if (!('IntersectionObserver' in window) || !activeCursorEntries().length) return;
+    sentinelObserver = new IntersectionObserver(entries => {
+      if (!screen.isConnected) {
+        sentinelObserver?.disconnect();
+        return;
+      }
+      if (entries.some(entry => entry.isIntersecting)) loadMore();
+    }, { rootMargin: '900px 0px 900px 0px' });
+    sentinelObserver.observe(sentinel);
+  };
+
+  const loadMore = async () => {
+    if (loadMoreBusy || !isCurrent(generation) || !screen.isConnected) return;
+    const entries = activeCursorEntries();
+    if (!entries.length) return updateSentinel();
+    loadMoreBusy = true;
+    updateSentinel('過去の投稿を読み込み中…');
+
+    const results = await Promise.allSettled(entries.map(([username, cursor]) => fetchInstagramAccount(username, cursor)));
+    if (!isCurrent(generation) || !screen.isConnected) return;
+
+    const incoming = [];
+    entries.forEach(([username], index) => {
+      const result = results[index];
+      if (result.status === 'fulfilled') {
+        incoming.push(...result.value.items);
+        pageCursors.set(username, result.value.nextCursor || '');
+      } else {
+        console.warn('[instagram-load-more]', username, result.reason?.message || result.reason);
+        pageCursors.set(username, '');
+      }
+    });
+
+    const added = mergeItems(incoming);
+    loadMoreBusy = false;
+    updateSentinel();
+    if (added) {
+      status.textContent = `${visibleItems.length}投稿を表示中`;
+      setTimeout(() => {
+        if (status.isConnected && isCurrent(generation) && !loadMoreBusy) status.textContent = '';
+      }, 1400);
+    }
+    observeSentinel(loadMore);
+  };
+
   const refreshFeed = async () => {
     const serial = ++refreshSerial;
+    sentinelObserver?.disconnect();
+    pageCursors = new Map();
+    visibleItems = [];
+    loadMoreBusy = false;
     const accounts = instagramAccounts();
     status.textContent = '';
     if (!accounts.length) {
-      host.replaceChildren(el('div', {
+      listHost.replaceChildren(el('div', {
         style: 'margin:14px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--muted);line-height:1.55;'
       }, [
         el('strong', { text: 'Instagramアカウントを登録してください', style: 'display:block;color:var(--text-strong);margin-bottom:4px;' }),
         el('span', { text: '上部の＋から @username / username / profile URL を追加できます。' })
       ]));
+      updateSentinel();
       return;
     }
 
-    host.replaceChildren(el('div', {
+    listHost.replaceChildren(el('div', {
       class: 'twitter-wake-status',
       style: 'margin:12px 14px;'
     }, [
       el('strong', { text: `${accounts.length}アカウントを取得中…` }),
-      el('span', { text: `各アカウント最大${INSTAGRAM_POST_LIMIT}投稿を読み込みます` })
+      el('span', { text: `各アカウント最新${INSTAGRAM_PAGE_SIZE}投稿を読み込みます` })
     ]));
     status.textContent = '更新中…';
+    updateSentinel();
 
-    const results = await Promise.allSettled(accounts.map(fetchInstagramAccount));
+    const results = await Promise.allSettled(accounts.map(username => fetchInstagramAccount(username)));
     if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected) return;
 
     const merged = [];
     let ok = 0;
-    results.forEach(result => {
+    results.forEach((result, index) => {
+      const username = accounts[index];
       if (result.status === 'fulfilled') {
         ok += 1;
         merged.push(...result.value.items);
+        pageCursors.set(username, result.value.nextCursor || '');
       } else {
+        pageCursors.set(username, '');
         console.warn('[instagram-account-fetch]', result.reason?.message || result.reason);
       }
     });
 
-    const seen = new Set();
-    const items = merged
-      .filter(item => {
-        const key = item.id || `${item.account?.username}:${item.shortcode}`;
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
-
-    if (!items.length) {
-      host.replaceChildren(el('div', {
+    if (!merged.length) {
+      listHost.replaceChildren(el('div', {
         style: 'margin:14px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--muted);line-height:1.55;'
       }, [
         el('strong', { text: 'Instagram投稿を取得できませんでした', style: 'display:block;color:var(--text-strong);margin-bottom:4px;' }),
         el('span', { text: '公開プロフィールか確認して、更新を試してください。' })
       ]));
       status.textContent = `0/${accounts.length}アカウント取得`;
+      updateSentinel();
       return;
     }
 
-    host.replaceChildren(...items.map(instagramCard));
+    replaceItems(merged);
     const failed = accounts.length - ok;
-    status.textContent = `${ok}/${accounts.length}アカウント · ${items.length}投稿${failed ? ` · ${failed}件失敗` : ''}`;
+    status.textContent = `${ok}/${accounts.length}アカウント · ${visibleItems.length}投稿${failed ? ` · ${failed}件失敗` : ''}`;
+    updateSentinel();
+    observeSentinel(loadMore);
     if (!failed) {
       setTimeout(() => {
-        if (status.isConnected && isCurrent(generation)) status.textContent = '';
+        if (status.isConnected && isCurrent(generation) && !loadMoreBusy) status.textContent = '';
       }, 1800);
     }
   };
@@ -366,5 +484,6 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     });
   };
 
+  window.addEventListener('pdv2:before-navigate', () => sentinelObserver?.disconnect(), { once: true });
   refreshNow();
 }

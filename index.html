@@ -11,10 +11,10 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <title>Personal Dashboard V2</title>
-  <!-- v2.19.6: media landscape fix / static asset cache-bust -->
+  <!-- v2.19.7: global keyboard nav anchor / Instagram infinite scroll -->
   <link rel="stylesheet" href="/src/styles/tokens.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/base.css?v=2196media1" />
-  <link rel="stylesheet" href="/src/styles/navigation.css?v=2196media1" />
+  <link rel="stylesheet" href="/src/styles/navigation.css?v=2197keyboard1" />
   <link rel="stylesheet" href="/src/styles/screens.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/app.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/motion.css?v=2196media1" />
@@ -35,8 +35,8 @@
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
   <script>
     (()=>{
-      const BUILD='2197sns2';
-      const RECOVERY_KEY='pdv2:startup-recovery:2197sns2';
+      const BUILD='2197sns3';
+      const RECOVERY_KEY='pdv2:startup-recovery:2197sns3';
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
@@ -59,7 +59,7 @@
     })();
   </script>
   <script src="/src/features/twitch/twitch-sync.js?v=2196twitchsync1"></script>
-  <!-- v2.19.7: SNSフリーズ修正を旧キャッシュを使わず再配布 -->
-  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2197sns2"></script>
+  <!-- v2.19.7: keyboard nav / Instagram pagination を旧キャッシュを使わず再配布 -->
+  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2197sns3"></script>
 </body>
 </html>

@@ -133,16 +133,11 @@ export function openInstagramAccountManager({ onChanged } = {}) {
 
   content.append(help, fieldRow, message, list);
   redraw();
-  const sheet = openSheet(content, {
+  return openSheet(content, {
     title: 'Instagramアカウント',
     onClose: () => {
       if (!dirty) return;
       requestAnimationFrame(() => requestAnimationFrame(() => onChanged?.()));
     }
   });
-  // bottom nav はz-index:300。入力キーボードでVisualViewportが縮んでも
-  // ナビがシート上へ持ち上がって見えないよう、この管理シートだけ前面に置く。
-  sheet.backdrop.style.zIndex = '340';
-  sheet.backdrop.dataset.instagramAccountManager = '1';
-  return sheet;
 }

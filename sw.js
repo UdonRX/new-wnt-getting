@@ -1,5 +1,5 @@
-// v2.19.7 SNS freeze fix: SNS関連JSを新キャッシュ世代で再配布し、旧sns.jsの自己再帰Observerを残さない。
-const CACHE_NAME='personal-dashboard-v2-19-9-sns-freeze1';
+// v2.19.7: keyboard nav固定とInstagram無限スクロールを、新しいSWキャッシュ世代で再配布する。
+const CACHE_NAME='personal-dashboard-v2-19-9-sns-infinite1';
 const STATIC_FETCH_TIMEOUT_MS=5500;
 const APP_SHELL=[
   '/','/index.html','/manifest.webmanifest',

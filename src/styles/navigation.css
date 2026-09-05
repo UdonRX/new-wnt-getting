@@ -2,6 +2,7 @@
 :root {
   --nav-height: 64px;
   --nav-total: calc(var(--nav-height) + env(safe-area-inset-bottom));
+  --keyboard-nav-offset: 0px;
 }
 
 #app-main {
@@ -26,9 +27,9 @@
   background: #0c1014;
   border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
   box-shadow: 0 -8px 22px rgba(0,0,0,.16);
-  transform: none !important;
-  -webkit-transform: none !important;
-  will-change: auto !important;
+  transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
+  -webkit-transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
+  will-change: transform !important;
   contain: layout paint;
   overscroll-behavior: none;
   touch-action: manipulation;
@@ -96,7 +97,12 @@
   .nav-item span { font-size: 9.3px; }
 }
 
-/* iOS VisualViewport / keyboard changes must never translate the nav layer. */
+/*
+ * iOS software keyboard shrinks VisualViewport and normally lifts position:fixed
+ * elements above the keyboard. main.js measures that covered area and moves the
+ * nav by the same amount so it stays at the physical layout bottom, behind the
+ * keyboard, on every screen.
+ */
 html.sheet-open .bottom-nav,
 html.media-player-open .bottom-nav,
 body.sheet-lock .bottom-nav {
@@ -104,8 +110,12 @@ body.sheet-lock .bottom-nav {
   left: 0 !important;
   right: 0 !important;
   bottom: 0 !important;
-  transform: none !important;
-  -webkit-transform: none !important;
+  transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
+  -webkit-transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
+}
+
+html.keyboard-open .bottom-nav {
+  pointer-events: none !important;
 }
 
 html, body { overscroll-behavior-y: none; }

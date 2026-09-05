@@ -2,7 +2,7 @@ import './runtime-v2195.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2197sns2';
+const BUILD='2197sns3';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -114,6 +114,69 @@ function startBackgroundJobs(){
   idle(()=>preloadFeature('twitter'),1800);
 }
 
+function installKeyboardNavAnchor(){
+  const viewport=window.visualViewport;
+  if(!viewport)return;
+  const html=document.documentElement;
+  let editing=false;
+  let stableBottom=Math.max(1,viewport.offsetTop+viewport.height);
+  let blurTimer=0;
+
+  const isTextEditor=node=>{
+    if(!(node instanceof Element))return false;
+    if(node.matches('textarea,select,[contenteditable="true"]'))return true;
+    if(!node.matches('input'))return false;
+    const type=String(node.getAttribute('type')||'text').toLowerCase();
+    return !['button','submit','reset','checkbox','radio','range','color','file','image','hidden'].includes(type);
+  };
+  const setOffset=value=>{
+    const offset=Math.max(0,Math.round(Number(value)||0));
+    html.style.setProperty('--keyboard-nav-offset',`${offset}px`);
+    html.classList.toggle('keyboard-open',offset>=48);
+  };
+  const measure=()=>{
+    const currentBottom=viewport.offsetTop+viewport.height;
+    if(!editing){
+      stableBottom=Math.max(1,currentBottom);
+      setOffset(0);
+      return;
+    }
+    const covered=Math.max(0,stableBottom-currentBottom);
+    setOffset(covered>=48?covered:0);
+  };
+  const settle=()=>{
+    requestAnimationFrame(measure);
+    setTimeout(measure,70);
+    setTimeout(measure,220);
+  };
+
+  document.addEventListener('focusin',event=>{
+    if(!isTextEditor(event.target))return;
+    if(blurTimer)clearTimeout(blurTimer);
+    stableBottom=Math.max(stableBottom,viewport.offsetTop+viewport.height);
+    editing=true;
+    settle();
+  },true);
+  document.addEventListener('focusout',()=>{
+    if(blurTimer)clearTimeout(blurTimer);
+    blurTimer=setTimeout(()=>{
+      if(isTextEditor(document.activeElement))return;
+      editing=false;
+      setOffset(0);
+      setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},260);
+    },40);
+  },true);
+  viewport.addEventListener('resize',measure,{passive:true});
+  viewport.addEventListener('scroll',measure,{passive:true});
+  window.addEventListener('resize',()=>{if(editing)measure();else stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},{passive:true});
+  window.addEventListener('orientationchange',()=>{
+    editing=false;
+    setOffset(0);
+    setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},320);
+  },{passive:true});
+  measure();
+}
+
 async function resolveTwitchOAuthReturn(){
   try{
     const module=await loadModule('./features/twitch/twitch-chat.js');
@@ -137,6 +200,7 @@ async function resolveTwitchPlaybackRecovery(){
 async function boot(){
   if(!root)throw new Error('#app-main が見つかりません');
   applyTheme();
+  installKeyboardNavAnchor();
   const twitchOAuth=await resolveTwitchOAuthReturn();
   renderNav(navigate);
   if(twitchOAuth?.handled){

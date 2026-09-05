@@ -5,6 +5,8 @@ const RESERVED_PROFILE_PATHS = new Set([
 ]);
 const ALLOWED_VIDEO_KINDS = new Set(['auto', 'post', 'reel']);
 const PROFILE_POST_LIMIT = 12;
+const MAX_V1_PAGE_HOPS = 3;
+const INSTAGRAM_WEB_APP_ID = '936619743392459';
 const INSTAGRAM_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.1 Mobile/15E148 Safari/604.1';
 
 function first(value) {
@@ -49,6 +51,12 @@ function validateShortcode(raw) {
     throw new Error('有効なInstagram shortcodeが必要です。');
   }
   return shortcode;
+}
+
+function requestedLimit(raw) {
+  const value = Math.floor(Number(first(raw) || PROFILE_POST_LIMIT));
+  if (!Number.isFinite(value)) return PROFILE_POST_LIMIT;
+  return Math.max(1, Math.min(PROFILE_POST_LIMIT, value));
 }
 
 function unique(values) {
@@ -123,7 +131,7 @@ function dedupeMediaObjects(items) {
   const result = [];
   for (const item of items || []) {
     if (!item || typeof item !== 'object') continue;
-    const key = String(item.shortcode || item.id || JSON.stringify(item).slice(0, 120));
+    const key = String(item.shortcode || item.code || item.id || item.pk || JSON.stringify(item).slice(0, 120));
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(item);
@@ -239,6 +247,28 @@ function extractProfileAvatar(html, mediaItems = []) {
   return null;
 }
 
+function extractProfileUserId(html, mediaItems = []) {
+  for (const media of mediaItems || []) {
+    const candidates = [media?.owner?.id, media?.owner?.pk, media?.user?.id, media?.user?.pk];
+    for (const candidate of candidates) {
+      const value = String(candidate || '').trim();
+      if (/^\d{3,30}$/.test(value)) return value;
+    }
+  }
+  for (const input of buildDecodedVariants(html, 5)) {
+    const patterns = [
+      /["']profile_id["']\s*:\s*["']?(\d{3,30})["']?/i,
+      /["']owner["']\s*:\s*\{[\s\S]{0,400}?["']id["']\s*:\s*["'](\d{3,30})["']/i,
+      /["']user["']\s*:\s*\{[\s\S]{0,400}?["']id["']\s*:\s*["'](\d{3,30})["']/i
+    ];
+    for (const pattern of patterns) {
+      const match = input.match(pattern);
+      if (match?.[1]) return match[1];
+    }
+  }
+  return null;
+}
+
 function firstCaption(media) {
   if (typeof media?.caption === 'string') return media.caption;
   const edgeText = media?.edge_media_to_caption?.edges?.[0]?.node?.text;
@@ -325,6 +355,115 @@ function normalizeFeedItem(username, media, index, avatarUrl = null) {
   };
 }
 
+function v1ImageUrl(item = {}) {
+  const candidates = item?.image_versions2?.candidates;
+  if (Array.isArray(candidates)) {
+    for (const candidate of candidates) {
+      const url = normalizeHttpsUrl(candidate?.url);
+      if (url) return url;
+    }
+  }
+  return normalizeHttpsUrl(item?.thumbnail_url || item?.display_url || item?.image_url);
+}
+
+function v1Kind(item = {}) {
+  return Number(item?.media_type) === 2 || Array.isArray(item?.video_versions) ? 'video' : 'image';
+}
+
+function normalizeV1MediaNode(item = {}, fallbackShortcode = '') {
+  const url = v1ImageUrl(item);
+  return {
+    kind: v1Kind(item),
+    url,
+    posterUrl: url,
+    shortcode: String(item?.code || item?.shortcode || fallbackShortcode || '') || null
+  };
+}
+
+function normalizeV1FeedItem(username, media, index, fallbackAvatar = null) {
+  const shortcode = String(media?.code || media?.shortcode || '').trim() || null;
+  const timestamp = timestampInfo(media?.taken_at ?? media?.taken_at_timestamp);
+  const avatarUrl = normalizeHttpsUrl(media?.user?.profile_pic_url || media?.user?.profile_pic_url_hd) || fallbackAvatar;
+  const carousel = Array.isArray(media?.carousel_media) ? media.carousel_media : [];
+  const isVideo = v1Kind(media) === 'video';
+  let mediaType = 'image';
+  let mediaItems = [];
+
+  if (carousel.length) {
+    mediaType = 'carousel';
+    mediaItems = carousel
+      .slice(0, 20)
+      .map(entry => normalizeV1MediaNode(entry, shortcode))
+      .filter(entry => entry.url);
+  } else {
+    mediaType = isVideo ? 'video' : 'image';
+    const normalized = normalizeV1MediaNode(media, shortcode);
+    if (normalized.url) mediaItems = [normalized];
+  }
+
+  const caption = typeof media?.caption?.text === 'string'
+    ? media.caption.text
+    : typeof media?.caption === 'string' ? media.caption : '';
+  const postPermalink = shortcode
+    ? `https://www.instagram.com/p/${shortcode}/`
+    : `https://www.instagram.com/${username}/`;
+  const reelPermalink = shortcode && (isVideo || media?.product_type === 'clips')
+    ? `https://www.instagram.com/reel/${shortcode}/`
+    : null;
+
+  return {
+    contractVersion: 1,
+    source: 'instagram',
+    account: {
+      username,
+      profileUrl: `https://www.instagram.com/${username}/`,
+      avatarUrl: avatarUrl || null
+    },
+    id: `instagram:${username}:${shortcode || media?.id || media?.pk || index + 1}`,
+    externalId: media?.id || String(media?.pk || '') || null,
+    shortcode,
+    text: caption,
+    timestamp: timestamp.seconds,
+    timestampIso: timestamp.iso,
+    mediaType,
+    media: mediaItems,
+    permalink: postPermalink,
+    reelPermalink
+  };
+}
+
+function encodeCursor(payload) {
+  return Buffer.from(JSON.stringify({ v: 1, ...payload }), 'utf8').toString('base64url');
+}
+
+function decodeCursor(raw, username) {
+  const value = String(first(raw) || '').trim();
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+    if (parsed?.v !== 1 || parsed?.username !== username || !['embed', 'v1'].includes(parsed?.mode)) {
+      throw new Error('cursor mismatch');
+    }
+    if (parsed.mode === 'embed') {
+      const offset = Math.max(0, Math.floor(Number(parsed.offset || 0)));
+      return { mode: 'embed', username, offset, userId: /^\d{3,30}$/.test(String(parsed.userId || '')) ? String(parsed.userId) : null };
+    }
+    return {
+      mode: 'v1',
+      username,
+      userId: /^\d{3,30}$/.test(String(parsed.userId || '')) ? String(parsed.userId) : null,
+      maxId: String(parsed.maxId || '').slice(0, 500),
+      skip: Array.isArray(parsed.skip) ? parsed.skip.map(value => String(value || '')).filter(Boolean).slice(0, 80) : []
+    };
+  } catch {
+    throw new Error('Instagramページカーソルが無効です。');
+  }
+}
+
+function itemShortcode(item) {
+  return String(item?.shortcode || item?.code || '').trim();
+}
+
 async function fetchInstagramHtml(url) {
   const response = await fetch(url, {
     method: 'GET',
@@ -340,6 +479,123 @@ async function fetchInstagramHtml(url) {
   return { response, html };
 }
 
+async function fetchInstagramV1Page(target, userId, maxId = '') {
+  const url = new URL(`https://www.instagram.com/api/v1/feed/user/${userId}/`);
+  url.searchParams.set('count', String(PROFILE_POST_LIMIT));
+  if (maxId) url.searchParams.set('max_id', maxId);
+  const response = await fetch(url, {
+    method: 'GET',
+    redirect: 'follow',
+    headers: {
+      Accept: 'application/json,text/plain,*/*',
+      'Accept-Language': 'ja,en-US;q=0.8,en;q=0.7',
+      'User-Agent': INSTAGRAM_UA,
+      'X-IG-App-ID': INSTAGRAM_WEB_APP_ID,
+      'X-ASBD-ID': '198387',
+      'X-Requested-With': 'XMLHttpRequest',
+      Referer: target.profileUrl
+    },
+    signal: AbortSignal.timeout(10000)
+  });
+  const text = await response.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch {}
+  if (!response.ok || !data || !Array.isArray(data.items)) {
+    throw new Error(`Instagram追加ページ HTTP ${response.status}`);
+  }
+  return {
+    items: data.items,
+    moreAvailable: Boolean(data.more_available),
+    nextMaxId: String(data.next_max_id || ''),
+    status: response.status
+  };
+}
+
+function sendProfilePage(res, {
+  account,
+  items,
+  nextCursor = '',
+  diagnostics = {}
+}) {
+  res.status(200).json({
+    ok: true,
+    source: 'instagram',
+    account,
+    count: items.length,
+    items,
+    hasMore: Boolean(nextCursor),
+    nextCursor: nextCursor || null,
+    diagnostics
+  });
+}
+
+async function serveV1CursorPage(target, cursor, limit, res) {
+  if (!cursor.userId) {
+    sendProfilePage(res, {
+      account: { username: target.username, profileUrl: target.profileUrl, avatarUrl: null },
+      items: [],
+      diagnostics: { paginationMode: 'v1', paginationAvailable: false, reason: 'user_id_missing' }
+    });
+    return;
+  }
+
+  let nextMaxId = cursor.maxId || '';
+  const skip = new Set(cursor.skip || []);
+  const output = [];
+  let moreAvailable = true;
+  let hops = 0;
+  let avatarUrl = null;
+  let lastError = null;
+
+  while (moreAvailable && output.length < limit && hops < MAX_V1_PAGE_HOPS) {
+    hops += 1;
+    let page;
+    try {
+      page = await fetchInstagramV1Page(target, cursor.userId, nextMaxId);
+    } catch (error) {
+      lastError = error;
+      break;
+    }
+    moreAvailable = page.moreAvailable;
+    nextMaxId = page.nextMaxId;
+    const normalized = page.items
+      .map((item, index) => normalizeV1FeedItem(target.username, item, index, avatarUrl))
+      .filter(item => item.shortcode || item.media.length || item.text);
+    if (!avatarUrl) avatarUrl = normalized.find(item => item.account?.avatarUrl)?.account?.avatarUrl || null;
+    for (const item of normalized) {
+      const shortcode = itemShortcode(item);
+      if (shortcode && skip.has(shortcode)) continue;
+      if (shortcode) skip.add(shortcode);
+      output.push(item);
+      if (output.length >= limit) break;
+    }
+    if (!nextMaxId) moreAvailable = false;
+  }
+
+  const nextCursor = moreAvailable && nextMaxId
+    ? encodeCursor({
+      mode: 'v1',
+      username: target.username,
+      userId: cursor.userId,
+      maxId: nextMaxId,
+      skip: output.map(itemShortcode).filter(Boolean).slice(-24)
+    })
+    : '';
+
+  sendProfilePage(res, {
+    account: { username: target.username, profileUrl: target.profileUrl, avatarUrl },
+    items: output,
+    nextCursor,
+    diagnostics: {
+      paginationMode: 'v1',
+      paginationAvailable: !lastError,
+      hops,
+      moreAvailable,
+      paginationError: lastError?.message || null
+    }
+  });
+}
+
 export async function instagramProfile(req, res) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
@@ -350,10 +606,18 @@ export async function instagramProfile(req, res) {
   }
 
   let target;
+  let cursor;
+  const limit = requestedLimit(req.query?.limit);
   try {
     target = normalizeProfile(req.query?.username ?? req.query?.url);
+    cursor = decodeCursor(req.query?.cursor, target.username);
   } catch (error) {
     res.status(400).json({ error: error.message });
+    return;
+  }
+
+  if (cursor?.mode === 'v1') {
+    await serveV1CursorPage(target, cursor, limit, res);
     return;
   }
 
@@ -370,13 +634,13 @@ export async function instagramProfile(req, res) {
 
     const parsed = parseGraphqlMediaFromHtml(html);
     const avatarUrl = extractProfileAvatar(html, parsed.items);
-    const items = parsed.items
+    const userId = cursor?.userId || extractProfileUserId(html, parsed.items);
+    const normalized = parsed.items
       .map((media, index) => normalizeFeedItem(target.username, media, index, avatarUrl))
       .filter((item) => item.shortcode || item.media.length || item.text)
-      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0))
-      .slice(0, PROFILE_POST_LIMIT);
+      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
 
-    if (!items.length) {
+    if (!normalized.length) {
       res.status(502).json({
         ok: false,
         error: 'Profile Embed HTMLからgraphql_mediaを取得できませんでした。',
@@ -392,21 +656,45 @@ export async function instagramProfile(req, res) {
       return;
     }
 
-    res.status(200).json({
-      ok: true,
-      source: 'instagram',
+    const offset = cursor?.mode === 'embed' ? cursor.offset : 0;
+    const items = normalized.slice(offset, offset + limit);
+    const nextOffset = offset + items.length;
+    let nextCursor = '';
+
+    if (nextOffset < normalized.length) {
+      nextCursor = encodeCursor({
+        mode: 'embed',
+        username: target.username,
+        offset: nextOffset,
+        userId
+      });
+    } else if (userId) {
+      nextCursor = encodeCursor({
+        mode: 'v1',
+        username: target.username,
+        userId,
+        maxId: '',
+        skip: normalized.map(itemShortcode).filter(Boolean).slice(0, 80)
+      });
+    }
+
+    sendProfilePage(res, {
       account: { username: target.username, profileUrl: target.profileUrl, avatarUrl },
-      count: items.length,
       items,
+      nextCursor,
       diagnostics: {
         htmlLength: html.length,
         parsedCount: parsed.items.length,
-        returnedLimit: PROFILE_POST_LIMIT,
+        normalizedCount: normalized.length,
+        offset,
+        returnedLimit: limit,
         avatarAvailable: Boolean(avatarUrl),
+        userIdAvailable: Boolean(userId),
         parseMethod: parsed.parseMethod,
         decodedLevel: parsed.decodedLevel,
         arrayOccurrences: parsed.arrayOccurrences,
-        parseErrors: parsed.parseErrors
+        parseErrors: parsed.parseErrors,
+        paginationMode: cursor?.mode || 'initial'
       }
     });
   } catch (error) {
