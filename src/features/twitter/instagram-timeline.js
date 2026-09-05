@@ -15,6 +15,11 @@ import {
 const INSTAGRAM_PAGE_SIZE = 12;
 const CACHE_FRESH_MS = 5 * 60 * 1000;
 const QUALITY_BATCH_SIZE = 6;
+// iOS WebKit is prone to killing a tab when many Instagram accounts create dozens of
+// image-heavy cards in the same task. Keep the DOM budget global, not per account.
+const INITIAL_RENDER_LIMIT = 18;
+const LOAD_MORE_RENDER_LIMIT = 12;
+const NETWORK_ACCOUNT_BATCH = 3;
 const qualityQueue = new Map();
 let qualityTimer = 0;
 
@@ -397,6 +402,7 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
   let cacheRecords = new Map();
   let cacheQueues = new Map();
   let sentinelObserver = null;
+  let cursorBatchOffset = 0;
   let disposed = false;
 
   const screen = el('section', { class: 'screen sns-screen instagram-screen' });
@@ -408,7 +414,9 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
         title: 'Instagramアカウントを追加・管理',
         onClick: () => openInstagramAccountManager({
           onChanged: () => {
-            if (isCurrent(generation)) refreshNow(true);
+            // Adding/removing an account must not force every already-fresh account to hit
+            // Instagram again. A new account has no cache and is fetched automatically.
+            if (isCurrent(generation)) refreshNow(false);
           }
         })
       },
@@ -470,19 +478,19 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     if (!hasMore() && sentinelObserver) sentinelObserver.disconnect();
   };
 
-  const replaceItems = items => {
-    visibleItems = dedupeSort(items);
+  const replaceItems = (items, limit = INITIAL_RENDER_LIMIT) => {
+    visibleItems = dedupeSort(items).slice(0, Math.max(0, limit));
     listHost.replaceChildren(...visibleItems.map(makeCard));
   };
 
-  const mergeItems = items => {
+  const mergeItems = (items, limit = LOAD_MORE_RENDER_LIMIT) => {
     const known = new Set(visibleItems.map(itemKey).filter(Boolean));
     const incoming = dedupeSort(items).filter(item => {
       const key = itemKey(item);
       if (!key || known.has(key)) return false;
       known.add(key);
       return true;
-    });
+    }).slice(0, Math.max(0, limit));
     for (const item of incoming) {
       const timestamp = itemTimestamp(item);
       let index = visibleItems.findIndex(existing => itemTimestamp(existing) < timestamp);
@@ -538,16 +546,28 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     return { old, next, fresh };
   };
 
+  // Reveal one global page ordered by time. The old implementation revealed 12 items
+  // PER ACCOUNT in one task (12 x account count), which could create hundreds of cards.
   const revealCachedPage = () => {
     const incoming = [];
-    for (const [username, queue] of cacheQueues.entries()) {
-      if (!Array.isArray(queue) || !queue.length) continue;
-      const page = queue.splice(0, INSTAGRAM_PAGE_SIZE);
-      incoming.push(...page);
-      cacheQueues.set(username, queue);
+    while (incoming.length < LOAD_MORE_RENDER_LIMIT) {
+      let bestUsername = '';
+      let bestItem = null;
+      for (const [username, queue] of cacheQueues.entries()) {
+        if (!Array.isArray(queue) || !queue.length) continue;
+        const candidate = queue[0];
+        if (!bestItem || itemTimestamp(candidate) > itemTimestamp(bestItem)) {
+          bestItem = candidate;
+          bestUsername = username;
+        }
+      }
+      if (!bestItem || !bestUsername) break;
+      const queue = cacheQueues.get(bestUsername) || [];
+      incoming.push(queue.shift());
+      cacheQueues.set(bestUsername, queue);
     }
     if (!incoming.length) return 0;
-    return mergeItems(incoming);
+    return mergeItems(incoming, LOAD_MORE_RENDER_LIMIT);
   };
 
   const loadMore = async () => {
@@ -560,8 +580,18 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
       return;
     }
 
-    const entries = activeCursorEntries();
-    if (!entries.length) return updateSentinel();
+    const allEntries = activeCursorEntries();
+    if (!allEntries.length) return updateSentinel();
+
+    // Only advance a few accounts per network turn. Rotate the starting account so a
+    // large registration list remains fair without creating N simultaneous responses.
+    const count = Math.min(NETWORK_ACCOUNT_BATCH, allEntries.length);
+    const entries = [];
+    for (let index = 0; index < count; index += 1) {
+      entries.push(allEntries[(cursorBatchOffset + index) % allEntries.length]);
+    }
+    cursorBatchOffset = (cursorBatchOffset + count) % Math.max(1, allEntries.length);
+
     loadMoreBusy = true;
     updateSentinel('過去の投稿を読み込み中…');
 
@@ -587,7 +617,7 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
       }
     }
 
-    const added = mergeItems(incoming);
+    const added = mergeItems(incoming, LOAD_MORE_RENDER_LIMIT);
     syncAllQueues(entries.map(([username]) => username));
     loadMoreBusy = false;
     updateSentinel();
@@ -608,40 +638,60 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
         style: 'margin:12px 14px;'
       }, [
         el('strong', { text: `${targets.length}アカウントを取得中…` }),
-        el('span', { text: `初回だけ最新${INSTAGRAM_PAGE_SIZE}投稿を読み込みます` })
+        el('span', { text: `端末負荷を抑えながら最新投稿を読み込みます` })
       ]));
       status.textContent = '更新中…';
     }
 
-    const results = await Promise.allSettled(targets.map(username => fetchInstagramAccount(username)));
+    let ok = 0;
+    let newCount = 0;
+    let processed = 0;
+    const displayCandidates = [];
+
+    // Process accounts in small batches instead of retaining every response until one
+    // giant Promise.allSettled completes. Yield between batches so Safari can paint/GC.
+    for (let start = 0; start < targets.length; start += NETWORK_ACCOUNT_BATCH) {
+      if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected || disposed) return;
+      const batchNames = targets.slice(start, start + NETWORK_ACCOUNT_BATCH);
+      const results = await Promise.allSettled(batchNames.map(username => fetchInstagramAccount(username)));
+      if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected || disposed) return;
+
+      for (let index = 0; index < batchNames.length; index += 1) {
+        const username = batchNames[index];
+        const result = results[index];
+        if (result.status !== 'fulfilled') {
+          console.warn('[instagram-account-fetch]', username, result.reason?.message || result.reason);
+          continue;
+        }
+        ok += 1;
+        const old = cacheRecords.get(username);
+        const oldKeys = new Set((old?.items || []).map(itemKey));
+        const persisted = await persistNetworkPage(username, result.value, { initial: true });
+        const newItems = persisted.fresh.filter(item => !oldKeys.has(itemKey(item)));
+        newCount += newItems.length;
+        if (!old?.items?.length) {
+          displayCandidates.push(...persisted.next.items.slice(0, INSTAGRAM_PAGE_SIZE));
+        } else if (newItems.length) {
+          displayCandidates.push(...newItems);
+        }
+      }
+
+      processed += batchNames.length;
+      status.textContent = `${Math.min(processed, targets.length)}/${targets.length}アカウントを取得中…`;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+
     if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected || disposed) return;
     if (!hadCache) {
       visibleItems = [];
       listHost.replaceChildren();
+      mergeItems(displayCandidates, INITIAL_RENDER_LIMIT);
+    } else {
+      mergeItems(displayCandidates, LOAD_MORE_RENDER_LIMIT);
     }
-
-    let ok = 0;
-    let newCount = 0;
-    for (let index = 0; index < targets.length; index += 1) {
-      const username = targets[index];
-      const result = results[index];
-      if (result.status !== 'fulfilled') {
-        console.warn('[instagram-account-fetch]', username, result.reason?.message || result.reason);
-        continue;
-      }
-      ok += 1;
-      const old = cacheRecords.get(username);
-      const oldKeys = new Set((old?.items || []).map(itemKey));
-      const persisted = await persistNetworkPage(username, result.value, { initial: true });
-      const newItems = persisted.fresh.filter(item => !oldKeys.has(itemKey(item)));
-      newCount += newItems.length;
-      if (!old?.items?.length) {
-        mergeItems(persisted.next.items.slice(0, INSTAGRAM_PAGE_SIZE));
-      } else if (newItems.length) {
-        mergeItems(newItems);
-      }
-      syncQueue(username);
-    }
+    // Anything fetched but not placed in the bounded DOM stays in per-account queues and
+    // appears as the user scrolls, so limiting render work does not discard posts.
+    syncAllQueues(accounts);
 
     if (!visibleItems.length) {
       listHost.replaceChildren(el('div', {
@@ -671,6 +721,7 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     const serial = ++refreshSerial;
     sentinelObserver?.disconnect();
     loadMoreBusy = false;
+    cursorBatchOffset = 0;
     const accounts = instagramAccounts();
     await deleteInstagramCachesExcept(accounts).catch(() => {});
     if (!accounts.length) {
@@ -702,7 +753,9 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
       cachedInitial.push(...record.items.slice(0, INSTAGRAM_PAGE_SIZE));
       pageCursors.set(username, record.nextCursor || '');
     });
-    replaceItems(cachedInitial);
+    // Sort all accounts together, then render only a small global first page. The rest
+    // remains in cacheQueues and is revealed in bounded chunks on scroll.
+    replaceItems(cachedInitial, INITIAL_RENDER_LIMIT);
     syncAllQueues(accounts);
 
     const hadCache = visibleItems.length > 0;
@@ -734,6 +787,11 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
   const dispose = () => {
     disposed = true;
     sentinelObserver?.disconnect();
+    qualityQueue.clear();
+    if (qualityTimer) {
+      clearTimeout(qualityTimer);
+      qualityTimer = 0;
+    }
   };
   window.addEventListener('pdv2:before-navigate', dispose, { once: true });
   refreshNow(false).catch(error => {
