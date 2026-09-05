@@ -23,6 +23,28 @@
   <link rel="stylesheet" href="/src/styles/v2189.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/v2194.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/v2195.css?v=2196media1" />
+  <style id="twitch-landscape-comment-edge-fix">
+    /* Twitch横表示ではstage自体が90度回転するため、コメントoverlayだけ逆回転して
+       visualViewportと同じ座標系へ戻す。これにより既存のX方向アニメーションが
+       画面右端→左端を正しく横断する。縦表示には影響させない。 */
+    .twitch-inline-player.youtube-css-landscape .youtube-inline-stage > .twitch-comment-overlay {
+      position: absolute !important;
+      inset: auto !important;
+      left: 50% !important;
+      top: 50% !important;
+      width: var(--pdv2-media-vw, 100vw) !important;
+      height: var(--pdv2-media-vh, 100dvh) !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      transform: translate3d(-50%, -50%, 0) rotate(-90deg) !important;
+      -webkit-transform: translate3d(-50%, -50%, 0) rotate(-90deg) !important;
+      transform-origin: center center !important;
+      -webkit-transform-origin: center center !important;
+      z-index: 364 !important;
+      overflow: hidden !important;
+      pointer-events: none !important;
+    }
+  </style>
 </head>
 <body>
   <div id="edge-mask" aria-hidden="true"></div>
