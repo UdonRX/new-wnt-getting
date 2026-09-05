@@ -147,6 +147,12 @@ export function installInstagramStories(root, { generation, isCurrent } = {}) {
   const close = () => { clearPlayback(); viewer.hidden = true; viewer.setAttribute('aria-hidden', 'true'); document.body.classList.remove('ig-story-opened'); media.replaceChildren(); fallback.hidden = true; };
   const markViewed = story => { if (!story?.id) return; viewed.set(String(story.id), Date.now()); viewed = new Map([...viewed.entries()].sort((a,b)=>b[1]-a[1]).slice(0,VIEWED_MAX)); saveViewed(viewed); renderTray(); };
   const showFallback = (account, story) => { fallback.href = story?.id ? `https://www.instagram.com/stories/${encodeURIComponent(account.username)}/${encodeURIComponent(story.id)}/` : instagramProfileUrl(account.username); fallback.hidden = false; };
+  const firstUnreadStoryIndex = account => {
+    const index = Array.isArray(account?.stories)
+      ? account.stories.findIndex(story => story?.id && !viewed.has(String(story.id)))
+      : -1;
+    return index >= 0 ? index : 0;
+  };
 
   const next = () => {
     const { account } = current(); if (!account) return close();
@@ -188,7 +194,15 @@ export function installInstagramStories(root, { generation, isCurrent } = {}) {
     media.innerHTML='<div class="ig-story-error">表示できるStoryメディアがありません。</div>'; showFallback(account,story);
   }
 
-  function openViewer(username) { const accounts=activeAccounts(); const i=accounts.findIndex(x=>x.username===username); if(i<0)return; state.accounts=accounts; state.accountIndex=i; state.storyIndex=0; renderViewer(); }
+  function openViewer(username) {
+    const accounts = activeAccounts();
+    const i = accounts.findIndex(x => x.username === username);
+    if (i < 0) return;
+    state.accounts = accounts;
+    state.accountIndex = i;
+    state.storyIndex = firstUnreadStoryIndex(accounts[i]);
+    renderViewer();
+  }
 
   const fetchBatch = async (names, signal) => {
     const response = await fetch('/api/instagram-stories',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json','X-Instagram-Story-Client':'1'},credentials:'same-origin',cache:'no-store',body:JSON.stringify({usernames:names}),signal});
