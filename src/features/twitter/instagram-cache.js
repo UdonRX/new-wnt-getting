@@ -145,12 +145,35 @@ function idbKeys(db) {
 
 export async function readInstagramCaches(usernames) {
   const names = [...new Set((usernames || []).map(value => String(value || '').trim().toLowerCase()).filter(Boolean))];
-  const db = await openDb();
+  if (!names.length) return new Map();
+
   const result = new Map();
+  const missing = [];
+
+  // Re-renders and SNS mode switches should never wait for IndexedDB when the same
+  // sanitized record is already in memory.
   for (const username of names) {
-    let raw = db ? await idbGet(db, username) : memoryFallback.get(username);
-    const record = sanitizeRecord(raw);
-    if (record) result.set(username, record);
+    const memory = sanitizeRecord(memoryFallback.get(username));
+    if (memory) result.set(username, memory);
+    else missing.push(username);
+  }
+  if (!missing.length) return result;
+
+  const db = await openDb();
+  if (!db) return result;
+
+  // The previous implementation awaited one IndexedDB transaction per account in series.
+  // Read independent account records together so 10+ registrations do not add startup
+  // latency linearly.
+  const records = await Promise.all(missing.map(async username => {
+    const raw = await idbGet(db, username);
+    return [username, sanitizeRecord(raw)];
+  }));
+
+  for (const [username, record] of records) {
+    if (!record) continue;
+    result.set(username, record);
+    memoryFallback.set(username, record);
   }
   return result;
 }

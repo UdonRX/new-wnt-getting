@@ -4,7 +4,14 @@ const PROFILE_CONCURRENCY = 3;
 const QUALITY_CONCURRENCY = 1;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FORCE_NETWORK_WINDOW_MS = 5000;
+const QUALITY_INITIAL_DELAY_MS = 700;
+const QUALITY_PROFILE_QUIET_MS = 220;
+const QUALITY_PROFILE_WAIT_MAX_MS = 4500;
 const activeInstalls = new WeakMap();
+
+function sleep(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, Math.max(0, ms)));
+}
 
 function createLimiter(limit) {
   let active = 0;
@@ -135,6 +142,7 @@ export function installInstagramStability(root) {
   const disposers = [];
   let disposed = false;
   let forceNetworkUntil = 0;
+  const qualityNotBefore = performance.now() + QUALITY_INITIAL_DELAY_MS;
 
   const onClick = event => {
     const target = event.target instanceof Element ? event.target.closest('button') : null;
@@ -144,6 +152,28 @@ export function installInstagramStability(root) {
   };
   document.addEventListener('click', onClick, true);
   disposers.push(() => document.removeEventListener('click', onClick, true));
+
+  const waitForProfileQuiet = async () => {
+    const deadline = performance.now() + QUALITY_PROFILE_WAIT_MAX_MS;
+    while (!disposed && performance.now() < deadline) {
+      const initialDelay = qualityNotBefore - performance.now();
+      if (initialDelay > 0) {
+        await sleep(Math.min(120, initialDelay));
+        continue;
+      }
+
+      const before = profileLimiter.stats();
+      if (before.active === 0 && before.queued === 0) {
+        // Give the timeline a short chance to enqueue the next account before spending
+        // bandwidth/CPU on high-resolution upgrades.
+        await sleep(QUALITY_PROFILE_QUIET_MS);
+        const after = profileLimiter.stats();
+        if (after.active === 0 && after.queued === 0) return;
+      } else {
+        await sleep(90);
+      }
+    }
+  };
 
   const patchedFetch = async (input, init) => {
     const url = requestUrl(input);
@@ -155,8 +185,8 @@ export function installInstagramStability(root) {
       const username = String(url.searchParams.get('username') || '').trim().toLowerCase();
       const cursor = String(url.searchParams.get('cursor') || '').trim();
 
-      // Account-manager close currently asks the timeline for a force refresh of every account.
-      // Reuse a fresh device cache for those already loaded accounts; only a new/stale account hits Instagram.
+      // Account-manager close asks the timeline to re-evaluate accounts. Reuse a fresh
+      // device cache for already-loaded accounts; only a new/stale account hits Instagram.
       if (username && !cursor && Date.now() >= forceNetworkUntil) {
         try {
           const records = await readInstagramCaches([username]);
@@ -172,7 +202,13 @@ export function installInstagramStability(root) {
     }
 
     if (url.pathname === '/api/instagram-image') {
-      return qualityLimiter.run(() => originalFetch(input, init));
+      return qualityLimiter.run(async () => {
+        // Data required for the timeline gets priority. High-res image discovery waits
+        // until profile requests have gone quiet, while the low-res/direct image can paint.
+        await waitForProfileQuiet();
+        if (disposed) throw new DOMException('Instagram stability disposed', 'AbortError');
+        return originalFetch(input, init);
+      });
     }
 
     return originalFetch(input, init);

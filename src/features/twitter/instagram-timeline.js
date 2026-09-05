@@ -18,8 +18,11 @@ const QUALITY_BATCH_SIZE = 6;
 // iOS WebKit is prone to killing a tab when many Instagram accounts create dozens of
 // image-heavy cards in the same task. Keep the DOM budget global, not per account.
 const INITIAL_RENDER_LIMIT = 18;
+const FIRST_PAINT_RENDER_LIMIT = 8;
 const LOAD_MORE_RENDER_LIMIT = 12;
 const NETWORK_ACCOUNT_BATCH = 3;
+const QUALITY_ROOT_MARGIN = '240px 0px';
+const QUALITY_FALLBACK_DELAY_MS = 180;
 const qualityQueue = new Map();
 let qualityTimer = 0;
 
@@ -224,15 +227,26 @@ function mediaGallery(item, onQualityChanged) {
       if (changed) onQualityChanged?.(item);
     });
 
+    const scheduleResolve = () => {
+      const run = () => {
+        if (wrap.isConnected) resolve();
+      };
+      if ('requestIdleCallback' in window) {
+        window.requestIdleCallback(run, { timeout: 900 });
+      } else {
+        window.setTimeout(run, QUALITY_FALLBACK_DELAY_MS);
+      }
+    };
+
     if ('IntersectionObserver' in window) {
       const observer = new IntersectionObserver(entries => {
         if (!entries.some(entry => entry.isIntersecting)) return;
         observer.disconnect();
-        resolve();
-      }, { rootMargin: '1100px 0px' });
+        scheduleResolve();
+      }, { rootMargin: QUALITY_ROOT_MARGIN });
       observer.observe(wrap);
     } else {
-      resolve();
+      scheduleResolve();
     }
   }
 
@@ -501,6 +515,14 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     return incoming.length;
   };
 
+  const trimVisibleTail = limit => {
+    const max = Math.max(0, Number(limit) || 0);
+    while (visibleItems.length > max) {
+      visibleItems.pop();
+      listHost.lastElementChild?.remove();
+    }
+  };
+
   const syncQueue = username => {
     const record = cacheRecords.get(username);
     if (!record) {
@@ -638,7 +660,7 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
         style: 'margin:12px 14px;'
       }, [
         el('strong', { text: `${targets.length}アカウントを取得中…` }),
-        el('span', { text: `端末負荷を抑えながら最新投稿を読み込みます` })
+        el('span', { text: '取得できた投稿から順番に表示します' })
       ]));
       status.textContent = '更新中…';
     }
@@ -646,49 +668,72 @@ export function renderInstagramTimeline(root, options, { generation, isCurrent, 
     let ok = 0;
     let newCount = 0;
     let processed = 0;
-    const displayCandidates = [];
+    let nextTargetIndex = 0;
+    let progressiveStarted = hadCache;
 
-    // Process accounts in small batches instead of retaining every response until one
-    // giant Promise.allSettled completes. Yield between batches so Safari can paint/GC.
-    for (let start = 0; start < targets.length; start += NETWORK_ACCOUNT_BATCH) {
-      if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected || disposed) return;
-      const batchNames = targets.slice(start, start + NETWORK_ACCOUNT_BATCH);
-      const results = await Promise.allSettled(batchNames.map(username => fetchInstagramAccount(username)));
-      if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected || disposed) return;
+    const stillCurrent = () => (
+      isCurrent(generation) &&
+      serial === refreshSerial &&
+      screen.isConnected &&
+      !disposed
+    );
 
-      for (let index = 0; index < batchNames.length; index += 1) {
-        const username = batchNames[index];
-        const result = results[index];
-        if (result.status !== 'fulfilled') {
-          console.warn('[instagram-account-fetch]', username, result.reason?.message || result.reason);
-          continue;
-        }
-        ok += 1;
-        const old = cacheRecords.get(username);
-        const oldKeys = new Set((old?.items || []).map(itemKey));
-        const persisted = await persistNetworkPage(username, result.value, { initial: true });
-        const newItems = persisted.fresh.filter(item => !oldKeys.has(itemKey(item)));
-        newCount += newItems.length;
-        if (!old?.items?.length) {
-          displayCandidates.push(...persisted.next.items.slice(0, INSTAGRAM_PAGE_SIZE));
-        } else if (newItems.length) {
-          displayCandidates.push(...newItems);
-        }
+    const processAccount = async username => {
+      let result;
+      try {
+        result = await fetchInstagramAccount(username);
+      } catch (error) {
+        if (stillCurrent()) console.warn('[instagram-account-fetch]', username, error?.message || error);
+        return;
+      } finally {
+        processed += 1;
+        if (stillCurrent()) status.textContent = `${Math.min(processed, targets.length)}/${targets.length}アカウントを取得中…`;
       }
 
-      processed += batchNames.length;
-      status.textContent = `${Math.min(processed, targets.length)}/${targets.length}アカウントを取得中…`;
-      await new Promise(resolve => setTimeout(resolve, 0));
-    }
+      if (!stillCurrent()) return;
+      ok += 1;
+      const old = cacheRecords.get(username);
+      const oldKeys = new Set((old?.items || []).map(itemKey));
+      const persisted = await persistNetworkPage(username, result, { initial: true });
+      if (!stillCurrent()) return;
 
-    if (!isCurrent(generation) || serial !== refreshSerial || !screen.isConnected || disposed) return;
-    if (!hadCache) {
-      visibleItems = [];
-      listHost.replaceChildren();
-      mergeItems(displayCandidates, INITIAL_RENDER_LIMIT);
-    } else {
-      mergeItems(displayCandidates, LOAD_MORE_RENDER_LIMIT);
-    }
+      const newItems = persisted.fresh.filter(item => !oldKeys.has(itemKey(item)));
+      newCount += newItems.length;
+      const candidates = !old?.items?.length
+        ? persisted.next.items.slice(0, INSTAGRAM_PAGE_SIZE)
+        : newItems;
+
+      if (candidates.length) {
+        if (!progressiveStarted) {
+          visibleItems = [];
+          listHost.replaceChildren();
+          progressiveStarted = true;
+        }
+
+        const firstPaint = !hadCache && visibleItems.length === 0;
+        mergeItems(candidates, firstPaint ? FIRST_PAINT_RENDER_LIMIT : LOAD_MORE_RENDER_LIMIT);
+        trimVisibleTail(hadCache ? INITIAL_RENDER_LIMIT + LOAD_MORE_RENDER_LIMIT : INITIAL_RENDER_LIMIT);
+        syncAllQueues(accounts);
+        updateSentinel();
+      }
+
+      // Let WebKit paint the account that just finished before this worker grabs another.
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+    };
+
+    const worker = async () => {
+      while (stillCurrent()) {
+        const index = nextTargetIndex;
+        nextTargetIndex += 1;
+        if (index >= targets.length) return;
+        await processAccount(targets[index]);
+      }
+    };
+
+    const workerCount = Math.min(NETWORK_ACCOUNT_BATCH, targets.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    if (!stillCurrent()) return;
     // Anything fetched but not placed in the bounded DOM stays in per-account queues and
     // appears as the user scrolls, so limiting render work does not discard posts.
     syncAllQueues(accounts);

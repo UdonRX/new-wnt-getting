@@ -1,5 +1,6 @@
 const MEDIA_PATH_PREFIX = '/__pdv2_ig_media/';
-const GALLERY_ROOT_MARGIN = '500px 0px 500px 0px';
+const GALLERY_ROOT_MARGIN = '220px 0px 220px 0px';
+const UPGRADE_AFTER_FIRST_PAINT_MS = 420;
 const activeInstalls = new WeakMap();
 
 function isInstagramRemote(src) {
@@ -70,51 +71,69 @@ function rememberGood(image) {
   image.dataset.igLastGoodSrc = current;
 }
 
-function warmRemoteThroughFastPath(image, remoteSrc, { refresh = false } = {}) {
-  const context = mediaContext(image);
-  if (!context || !isInstagramRemote(remoteSrc)) return;
-  image.loading = 'eager';
-  try { image.fetchPriority = 'high'; } catch {}
-  setImageSrc(image, stablePath(context.key, context.index, remoteSrc, { refresh }));
+function scheduleUpgrade(image, remoteSrc, delay = UPGRADE_AFTER_FIRST_PAINT_MS) {
+  if (!image?.isConnected || !isInstagramRemote(remoteSrc)) return;
+  if (image.dataset.igUpgradeScheduled === remoteSrc || image.dataset.igUpgradePending === remoteSrc) return;
+  image.dataset.igUpgradeScheduled = remoteSrc;
+  window.setTimeout(() => {
+    if (!image.isConnected || image.dataset.igUpgradeScheduled !== remoteSrc) return;
+    delete image.dataset.igUpgradeScheduled;
+    preloadUpgrade(image, remoteSrc);
+  }, Math.max(0, delay));
 }
 
 function preloadUpgrade(image, remoteSrc) {
-  const context = mediaContext(image);
-  if (!context || !isInstagramRemote(remoteSrc)) return;
+  if (!image?.isConnected || !isInstagramRemote(remoteSrc)) return;
   if (image.dataset.igUpgradePending === remoteSrc) return;
 
-  const previous = image.dataset.igLastGoodSrc || '';
+  const previous = image.dataset.igLastGoodSrc || image.dataset.igInitialRemoteSrc || '';
   image.dataset.igUpgradePending = remoteSrc;
-  if (previous) setImageSrc(image, previous);
+  if (previous && image.getAttribute('src') !== previous) setImageSrc(image, previous);
 
+  // Keep the already-painted image in place. Load the higher-quality URL separately at
+  // low priority and swap only after it is decoded/cached by the browser.
   const probe = new Image();
   probe.decoding = 'async';
   probe.loading = 'eager';
+  probe.referrerPolicy = 'no-referrer';
   try { probe.fetchPriority = 'low'; } catch {}
   probe.onload = () => {
     if (!image.isConnected || image.dataset.igUpgradePending !== remoteSrc) return;
-    const finalSrc = stablePath(context.key, context.index, remoteSrc);
     delete image.dataset.igUpgradePending;
-    setImageSrc(image, finalSrc);
-    image.dataset.igLastGoodSrc = finalSrc;
+    setImageSrc(image, remoteSrc);
+    image.dataset.igLastGoodSrc = remoteSrc;
     image.style.filter = '';
     image.style.transform = '';
   };
   probe.onerror = () => {
     if (image.dataset.igUpgradePending === remoteSrc) delete image.dataset.igUpgradePending;
   };
-  probe.src = stablePath(context.key, context.index, remoteSrc, { refresh: true });
+  probe.src = remoteSrc;
 }
 
 function warmGallery(gallery) {
   if (!gallery || gallery.dataset.igFastWarmed === '1') return;
   gallery.dataset.igFastWarmed = '1';
   const images = [...gallery.querySelectorAll('img[data-instagram-media-index]')];
-  images.forEach(image => {
-    image.loading = 'eager';
+
+  images.forEach((image, index) => {
     const src = image.getAttribute('src') || '';
-    if (isFastPath(src)) return;
-    if (isInstagramRemote(src)) warmRemoteThroughFastPath(image, src);
+    if (isInstagramRemote(src) && !image.dataset.igInitialRemoteSrc) {
+      image.dataset.igInitialRemoteSrc = src;
+    }
+
+    // Only the first slide of a near-viewport carousel competes for first-paint
+    // bandwidth. Hidden 2/3, 3/3 slides stay lazy/low-priority until needed.
+    if (index === 0) {
+      image.loading = 'eager';
+      try { image.fetchPriority = 'high'; } catch {}
+    } else {
+      image.loading = 'lazy';
+      try { image.fetchPriority = 'low'; } catch {}
+    }
+
+    // Do not rewrite a fresh remote image to the Service Worker path here. The previous
+    // fast path restarted the same download and was especially expensive on carousels.
   });
 }
 
@@ -160,19 +179,36 @@ export function installInstagramImageFastPath(root) {
     rememberGood(image);
     image.style.filter = '';
     image.style.transform = '';
+
+    const deferred = String(image.dataset.igDeferredUpgrade || '').trim();
+    if (deferred) {
+      delete image.dataset.igDeferredUpgrade;
+      scheduleUpgrade(image, deferred);
+    }
   };
 
   const onError = event => {
     const image = event.target;
     if (!(image instanceof HTMLImageElement) || !image.closest('.instagram-media-gallery')) return;
     const src = image.getAttribute('src') || '';
-    if (!isFastPath(src)) return;
-    evictStable(image);
-    try {
-      const url = new URL(src, window.location.href);
-      const fallback = url.searchParams.get('src') || '';
-      if (isInstagramRemote(fallback)) setImageSrc(image, fallback);
-    } catch {}
+
+    if (isFastPath(src)) {
+      evictStable(image);
+      try {
+        const url = new URL(src, window.location.href);
+        const fallback = url.searchParams.get('src') || '';
+        if (isInstagramRemote(fallback)) setImageSrc(image, fallback);
+      } catch {}
+      return;
+    }
+
+    // If the lightweight first image itself fails, fall through to a deferred high-res
+    // candidate instead of leaving the card black.
+    const deferred = String(image.dataset.igDeferredUpgrade || '').trim();
+    if (isInstagramRemote(deferred) && deferred !== src) {
+      delete image.dataset.igDeferredUpgrade;
+      setImageSrc(image, deferred);
+    }
   };
 
   root.addEventListener('load', onLoad, true);
@@ -187,12 +223,28 @@ export function installInstagramImageFastPath(root) {
     const src = image.getAttribute('src') || '';
     if (!isInstagramRemote(src)) return;
 
-    const gallery = image.closest('.instagram-media-gallery');
-    if (image.dataset.igLastGoodSrc) {
-      preloadUpgrade(image, src);
+    const initial = String(image.dataset.igInitialRemoteSrc || '').trim();
+    const good = String(image.dataset.igLastGoodSrc || '').trim();
+
+    if (!initial) {
+      image.dataset.igInitialRemoteSrc = src;
       return;
     }
-    if (gallery?.dataset.igFastWarmed === '1') warmRemoteThroughFastPath(image, src);
+
+    if (src === initial || src === good) return;
+
+    if (good) {
+      // A high-res resolver changed src. Keep the painted source visible, then upgrade in
+      // the background without a black/blank transition.
+      setImageSrc(image, good);
+      scheduleUpgrade(image, src);
+      return;
+    }
+
+    // The initial image is still loading. Undo an early high-res swap and remember it for
+    // after first paint rather than restarting the visible request.
+    image.dataset.igDeferredUpgrade = src;
+    setImageSrc(image, initial);
   };
 
   const mutations = new MutationObserver(records => {
