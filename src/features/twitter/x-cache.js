@@ -59,6 +59,50 @@ function stringValue(value) {
   return typeof value === 'string' ? value : value == null ? '' : String(value);
 }
 
+function plainText(value = '') {
+  return stringValue(value).replace(/\s+/g, ' ').trim();
+}
+
+function isGenericXName(value = '') {
+  return /^(?:X|Twitter\s*\/\s*X)$/i.test(plainText(value));
+}
+
+function cleanCachedMediaText(value = '') {
+  let current = stringValue(value);
+  for (let pass = 0; pass < 3 && current; pass += 1) {
+    const decoded = current
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#(?:39|x27);/gi, "'")
+      .replace(/&amp;/gi, '&');
+    const next = decoded
+      .replace(/<\s*(video|audio|picture)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, ' ')
+      .replace(/<\s*\/?\s*(?:video|audio|picture|img|source|track)\b[^>]*>?/gi, ' ')
+      .replace(/<\s*br\s*\/?\s*>/gi, ' ');
+    if (next === current) break;
+    current = next;
+  }
+  return current
+    .replace(/<\s*\/?\s*(?:video|audio|picture|img|source|track|br)\b[^>]*>?/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function quotePrefixName(text = '') {
+  const match = plainText(text).match(/^([^:：]{1,80})\s*[:：]\s*(.+)$/);
+  if (!match) return '';
+  const name = plainText(match[1]).replace(/\s*\(@[A-Za-z0-9_]+\)\s*$/, '').trim();
+  if (!name || isGenericXName(name) || /^@/.test(name) || /^https?:\/\//i.test(name)) return '';
+  return name;
+}
+
+function stripQuotePrefix(text = '', name = '') {
+  if (!name) return plainText(text);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return plainText(text).replace(new RegExp(`^${escaped}\\s*[:：]\\s*`, 'i'), '').trim();
+}
+
 function safeHttpUrl(value) {
   const raw = stringValue(value).trim();
   if (!raw) return '';
@@ -117,10 +161,18 @@ function sanitizeQuote(quote) {
   if (!quote || typeof quote !== 'object') return null;
   const id = stringValue(quote.id).trim();
   const url = safeHttpUrl(quote.url);
-  const text = stringValue(quote.text);
+  let text = cleanCachedMediaText(quote.text);
   const media = sanitizeMedia(quote.media);
   const links = sanitizeLinks(quote.links);
   const author = sanitizeAuthor(quote.author);
+  if (isGenericXName(author.name)) author.name = '';
+  if (!author.name && !author.handle) {
+    const inferredName = quotePrefixName(text);
+    if (inferredName) {
+      author.name = inferredName;
+      text = stripQuotePrefix(text, inferredName);
+    }
+  }
   if (!id && !url && !text && !media.length) return null;
   return {
     id,
@@ -164,7 +216,7 @@ function sanitizePost(post, cachedAt) {
     url,
     createdAt,
     author: sanitizeAuthor(post.author),
-    text: stringValue(post.text),
+    text: cleanCachedMediaText(post.text),
     media: sanitizeMedia(post.media),
     quote: sanitizeQuote(post.quote),
     links: sanitizeLinks(post.links),
@@ -235,6 +287,12 @@ function prepareStored(records, now) {
     .filter(record => Number.isFinite(record.sortAt) && record.sortAt >= now - X_CACHE_RETENTION_MS);
 }
 
+function recordsDiffer(rawRecords, normalizedRecords) {
+  if (rawRecords.length !== normalizedRecords.length) return true;
+  const rawByKey = new Map(rawRecords.map(record => [String(record?.key || ''), record]));
+  return normalizedRecords.some(record => JSON.stringify(rawByKey.get(record.key) || null) !== JSON.stringify(record));
+}
+
 export async function readXPostCache() {
   const now = Date.now();
   try {
@@ -242,8 +300,7 @@ export async function readXPostCache() {
     const raw = await readRaw(db);
     const prepared = prepareStored(raw.posts, now);
     const records = mergeRecords([], prepared, now);
-    const rawKeys = new Set(raw.posts.map(record => String(record?.key || '')).filter(Boolean));
-    const needsCleanup = records.length !== raw.posts.length || records.some(record => !rawKeys.has(record.key));
+    const needsCleanup = recordsDiffer(raw.posts, records);
     if (needsCleanup) {
       try {
         await replaceAll(db, records, raw.fetchedAt);
