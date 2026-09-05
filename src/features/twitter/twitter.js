@@ -1,6 +1,6 @@
 import { el } from '../../shared/dom.js';
 import { topbar } from '../../shared/components.js';
-import { shortDate } from '../../shared/time.js';
+import { relativeTime } from '../../shared/time.js';
 import { openImageViewer } from './image-viewer.js';
 import { iconSvg } from '../../shared/icons.js';
 import { isXUrl, normalizeXFeed } from './x-normalizer.js';
@@ -660,31 +660,68 @@ function tweetCard(item) {
   const media = Array.isArray(item?.media) ? item.media : [];
   const images = media.filter(entry => entry?.type === 'image' && entry.url).map(entry => entry.url).slice(0, 4);
   const videoMedia = media.filter(entry => entry?.type === 'video' && (entry.url || entry.poster)).slice(0, 4);
-  const hasVideoMedia = videoMedia.length > 0;
-  const card = el('article', { class: 'tweet-card' });
+  const card = el('article', {
+    class: 'tweet-card tweet-timeline-item',
+    style: 'margin:0;padding:12px 0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none;display:grid;grid-template-columns:42px minmax(0,1fr);column-gap:10px;align-items:start;'
+  });
   const author = item.author || {};
-  card.append(el('div', { class: 'tweet-author-row' }, [
-    makeTweetAuthorAvatar(author),
-    el('strong', { class: 'tweet-author-name', text: authorLabel(author) })
-  ]));
+  const avatar = makeTweetAuthorAvatar(author);
+  avatar.style.cssText += ';width:42px;height:42px;min-width:42px;min-height:42px;border-radius:50%;display:grid;place-items:center;background:var(--surface-2);font-size:14px;font-weight:800;line-height:1;';
+  card.append(avatar);
+
+  const content = el('div', { class: 'tweet-timeline-content', style: 'min-width:0;' });
+  const name = String(author.name || '').trim() || String(author.handle || '').trim() || 'X';
+  const handle = String(author.handle || '').trim();
+  const elapsed = relativeTime(item.createdAt);
+  const meta = el('div', {
+    class: 'tweet-timeline-meta',
+    style: 'min-width:0;display:flex;align-items:baseline;gap:4px;overflow:hidden;white-space:nowrap;line-height:1.25;'
+  });
+  meta.append(el('strong', {
+    class: 'tweet-timeline-name',
+    text: name,
+    style: 'min-width:0;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:780;color:var(--text-strong);'
+  }));
+  if (handle) meta.append(el('span', {
+    class: 'tweet-timeline-handle',
+    text: handle,
+    style: 'min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:var(--muted);'
+  }));
+  if (elapsed) {
+    meta.append(
+      el('span', { class: 'tweet-timeline-dot', text: '·', style: 'flex:0 0 auto;font-size:14px;color:var(--muted);' }),
+      el('a', {
+        class: 'tweet-timeline-time',
+        href: canonicalPostUrl(item),
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        text: elapsed,
+        'aria-label': `${elapsed}、Xで投稿を開く`,
+        style: 'flex:0 0 auto;font-size:14px;color:var(--muted);text-decoration:none;'
+      })
+    );
+  }
+  content.append(meta);
 
   const displayText = String(item.text || '').trim();
   if (displayText) {
-    const text = el('div', { class: 'tweet-text' });
+    const text = el('div', {
+      class: 'tweet-text',
+      style: 'margin-top:3px;font-size:15.5px;line-height:1.45;overflow-wrap:anywhere;word-break:normal;'
+    });
     appendLinkified(text, displayText);
-    card.append(text);
-  } else if (images.length && !hasVideoMedia) card.classList.add('tweet-card-photo-only');
-  else if (hasVideoMedia) card.classList.add('tweet-card-media-only');
+    content.append(text);
+  }
 
   const quoteCard = makeTweetQuoteCard(item.quote);
-  if (quoteCard) card.append(quoteCard);
+  if (quoteCard) content.append(quoteCard);
 
   if (videoMedia.length) {
     const stack = el('div', { class: 'tweet-video-stack' });
     videoMedia.forEach(entry => {
       stack.append(entry.url ? makeTweetVideo(item, entry.url, entry.poster || '') : makeExternalOnlyVideo(item, entry.poster || ''));
     });
-    card.append(stack);
+    content.append(stack);
   }
 
   if (images.length) {
@@ -708,14 +745,14 @@ function tweetCard(item) {
       };
       grid.append(button);
     });
-    card.append(grid);
+    content.append(grid);
   }
 
   const youtubeIds = [...new Set((item.links || []).map(youtubeVideoIdFromUrl).filter(Boolean))].slice(0, 3);
   if (youtubeIds.length) {
     const youtubeStack = el('div', { class: 'tweet-youtube-stack' });
     youtubeIds.forEach(videoId => youtubeStack.append(makeTweetYouTubeCard(videoId)));
-    card.append(youtubeStack);
+    content.append(youtubeStack);
   }
 
   const extra = [...new Set(item.links || [])]
@@ -726,13 +763,10 @@ function tweetCard(item) {
     extra.forEach(url => links.append(el('a', {
       class: 'tweet-external-link', href: url, target: '_blank', rel: 'noopener noreferrer', text: url
     })));
-    card.append(links);
+    content.append(links);
   }
 
-  card.append(el('div', { class: 'tweet-footer' }, [
-    el('span', { class: 'media-meta', text: shortDate(item.createdAt) }),
-    el('a', { class: 'tweet-open-x', href: canonicalPostUrl(item), target: '_blank', rel: 'noopener noreferrer', text: 'Xで開く ↗' })
-  ]));
+  card.append(content);
   return card;
 }
 
@@ -803,7 +837,10 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     el('span', { class: 'twitter-pull-spinner', text: '↻' }),
     el('span', { class: 'twitter-pull-label', text: '下に引いて更新' })
   ]);
-  const host = el('div', { class: 'twitter-feed-host' });
+  const host = el('div', {
+    class: 'twitter-feed-host',
+    style: 'display:block;margin:0;padding:0;background:transparent;'
+  });
   screen.append(updateStatus, pullIndicator, host);
 
   let visiblePosts = [];
