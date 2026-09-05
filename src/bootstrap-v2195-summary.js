@@ -18,4 +18,6 @@ import './features/reader/reader-recommend-cache-fast.js?v=21923latestcache1';
 import './features/reader/reader-list-ux.js?v=21917tabs2';
 // v2.19.17: 横画面操作バーを動画と同じ時計回り90°へ回転する。
 import './features/media/media-landscape-ui.js?v=21917landscape2';
+// 全画面共通: 長い追加/編集シートでも上部の×を常時表示して閉じられるようにする。
+import './shared/sheet-close-global.js?v=2199sheetclose1';
 import './main.js?v=2197sns3';
