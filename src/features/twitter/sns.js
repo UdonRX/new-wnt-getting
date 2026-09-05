@@ -6,6 +6,7 @@ import { openInstagramAccountManager } from './instagram-accounts.js';
 import { renderInstagramTimeline } from './instagram-timeline.js';
 import { disposeInstagramImageFastPath, installInstagramImageFastPath } from './instagram-image-fast.js';
 import { disposeInstagramStability, installInstagramStability } from './instagram-stability.js';
+import { disposeInstagramStories, installInstagramStories } from './instagram-stories.js';
 
 export { warmTwitterFeeds };
 
@@ -90,6 +91,7 @@ function enhanceXChrome(root, options, generation) {
 }
 
 export async function renderSNS(root, options = {}) {
+  disposeInstagramStories(root);
   disposeInstagramImageFastPath(root);
   disposeInstagramStability(root);
   const generation = ++snsRenderGeneration;
@@ -102,6 +104,10 @@ export async function renderSNS(root, options = {}) {
       generation,
       isCurrent: value => value === snsRenderGeneration,
       modeSegment: makeModeSegment(root, options, 'instagram')
+    });
+    installInstagramStories(root, {
+      generation,
+      isCurrent: value => value === snsRenderGeneration
     });
     installInstagramImageFastPath(root);
     return;

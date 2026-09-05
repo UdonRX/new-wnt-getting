@@ -1,5 +1,6 @@
 import newsFeed from '../server/news-feed.mjs';
 import instagramImage from '../server/instagram-image.mjs';
+import instagramStories from '../server/instagram-stories.mjs';
 import { instagramProfile, instagramVideo } from '../server/instagram.mjs';
 import recommendations from '../server/recommendations.mjs';
 import rss from '../server/rss.mjs';
@@ -14,6 +15,7 @@ const handlers = new Map([
   ['instagram-profile', instagramProfile],
   ['instagram-image', instagramImage],
   ['instagram-video', instagramVideo],
+  ['instagram-stories', instagramStories],
   ['recommendations', recommendations],
   ['rss', rss],
   ['twitch-eventsub', twitchEventsub],

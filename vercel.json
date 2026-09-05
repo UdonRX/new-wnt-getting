@@ -34,6 +34,7 @@
     { "source": "/api/instagram-profile", "destination": "/api/feeds?__route=instagram-profile" },
     { "source": "/api/instagram-image", "destination": "/api/feeds?__route=instagram-image" },
     { "source": "/api/instagram-video", "destination": "/api/feeds?__route=instagram-video" },
+    { "source": "/api/instagram-stories", "destination": "/api/feeds?__route=instagram-stories" },
     { "source": "/api/youtube-feed", "destination": "/api/youtube" }
   ],
   "headers": [

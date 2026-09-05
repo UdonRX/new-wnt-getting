@@ -137,6 +137,9 @@ export function openInstagramAccountManager({ onChanged } = {}) {
     title: 'Instagramアカウント',
     onClose: () => {
       if (!dirty) return;
+      try {
+        window.dispatchEvent(new CustomEvent('pdv2:instagram-accounts-changed', { detail: { accounts: instagramAccounts() } }));
+      } catch {}
       requestAnimationFrame(() => requestAnimationFrame(() => onChanged?.()));
     }
   });
