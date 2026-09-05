@@ -2,7 +2,7 @@ import './runtime-v2195.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 
-const BUILD='2197sns1';
+const BUILD='2197sns2';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -105,11 +105,13 @@ async function warmWikipediaDaily(){
 }
 function startBackgroundJobs(){
   preloadFeature('reader',{warm:true});
-  preloadFeature('twitter',{warm:true});
   idle(()=>warmWikipediaDaily(),20);
   idle(()=>preloadFeature('wikipedia'),320);
   idle(()=>preloadFeature('weather'),450);
   idle(()=>preloadFeature('media'),700);
+  // 起動直後にXの履歴同期/Render起動を走らせない。SNSモジュールだけアイドル時に先読みし、
+  // Xのネットワーク取得はユーザーがSNSを開いた時に既存renderTwitterへ任せる。
+  idle(()=>preloadFeature('twitter'),1800);
 }
 
 async function resolveTwitchOAuthReturn(){

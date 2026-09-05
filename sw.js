@@ -1,5 +1,5 @@
-// v2.19.9: 0f3ea301で修正済みのAI要約ゲートを確実に再配布するため、SWキャッシュ世代を更新する。
-const CACHE_NAME='personal-dashboard-v2-19-9-summary-cache1';
+// v2.19.7 SNS freeze fix: SNS関連JSを新キャッシュ世代で再配布し、旧sns.jsの自己再帰Observerを残さない。
+const CACHE_NAME='personal-dashboard-v2-19-9-sns-freeze1';
 const STATIC_FETCH_TIMEOUT_MS=5500;
 const APP_SHELL=[
   '/','/index.html','/manifest.webmanifest',
@@ -10,7 +10,7 @@ const APP_SHELL=[
   '/src/features/reader/reader.js','/src/features/reader/reader-data.js','/src/features/reader/reader-flow.js','/src/features/reader/reader-focus.js','/src/features/reader/reader-rank.js','/src/features/reader/summary-request-coordinator.js','/src/features/reader/summary-fetch-gate.js',
   '/src/features/media/media.js','/src/features/youtube/youtube.js','/src/features/youtube/youtube-player.js',
   '/src/features/twitch/twitch.js','/src/features/twitch/twitch-player.js','/src/features/twitch/twitch-chat.js',
-  '/src/features/twitter/twitter.js','/src/features/twitter/image-viewer.js','/src/features/wikipedia/wikipedia.js','/src/features/settings/settings.js',
+  '/src/features/twitter/twitter.js','/src/features/twitter/sns.js','/src/features/twitter/instagram-accounts.js','/src/features/twitter/instagram-timeline.js','/src/features/twitter/instagram-video.js','/src/features/twitter/image-viewer.js','/src/features/wikipedia/wikipedia.js','/src/features/settings/settings.js',
   '/shared/paper-creative-keywords.js','/icons/icon-192.png','/icons/icon-512.png'
 ];
 function canonicalRequest(request){try{const url=new URL(request.url);return new Request(new URL(url.pathname,self.location.origin).href,{method:'GET',headers:request.headers,credentials:request.credentials,mode:request.mode==='navigate'?'same-origin':request.mode});}catch{return null;}}

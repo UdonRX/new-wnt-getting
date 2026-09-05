@@ -35,8 +35,8 @@
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
   <script>
     (()=>{
-      const BUILD='2196xnorm1';
-      const RECOVERY_KEY='pdv2:startup-recovery:2196xnorm1';
+      const BUILD='2197sns2';
+      const RECOVERY_KEY='pdv2:startup-recovery:2197sns2';
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
@@ -59,7 +59,7 @@
     })();
   </script>
   <script src="/src/features/twitch/twitch-sync.js?v=2196twitchsync1"></script>
-  <!-- v2.19.15: 先読み済みReaderの即時3カード修正をProduction URLへ確実に再配布 -->
-  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2196xnorm1"></script>
+  <!-- v2.19.7: SNSフリーズ修正を旧キャッシュを使わず再配布 -->
+  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2197sns2"></script>
 </body>
 </html>

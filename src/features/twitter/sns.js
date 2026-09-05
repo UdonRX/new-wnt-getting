@@ -56,16 +56,16 @@ function makeModeSegment(root, options, activeMode) {
 }
 
 function enhanceXChrome(root, options, generation) {
-  if (generation !== snsRenderGeneration) return;
+  if (generation !== snsRenderGeneration) return false;
   const screen = root.querySelector('.screen');
   const host = screen?.querySelector('.twitter-feed-host');
-  if (!screen || !host) return;
+  if (!screen || !host) return false;
 
   const header = screen.querySelector('.topbar');
   const title = header?.querySelector('h1');
   const subtitle = header?.querySelector('.subtitle');
-  if (title) title.textContent = 'SNS';
-  if (subtitle) subtitle.textContent = 'Xタイムライン';
+  if (title && title.textContent !== 'SNS') title.textContent = 'SNS';
+  if (subtitle && subtitle.textContent !== 'Xタイムライン') subtitle.textContent = 'Xタイムライン';
 
   const actions = header?.querySelector('.topbar-actions');
   if (actions && !actions.querySelector('[data-sns-instagram-add]')) {
@@ -84,6 +84,7 @@ function enhanceXChrome(root, options, generation) {
   if (!screen.querySelector('.sns-mode-segment')) {
     screen.append(makeModeSegment(root, options, 'x'));
   }
+  return true;
 }
 
 export async function renderSNS(root, options = {}) {
@@ -100,15 +101,30 @@ export async function renderSNS(root, options = {}) {
     return;
   }
 
-  const observer = new MutationObserver(() => enhanceXChrome(root, options, generation));
-  observer.observe(root, { childList: true, subtree: true });
+  // Xは既存renderTwitterをそのまま使う。DOM監視はX本体が描画されるまでの一回だけに限定し、
+  // SNS用タイトル/ボタンの書き換えをMutationObserver自身が再検知し続けないようにする。
+  let observer = null;
+  const enhanceOnce = () => {
+    const done = enhanceXChrome(root, options, generation);
+    if (done && observer) {
+      observer.disconnect();
+      observer = null;
+    }
+    return done;
+  };
+
+  if (!enhanceOnce()) {
+    observer = new MutationObserver(() => enhanceOnce());
+    observer.observe(root, { childList: true, subtree: true });
+  }
 
   try {
     const job = renderTwitter(root, options);
-    enhanceXChrome(root, options, generation);
+    enhanceOnce();
     await job;
-    enhanceXChrome(root, options, generation);
+    enhanceOnce();
   } finally {
-    observer.disconnect();
+    observer?.disconnect();
+    observer = null;
   }
 }
