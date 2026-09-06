@@ -2,7 +2,7 @@ import newsFeed from '../server/news-feed.mjs';
 import instagramImage from '../server/instagram-image.mjs';
 import instagramStories from '../server/instagram-stories.mjs';
 import { instagramProfile, instagramVideo } from '../server/instagram.mjs';
-import recommendations from '../server/recommendations.mjs';
+import recommendations from '../server/recommendations-robust.mjs';
 import rss from '../server/rss.mjs';
 import twitchEventsub from '../server/twitch-eventsub.mjs';
 import twitchFeed from '../server/twitch-feed.mjs';

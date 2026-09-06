@@ -1,6 +1,6 @@
 import chat from '../server/chat.mjs';
 import rankItems from '../server/rank-items.mjs';
-import summary from '../server/summary.mjs';
+import summary from '../server/reader-summary.mjs';
 
 const handlers = new Map([
   ['chat', chat],
