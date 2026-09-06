@@ -7,12 +7,12 @@ import { normalizeXFeed } from './x-normalizer.js';
 import { readXPostCache, writeXPostCache } from './x-cache.js';
 import { X_FEED } from '../../shared/x-feed-config.js';
 
-let renderGeneration = 0;
+let viewGeneration = 0;
 let historyJob = null;
-let renderWarmJob = null;
+let upstreamJob = null;
 const AUTO_REFRESH_MS = 15 * 60 * 1000;
 const HISTORY_TIMEOUT_MS = 5000;
-const RENDER_TIMEOUT_MS = 12000;
+const UPSTREAM_TIMEOUT_MS = 12000;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function cacheRefreshDue(cache) {
@@ -38,26 +38,26 @@ async function fetchAndMerge(feed, { source, timeout, historyOnly = false, upstr
 }
 function historyJobFor(feed) {
   if (historyJob) return historyJob;
-  const job = fetchAndMerge(feed, { source: 'upstash', timeout: HISTORY_TIMEOUT_MS, historyOnly: true })
+  const job = fetchAndMerge(feed, { source: 'history', timeout: HISTORY_TIMEOUT_MS, historyOnly: true })
     .catch(error => { console.warn('[x-history-sync]', error?.message || error); throw error; })
     .finally(() => { if (historyJob === job) historyJob = null; });
   historyJob = job; return job;
 }
-async function prewarmRenderUntilSuccess(feed) {
+async function fetchUpstreamUntilSuccess(feed) {
   let retryMs = 5000;
   while (true) {
-    try { return await fetchAndMerge(feed, { source: 'belmo', timeout: RENDER_TIMEOUT_MS, upstream: true }); }
+    try { return await fetchAndMerge(feed, { source: 'belmo', timeout: UPSTREAM_TIMEOUT_MS, upstream: true }); }
     catch (error) { console.warn('[x-belmo-upstream]', error?.message || error); await sleep(retryMs); retryMs = Math.min(30000, Math.round(retryMs * 1.5)); }
   }
 }
-function renderJobFor(feed) {
-  if (renderWarmJob) return renderWarmJob;
-  const job = prewarmRenderUntilSuccess(feed).finally(() => { if (renderWarmJob === job) renderWarmJob = null; });
-  renderWarmJob = job; return job;
+function upstreamJobFor(feed) {
+  if (upstreamJob) return upstreamJob;
+  const job = fetchUpstreamUntilSuccess(feed).finally(() => { if (upstreamJob === job) upstreamJob = null; });
+  upstreamJob = job; return job;
 }
 export async function warmTwitterFeeds({ force = false } = {}) {
   const cached = await readXPostCache(); const shouldSyncHistory = force || cacheRefreshDue(cached);
-  renderJobFor(X_FEED).catch(() => {}); if (!shouldSyncHistory) return [];
+  upstreamJobFor(X_FEED).catch(() => {}); if (!shouldSyncHistory) return [];
   try { return [await historyJobFor(X_FEED)]; } catch { return []; }
 }
 
@@ -149,7 +149,7 @@ function waitForVideo(video, src, { timeout = 3200 } = {}) {
   });
 }
 async function probeProxy(mediaUrl) { const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 4500); try { const response = await fetch(proxyVideoUrl(mediaUrl, { probe: true }), { cache: 'no-store', signal: controller.signal }); if (!response.ok) throw new Error(`proxy probe ${response.status}`); const data = await response.json().catch(() => ({})); if (data?.ok === false) throw new Error('proxy probe rejected'); return data; } finally { clearTimeout(timer); } }
-async function tryOfficialEmbed(item, container) { const tweetId = tweetIdOf(item); if (!tweetId) throw new Error('Tweet ID not found'); const twttr = await loadXWidgets(); const renderPromise = twttr.widgets.createTweet(tweetId, container, { theme: xEmbedTheme(), conversation: 'none', cards: 'visible', align: 'center', dnt: true, lang: 'ja' }); const result = await Promise.race([Promise.resolve(renderPromise), new Promise((_, reject) => setTimeout(() => reject(new Error('X embed timeout')), 7000))]); if (!result) throw new Error('X embed unavailable'); return result; }
+async function tryOfficialEmbed(item, container) { const tweetId = tweetIdOf(item); if (!tweetId) throw new Error('Tweet ID not found'); const twttr = await loadXWidgets(); const embedPromise = twttr.widgets.createTweet(tweetId, container, { theme: xEmbedTheme(), conversation: 'none', cards: 'visible', align: 'center', dnt: true, lang: 'ja' }); const result = await Promise.race([Promise.resolve(embedPromise), new Promise((_, reject) => setTimeout(() => reject(new Error('X embed timeout')), 7000))]); if (!result) throw new Error('X embed unavailable'); return result; }
 function makeVideoLauncher(poster = '') { const button = el('button', { class: 'tweet-video-launcher', type: 'button', 'aria-label': '動画を再生' }); if (poster) { const image = el('img', { class: 'tweet-video-launcher-poster', src: poster, alt: '', loading: 'lazy', decoding: 'async' }); image.addEventListener('error', () => image.remove(), { once: true }); button.append(image); } button.append(el('span', { class: 'tweet-video-launcher-shade', 'aria-hidden': 'true' }), el('span', { class: 'tweet-video-play-circle', 'aria-hidden': 'true' }, [el('span', { class: 'tweet-video-play-triangle' })])); return button; }
 function setLauncherResolving(launcher, resolving) { if (!launcher) return; launcher.disabled = Boolean(resolving); launcher.classList.toggle('is-resolving', Boolean(resolving)); launcher.setAttribute('aria-label', resolving ? '再生方法を確認中' : '動画を再生'); }
 function makePlayableVideo(poster = '') { const video = document.createElement('video'); video.className = 'tweet-video'; video.controls = true; video.playsInline = true; video.preload = 'metadata'; video.setAttribute('playsinline', ''); video.setAttribute('webkit-playsinline', ''); video.setAttribute('referrerpolicy', 'no-referrer'); if (poster) video.poster = poster; return video; }
@@ -209,16 +209,16 @@ function postIdentity(item) { const id = tweetIdOf(item) || String(item?.id || '
 function postTimestamp(item) { const time = Date.parse(String(item?.createdAt || '')); return Number.isFinite(time) ? time : 0; }
 
 export async function renderTwitter(root, { navigate, refresh = false }) {
-  const generation = ++renderGeneration, feed = X_FEED; let cached = { posts: [], fetchedAt: 0 };
-  try { cached = await readXPostCache(); } catch (error) { console.warn('[x-cache-read]', error?.message || error); } if (generation !== renderGeneration) return;
+  const generation = ++viewGeneration, feed = X_FEED; let cached = { posts: [], fetchedAt: 0 };
+  try { cached = await readXPostCache(); } catch (error) { console.warn('[x-cache-read]', error?.message || error); } if (generation !== viewGeneration) return;
   let requestRefresh = () => Promise.resolve(); const screen = el('section', { class: 'screen' }); screen.append(topbar('X', { subtitle: 'タイムライン', actions: [{ label: '↻', title: '更新', onClick: () => requestRefresh() }, { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }] }));
   const updateStatus = el('div', { class: 'twitter-update-status media-meta', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', style: 'min-height:16px;margin:0 4px 4px;opacity:.82;' }); updateStatus.hidden = true;
   const pullIndicator = el('div', { class: 'twitter-pull-refresh', 'aria-hidden': 'true' }, [el('span', { class: 'twitter-pull-spinner', text: '↻' }), el('span', { class: 'twitter-pull-label', text: '下に引いて更新' })]);
   const host = el('div', { class: 'twitter-feed-host', style: 'display:block;margin:0 -14px;padding:0;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;overflow:visible;' }); screen.append(updateStatus, pullIndicator, host);
   let visiblePosts = [];
-  const draw = posts => { if (generation !== renderGeneration) return; const list = Array.isArray(posts) ? posts : []; if (!list.length) return; visiblePosts = [...list]; host.replaceChildren(...list.map(tweetCard)); };
+  const draw = posts => { if (generation !== viewGeneration) return; const list = Array.isArray(posts) ? posts : []; if (!list.length) return; visiblePosts = [...list]; host.replaceChildren(...list.map(tweetCard)); };
   const mergeNewPosts = posts => {
-    if (generation !== renderGeneration) return 0; const list = Array.isArray(posts) ? posts : []; if (!list.length) return 0; if (!visiblePosts.length) { draw(list); return list.length; }
+    if (generation !== viewGeneration) return 0; const list = Array.isArray(posts) ? posts : []; if (!list.length) return 0; if (!visiblePosts.length) { draw(list); return list.length; }
     const scrollTop = Math.max(0, Number(window.scrollY || document.scrollingElement?.scrollTop || 0)), scrollAnchor = scrollTop > 1 ? [...host.children].find(child => child.getBoundingClientRect().bottom > 0) : null, scrollAnchorTop = scrollAnchor?.getBoundingClientRect().top ?? 0;
     const freshByIdentity = new Map(list.map(item => [postIdentity(item), item]).filter(([identity]) => identity)); visiblePosts.forEach((existing, index) => { const fresh = freshByIdentity.get(postIdentity(existing)), freshAvatar = String(fresh?.author?.avatar || '').trim(), currentAvatar = String(existing?.author?.avatar || '').trim(); if (!fresh || !freshAvatar || freshAvatar === currentAvatar) return; existing.author = { ...(existing.author || {}), ...(fresh.author || {}) }; const avatarNode = host.children[index]?.querySelector('.tweet-main-avatar'); if (avatarNode) avatarNode.replaceWith(makeTimelineAvatar(existing.author, { main: true })); });
     const known = new Set(visiblePosts.map(postIdentity).filter(Boolean)), incoming = []; for (const item of list) { const identity = postIdentity(item); if (!identity || known.has(identity)) continue; known.add(identity); incoming.push(item); } incoming.sort((a, b) => postTimestamp(b) - postTimestamp(a));
@@ -226,11 +226,11 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     while (visiblePosts.length > 100) { visiblePosts.pop(); host.lastElementChild?.remove(); }
     if (incoming.length && scrollAnchor?.isConnected) { const delta = scrollAnchor.getBoundingClientRect().top - scrollAnchorTop; if (Number.isFinite(delta) && Math.abs(delta) > 0.5) window.scrollBy(0, delta); } return incoming.length;
   };
-  if (cached?.posts?.length) draw(cached.posts); else host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [el('strong', { text: 'X履歴を読み込み中…' }), el('span', { text: 'Upstash履歴を先に確認し、Belmo取得も並行します' })]));
+  if (cached?.posts?.length) draw(cached.posts); else host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [el('strong', { text: 'X履歴を読み込み中…' }), el('span', { text: 'Redis履歴を先に確認し、Belmo取得も並行します' })]));
   let statusTimer = null, refreshSerial = 0; const setUpdateStatus = (text = '', autoHideMs = 0) => { if (statusTimer) clearTimeout(statusTimer); statusTimer = null; if (!text) { updateStatus.textContent = ''; updateStatus.hidden = true; return; } updateStatus.textContent = text; updateStatus.hidden = false; if (autoHideMs > 0) statusTimer = setTimeout(() => { if (!updateStatus.isConnected) return; updateStatus.textContent = ''; updateStatus.hidden = true; }, autoHideMs); };
-  const applyMergedResult = async result => { if (generation !== renderGeneration) return false; let posts = Array.isArray(result?.posts) ? result.posts : []; if (!posts.length) posts = (await readXPostCache()).posts || []; if (generation !== renderGeneration || !posts.length) return false; mergeNewPosts(posts); return true; };
+  const applyMergedResult = async result => { if (generation !== viewGeneration) return false; let posts = Array.isArray(result?.posts) ? result.posts : []; if (!posts.length) posts = (await readXPostCache()).posts || []; if (generation !== viewGeneration || !posts.length) return false; mergeNewPosts(posts); return true; };
   const watchBackgroundResult = job => job.then(applyMergedResult).catch(error => { console.warn('[x-sync-background]', error?.message || error); return false; });
-  requestRefresh = () => { const serial = ++refreshSerial; setUpdateStatus('更新中…'); const history = historyJobFor(feed), renderWarm = renderJobFor(feed); history.then(async result => { await applyMergedResult(result); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => { console.warn('[x-manual-refresh-history]', error?.message || error); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus('更新できませんでした（履歴を表示中）', 2600); }); renderWarm.then(async result => { await applyMergedResult(result); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => console.warn('[x-manual-refresh-upstream]', error?.message || error)); return Promise.resolve(); };
-  root.replaceChildren(screen); attachPullToRefresh(screen, pullIndicator, () => requestRefresh()); const history = historyJobFor(feed), renderWarm = renderJobFor(feed); watchBackgroundResult(history); watchBackgroundResult(renderWarm); if (refresh) requestRefresh(); if (cached?.posts?.length) return;
-  try { const first = await Promise.any([history, renderWarm]); await applyMergedResult(first); } catch { if (generation !== renderGeneration) return; const fallback = await readXPostCache(); if (generation !== renderGeneration || !fallback?.posts?.length) return; draw(fallback.posts); }
+  requestRefresh = () => { const serial = ++refreshSerial; setUpdateStatus('更新中…'); const history = historyJobFor(feed), upstream = upstreamJobFor(feed); history.then(async result => { await applyMergedResult(result); if (generation === viewGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => { console.warn('[x-manual-refresh-history]', error?.message || error); if (generation === viewGeneration && serial === refreshSerial) setUpdateStatus('更新できませんでした（履歴を表示中）', 2600); }); upstream.then(async result => { await applyMergedResult(result); if (generation === viewGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => console.warn('[x-manual-refresh-upstream]', error?.message || error)); return Promise.resolve(); };
+  root.replaceChildren(screen); attachPullToRefresh(screen, pullIndicator, () => requestRefresh()); const history = historyJobFor(feed), upstream = upstreamJobFor(feed); watchBackgroundResult(history); watchBackgroundResult(upstream); if (refresh) requestRefresh(); if (cached?.posts?.length) return;
+  try { const first = await Promise.any([history, upstream]); await applyMergedResult(first); } catch { if (generation !== viewGeneration) return; const fallback = await readXPostCache(); if (generation !== viewGeneration || !fallback?.posts?.length) return; draw(fallback.posts); }
 }
