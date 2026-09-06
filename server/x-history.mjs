@@ -1,8 +1,6 @@
 import rss from './rss.mjs';
+import { X_LIST_ID as LIST_ID, X_LIST_PATH as LIST_PATH, X_RSS_URL as RSS_URL, X_RSSHUB_HOSTNAME } from '../src/shared/x-feed-config.js';
 
-const LIST_ID = '2087706843519111304';
-const LIST_PATH = `/twitter/list/${LIST_ID}`;
-const RSS_URL = `https://diygod-x.onrender.com${LIST_PATH}`;
 // DIYgod_X persistent-history.ts uses xxhash-wasm h64ToString(path) (XXH64, seed 0).
 const HISTORY_KEY = 'rsshub:history:v1:7930682cb6c0217b';
 const HISTORY_MAX = 100;
@@ -21,7 +19,7 @@ export function isXHistoryRequest(req) {
     const url = new URL(raw);
     return url.protocol === 'https:' &&
       !url.username && !url.password && (!url.port || url.port === '443') &&
-      url.hostname.toLowerCase() === 'diygod-x.onrender.com' &&
+      url.hostname.toLowerCase() === X_RSSHUB_HOSTNAME &&
       url.pathname.replace(/\/+$/, '') === LIST_PATH &&
       !url.search && !url.hash;
   } catch {

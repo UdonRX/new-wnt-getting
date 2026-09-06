@@ -5,8 +5,8 @@ import { openImageViewer } from './image-viewer.js';
 import { iconSvg } from '../../shared/icons.js';
 import { normalizeXFeed } from './x-normalizer.js';
 import { readXPostCache, writeXPostCache } from './x-cache.js';
+import { X_FEED } from '../../shared/x-feed-config.js';
 
-const X_FEED = Object.freeze({ name: 'X', id: '2087706843519111304', url: 'https://diygod-x.onrender.com/twitter/list/2087706843519111304' });
 let renderGeneration = 0;
 let historyJob = null;
 let renderWarmJob = null;
@@ -46,8 +46,8 @@ function historyJobFor(feed) {
 async function prewarmRenderUntilSuccess(feed) {
   let retryMs = 5000;
   while (true) {
-    try { return await fetchAndMerge(feed, { source: 'render', timeout: RENDER_TIMEOUT_MS, upstream: true }); }
-    catch (error) { console.warn('[x-render-prewarm]', error?.message || error); await sleep(retryMs); retryMs = Math.min(30000, Math.round(retryMs * 1.5)); }
+    try { return await fetchAndMerge(feed, { source: 'belmo', timeout: RENDER_TIMEOUT_MS, upstream: true }); }
+    catch (error) { console.warn('[x-belmo-upstream]', error?.message || error); await sleep(retryMs); retryMs = Math.min(30000, Math.round(retryMs * 1.5)); }
   }
 }
 function renderJobFor(feed) {
@@ -226,11 +226,11 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
     while (visiblePosts.length > 100) { visiblePosts.pop(); host.lastElementChild?.remove(); }
     if (incoming.length && scrollAnchor?.isConnected) { const delta = scrollAnchor.getBoundingClientRect().top - scrollAnchorTop; if (Number.isFinite(delta) && Math.abs(delta) > 0.5) window.scrollBy(0, delta); } return incoming.length;
   };
-  if (cached?.posts?.length) draw(cached.posts); else host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [el('strong', { text: 'X履歴を読み込み中…' }), el('span', { text: 'Upstash履歴を先に確認し、Renderは裏で起動します' })]));
+  if (cached?.posts?.length) draw(cached.posts); else host.replaceChildren(el('div', { class: 'twitter-wake-status' }, [el('strong', { text: 'X履歴を読み込み中…' }), el('span', { text: 'Upstash履歴を先に確認し、Belmo取得も並行します' })]));
   let statusTimer = null, refreshSerial = 0; const setUpdateStatus = (text = '', autoHideMs = 0) => { if (statusTimer) clearTimeout(statusTimer); statusTimer = null; if (!text) { updateStatus.textContent = ''; updateStatus.hidden = true; return; } updateStatus.textContent = text; updateStatus.hidden = false; if (autoHideMs > 0) statusTimer = setTimeout(() => { if (!updateStatus.isConnected) return; updateStatus.textContent = ''; updateStatus.hidden = true; }, autoHideMs); };
   const applyMergedResult = async result => { if (generation !== renderGeneration) return false; let posts = Array.isArray(result?.posts) ? result.posts : []; if (!posts.length) posts = (await readXPostCache()).posts || []; if (generation !== renderGeneration || !posts.length) return false; mergeNewPosts(posts); return true; };
   const watchBackgroundResult = job => job.then(applyMergedResult).catch(error => { console.warn('[x-sync-background]', error?.message || error); return false; });
-  requestRefresh = () => { const serial = ++refreshSerial; setUpdateStatus('更新中…'); const history = historyJobFor(feed), renderWarm = renderJobFor(feed); history.then(async result => { await applyMergedResult(result); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => { console.warn('[x-manual-refresh-history]', error?.message || error); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus('更新できませんでした（履歴を表示中）', 2600); }); renderWarm.then(async result => { await applyMergedResult(result); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => console.warn('[x-manual-refresh-render]', error?.message || error)); return Promise.resolve(); };
+  requestRefresh = () => { const serial = ++refreshSerial; setUpdateStatus('更新中…'); const history = historyJobFor(feed), renderWarm = renderJobFor(feed); history.then(async result => { await applyMergedResult(result); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => { console.warn('[x-manual-refresh-history]', error?.message || error); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus('更新できませんでした（履歴を表示中）', 2600); }); renderWarm.then(async result => { await applyMergedResult(result); if (generation === renderGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => console.warn('[x-manual-refresh-upstream]', error?.message || error)); return Promise.resolve(); };
   root.replaceChildren(screen); attachPullToRefresh(screen, pullIndicator, () => requestRefresh()); const history = historyJobFor(feed), renderWarm = renderJobFor(feed); watchBackgroundResult(history); watchBackgroundResult(renderWarm); if (refresh) requestRefresh(); if (cached?.posts?.length) return;
   try { const first = await Promise.any([history, renderWarm]); await applyMergedResult(first); } catch { if (generation !== renderGeneration) return; const fallback = await readXPostCache(); if (generation !== renderGeneration || !fallback?.posts?.length) return; draw(fallback.posts); }
 }
