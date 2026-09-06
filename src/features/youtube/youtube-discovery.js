@@ -5,7 +5,7 @@ const HISTORY_KEY='pdv2:youtubeDiscoveryHistory:v1';
 const LIKES_KEY='pdv2:youtubeDiscoveryLikes:v1';
 const DISLIKES_KEY='pdv2:youtubeDiscoveryDislikes:v1';
 const HIDDEN_CHANNELS_KEY='pdv2:youtubeDiscoveryHiddenChannels:v1';
-const POOL_KEY='pdv2:youtubeDiscoveryPool:v1';
+const POOL_KEY='pdv2:youtubeDiscoveryPool:v2';
 const SEARCH_USAGE_KEY='pdv2:youtubeSearchUsage:v1';
 const CHANNEL_SEARCH_CACHE_KEY='pdv2:youtubeChannelSearchCache:v1';
 const POOL_TTL=6*60*60*1000;
@@ -122,6 +122,7 @@ function removeLoading(){discoveryLoading?.remove();discoveryLoading=null}
 function finishDiscovery({closePlayer=false,notify=true}={}){
   const session=discoverySession;discoverySession=null;removeLoading();
   try{session?.observer?.disconnect?.()}catch{}
+  try{session?.playbackObserver?.disconnect?.()}catch{}
   try{session?.rootObserver?.disconnect?.()}catch{}
   for(const button of session?.extraButtons||[])button?.remove?.();
   if(closePlayer&&session)cleanupYouTubePlayer();
@@ -161,11 +162,11 @@ export async function openYouTubeDiscovery({seedItems=[],registeredChannelIds=[]
   const add=document.createElement('button'),uninterested=document.createElement('button'),hide=document.createElement('button');
   for(const [button,icon,label,aria] of [[add,'＋','登録','このチャンネルを登録'],[uninterested,'×','興味なし','興味なし'],[hide,'⊘','除外','このチャンネルを発見に出さない']]){button.type='button';button.className='youtube-discovery-action';button.innerHTML=`<span>${icon}</span><small>${label}</small>`;button.setAttribute('aria-label',aria);rail.append(button)}
 
-  const session={overlay,extraButtons:[add,uninterested,hide],observer:null,rootObserver:null,onClose,closedNotified:false,refilling:false,lastVideoId:'',actionBusy:false};
+  const session={overlay,extraButtons:[add,uninterested,hide],observer:null,playbackObserver:null,rootObserver:null,onClose,closedNotified:false,refilling:false,lastVideoId:'',actionBusy:false,playbackSkipBusy:false,blockedVideoIds:new Set()};
   discoverySession=session;
   const registered=()=>new Set(registeredChannelIds.map(String));
   const syncButtons=()=>{if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;interest.sync();const added=registered().has(String(item.channelId||''));add.classList.toggle('is-added',added);add.querySelector('span').textContent=added?'✓':'＋'};
-  const persist=()=>savePool(pool);
+  const persist=()=>savePool(pool.filter(item=>!session.blockedVideoIds.has(String(item.videoId||''))));
   const purgeFuture=fromIndex=>{for(let i=pool.length-1;i>fromIndex;i--)if(!isAllowed(pool[i],registeredChannelIds))pool.splice(i,1);persist()};
   const maybeRefill=async(force=false)=>{
     if(session.refilling||discoverySession!==session)return;
@@ -173,6 +174,19 @@ export async function openYouTubeDiscovery({seedItems=[],registeredChannelIds=[]
     try{const extra=await requestPool({seedItems,registeredChannelIds,existingItems:pool,refill:true});const seen=new Set(pool.map(x=>String(x.videoId)));for(const item of extra)if(isAllowed(item,registeredChannelIds)&&!seen.has(String(item.videoId))){seen.add(String(item.videoId));pool.push(item)}persist();const next=nextButton(overlay);if(next&&pool.length>(Math.max(0,currentIndex(overlay,pool))+1))next.disabled=false}catch(error){console.warn('[youtube discovery refill]',error?.message||error)}finally{session.refilling=false}
   };
   const goNext=async()=>{let index=currentIndex(overlay,pool);if(index<0)return false;purgeFuture(index);if(index>=pool.length-1){await maybeRefill(true);index=currentIndex(overlay,pool);purgeFuture(index)}const next=nextButton(overlay);if(!next||index<0||index>=pool.length-1)return false;next.disabled=false;next.click();return true};
+  const skipExternalFallback=async()=>{
+    if(discoverySession!==session||!overlay.isConnected||session.playbackSkipBusy)return;
+    const notice=overlay.querySelector('[data-youtube-playback-notice]');
+    const link=notice?.querySelector?.('a[href*="youtube.com"]');
+    if(!link)return;
+    session.playbackSkipBusy=true;
+    try{
+      const item=currentItem(overlay,pool);
+      if(item?.videoId){session.blockedVideoIds.add(String(item.videoId));persist();console.warn('[youtube discovery] skipping non-embeddable candidate',item.videoId)}
+      const moved=await goNext();
+      if(!moved&&notice?.isConnected)notice.replaceChildren(document.createTextNode('内部プレーヤーで再生できる発見Shortsが見つかりませんでした。'));
+    }finally{session.playbackSkipBusy=false}
+  };
   const onItemChanged=()=>{if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;if(!isAllowed(item,registeredChannelIds)&&!session.actionBusy){queueMicrotask(()=>goNext());return}if(session.lastVideoId!==String(item.videoId)){session.lastVideoId=String(item.videoId);upsertHistory(item,{delta:.8,reason:'open'});maybeRefill()}syncButtons()};
 
   add.onclick=()=>{const item=currentItem(overlay,pool);if(!item?.channelId)return;if(registered().has(String(item.channelId))){showToast('登録済みです');return}const ok=onRegister?.(item);if(ok!==false){registeredChannelIds.push(String(item.channelId));const index=currentIndex(overlay,pool);purgeFuture(index);syncButtons();showToast(`${item.channelName||'チャンネル'}を登録しました`)}};
@@ -180,8 +194,9 @@ export async function openYouTubeDiscovery({seedItems=[],registeredChannelIds=[]
   hide.onclick=async()=>{if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const hidden=setValues(HIDDEN_CHANNELS_KEY);for(const token of hiddenTokens(item))hidden.add(token);saveSet(HIDDEN_CHANNELS_KEY,hidden);upsertHistory(item,{delta:-5,reason:'hide-channel'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('このチャンネルを発見から除外しました');await goNext()}finally{session.actionBusy=false}};
 
   const external=overlay.querySelector('.youtube-shorts-external');session.observer=new MutationObserver(onItemChanged);if(external)session.observer.observe(external,{attributes:true,attributeFilter:['href']});
+  const stage=overlay.querySelector('.youtube-shorts-stage');session.playbackObserver=new MutationObserver(()=>queueMicrotask(skipExternalFallback));if(stage)session.playbackObserver.observe(stage,{childList:true,subtree:true});
   const close=overlay.querySelector('.youtube-shorts-close');close?.addEventListener('click',()=>finishDiscovery({closePlayer:false,notify:true}),{once:true});
   const parent=overlay.parentNode;session.rootObserver=new MutationObserver(()=>{if(discoverySession===session&&!overlay.isConnected)finishDiscovery({closePlayer:false,notify:true})});if(parent)session.rootObserver.observe(parent,{childList:true});
-  onItemChanged();
+  onItemChanged();queueMicrotask(skipExternalFallback);
   return{close:()=>{controller.close?.();finishDiscovery({closePlayer:false,notify:true})}};
 }
