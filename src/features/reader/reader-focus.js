@@ -114,7 +114,7 @@ function isUsableSummary(summary) {
   if (lines.length !== 3 || lines.some(text => text.length < 12)) return false;
   if (lines.some(text => GENERIC_SUMMARY_RE.test(text) || BROKEN_EDGE_RE.test(text))) return false;
   if (lines.some(text => /(?:…|\.{3})\s*$/.test(text))) return false;
-  if (lines.some(text => !/[。！？!?][」』）】〉》]?$/.test(text))) return false;
+  if (lines.some(text => !/[。！？.!?][」』）】〉》]?$/.test(text))) return false;
   return new Set(lines.map(text => text.replace(/[。、，,.!！?？\s]/g, '').toLowerCase())).size === 3;
 }
 
@@ -133,14 +133,14 @@ function storeSummary(item, mode, summary) {
 }
 
 function sentenceCandidates(value = '') {
-  const text = plainText(value).replace(/([。！？!?])(?=[^」』）】〉》])/g, '$1\n');
-  return (text.split(/\n+/).flatMap(row => row.match(/[^。！？!?]+[。！？!?]+(?:[」』）】〉》])?/g) || []))
+  const text = plainText(value).replace(/([。！？.!?])(?=[^」』）】〉》])/g, '$1\n');
+  return (text.split(/\n+/).flatMap(row => row.match(/[^。！？.!?]+[。！？.!?]+(?:[」』）】〉》])?/g) || []))
     .map(row => row.trim()).filter(row => row.length >= 12).slice(0, 30);
 }
 function meaningfulCandidate(value = '') {
   const text = plainText(value);
   if (text.length < 12 || GENERIC_SUMMARY_RE.test(text) || BROKEN_EDGE_RE.test(text)) return false;
-  if (!/[。！？!?][」』）】〉》]?$/.test(text)) return false;
+  if (!/[。！？.!?][」』）】〉》]?$/.test(text)) return false;
   return (text.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length >= 10;
 }
 function descriptionNeedsFullText(item, description, mode) {
@@ -153,11 +153,12 @@ function descriptionNeedsFullText(item, description, mode) {
   return title.length >= 14 && compact.includes(title.slice(0, Math.min(36, title.length)));
 }
 
-function summaryPayload(item, mode = '') {
+function summaryPayload(item, mode = '', requestType = 'display') {
   const activeMode = summaryModeOf(item, mode) || 'auto';
   const description = stripHtml(item?.description).slice(0, 16_000);
   return {
     articleId: focusItemKey(item),
+    requestType: requestType === 'prefetch' ? 'prefetch' : 'display',
     url: item?.link,
     title: item?.title,
     description,
@@ -175,12 +176,13 @@ async function fetchSummary(item, { force = false, mode = '', purpose = 'active'
   const activeMode = summaryModeOf(item, mode);
   const key = summaryKey(item, activeMode);
   const articleId = focusItemKey(item);
+  const requestType = purpose === 'prefetch' ? 'prefetch' : 'display';
   if (!force && summaryCache.has(key)) {
-    readerTrace('summary-cache-hit', { articleId, title: item?.title || '', mode: activeMode, purpose });
+    readerTrace('summary-cache-hit', { articleId, title: item?.title || '', mode: activeMode, purpose, requestType });
     return summaryCache.get(key);
   }
   if (!force && summaryPromises.has(key)) {
-    readerTrace('summary-inflight-reuse', { articleId, title: item?.title || '', mode: activeMode, purpose });
+    readerTrace('summary-inflight-reuse', { articleId, title: item?.title || '', mode: activeMode, purpose, requestType });
     return summaryPromises.get(key);
   }
 
@@ -188,7 +190,7 @@ async function fetchSummary(item, { force = false, mode = '', purpose = 'active'
   const waitMs = activeMode === 'papers' ? 32_000 : 28_000;
   const timeout = setTimeout(() => controller.abort(), waitMs);
   const started = performance.now();
-  readerTrace('summary-request-start', { articleId, title: item?.title || '', mode: activeMode, purpose, timeoutMs: waitMs });
+  readerTrace('summary-request-start', { articleId, title: item?.title || '', mode: activeMode, purpose, requestType, timeoutMs: waitMs });
 
   let request;
   request = fetch('/api/summary', {
@@ -196,7 +198,7 @@ async function fetchSummary(item, { force = false, mode = '', purpose = 'active'
     headers: { 'Content-Type': 'application/json' },
     signal: controller.signal,
     cache: 'no-store',
-    body: JSON.stringify(summaryPayload(item, activeMode))
+    body: JSON.stringify(summaryPayload(item, activeMode, requestType))
   }).then(async response => {
     const data = await response.json().catch(() => ({}));
     const usable = response.ok && isUsableSummary(data);
@@ -205,11 +207,19 @@ async function fetchSummary(item, { force = false, mode = '', purpose = 'active'
       title: item?.title || '',
       mode: activeMode,
       purpose,
+      requestType,
       status: response.status,
       provider: String(data?.provider || ''),
       model: String(data?.model || ''),
       usable,
       elapsedMs: Math.round(performance.now() - started),
+      queueWaitMs: Number(data?.queueWaitMs || 0),
+      articlePrepareMs: Number(data?.articlePrepareMs || 0),
+      geminiMs: Number(data?.geminiMs || 0),
+      preparedSource: String(data?.preparedSource || ''),
+      preparedChars: Number(data?.preparedChars || 0),
+      lineLengths: Array.isArray(data?.lineLengths) ? data.lineLengths : [],
+      failureStage: String(data?.failureStage || ''),
       fallbackReason: String(data?.fallbackReason || '')
     });
     if (!usable) return unavailableSummary(item, data);
@@ -221,6 +231,7 @@ async function fetchSummary(item, { force = false, mode = '', purpose = 'active'
       title: item?.title || '',
       mode: activeMode,
       purpose,
+      requestType,
       error: String(error?.name || 'Error') + ':' + String(error?.message || error),
       elapsedMs: Math.round(performance.now() - started)
     });
@@ -301,7 +312,8 @@ function unavailableSummary(item, serverResult = null) {
       { label: '影響/展望', text: '元記事を開くと、取得できていない詳細を確認できます。' }
     ],
     provider: 'unavailable', cacheable: false,
-    fallbackReason: String(serverResult?.fallbackReason || '')
+    fallbackReason: String(serverResult?.fallbackReason || ''),
+    failureStage: String(serverResult?.failureStage || '')
   };
 }
 
@@ -515,6 +527,7 @@ export function mountFocus(host, {
   let activeIndex = -1;
   let destroyed = false;
   let scrollRaf = 0;
+  let prefetchTimer = 0;
 
   if (!rows.length) {
     host.replaceChildren(el('div', { class: 'empty', text: '記事がありません' }));
@@ -528,7 +541,7 @@ export function mountFocus(host, {
   host.replaceChildren(feed);
 
   const warmNext = currentIndex => {
-    if (destroyed) return;
+    if (destroyed || activeIndex !== currentIndex) return;
     const [nextIndex] = nextPrefetchIndices(currentIndex, rows.length, 1);
     if (nextIndex === undefined) return;
     prewarmSummaryChunk(rows, { startIndex: nextIndex, count: 1, summaryMode }).then(() => {
@@ -537,6 +550,15 @@ export function mountFocus(host, {
       const summary = cachedSummary(item, summaryModeOf(item, summaryMode));
       if (summary) setCardSummary(cards[nextIndex], item, summary, focusItemKey(item));
     }).catch(() => {});
+  };
+
+  const scheduleWarmNext = currentIndex => {
+    if (prefetchTimer) clearTimeout(prefetchTimer);
+    prefetchTimer = setTimeout(() => {
+      prefetchTimer = 0;
+      if (destroyed || activeIndex !== currentIndex) return;
+      warmNext(currentIndex);
+    }, 400);
   };
 
   const setActive = next => {
@@ -558,10 +580,10 @@ export function mountFocus(host, {
     onIndexChange?.(index, activeItem);
 
     const requestedIndex = index;
-    loadCardSummary(cards[index], activeItem, summaryModeOf(activeItem, summaryMode))
-      .finally(() => {
-        if (!destroyed && activeIndex === requestedIndex) warmNext(requestedIndex);
-      });
+    // Start the visible article immediately, then begin only the next article after
+    // a short idle window. Server-side scheduling gives display priority over queued prefetch.
+    loadCardSummary(cards[index], activeItem, summaryModeOf(activeItem, summaryMode)).catch(() => {});
+    scheduleWarmNext(requestedIndex);
   };
 
   const syncFromScroll = () => {
@@ -578,8 +600,8 @@ export function mountFocus(host, {
   feed.addEventListener('scroll', onScroll, { passive: true });
   if ('onscrollend' in feed) feed.addEventListener('scrollend', onScrollEnd, { passive: true });
 
-  // No 10-item initial batch. The active article is loaded first; once it
-  // settles, only the immediate next article is prefetched.
+  // No 10-item initial batch. The active article starts first; 400ms later only
+  // the immediate next article is prefetched if the user is still on this card.
   requestAnimationFrame(() => {
     cards[index]?.scrollIntoView({ block: 'start', behavior: 'auto' });
     setActive(index);
@@ -589,6 +611,7 @@ export function mountFocus(host, {
     destroy() {
       destroyed = true;
       if (scrollRaf) cancelAnimationFrame(scrollRaf);
+      if (prefetchTimer) clearTimeout(prefetchTimer);
       feed.removeEventListener('scroll', onScroll);
       if ('onscrollend' in feed) feed.removeEventListener('scrollend', onScrollEnd);
       cards.forEach(stopProgress);

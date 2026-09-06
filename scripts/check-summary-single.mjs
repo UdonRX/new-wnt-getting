@@ -66,6 +66,7 @@ assert.equal(researchSummary.lines.every(line => Array.from(line.text).length <=
 assert.equal(researchSummary.lines.some(line => /選んだ理由|選びました/.test(line.text)), false, '選別理由を要約カードへ表示しない');
 
 process.env.GEMINI_API_KEY = 'regression-test-key';
+process.env.GEMINI_MIN_START_GAP_MS = '0';
 const originalFetch = globalThis.fetch;
 let geminiCalls = 0;
 globalThis.fetch = async () => {
@@ -135,6 +136,87 @@ try {
   assert.equal(fastPrompt.includes('この末尾はGeminiへ送信されない'), false, '380文字を超えた本文を送信しない');
   assert.equal(fastSummary.provider, 'gemini-structured-v2195');
   assert.equal(fastSummary.lines.length, 3);
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+let longFastCalls = 0;
+globalThis.fetch = async () => {
+  longFastCalls += 1;
+  const payload = {
+    h: '55文字を少し超える要約の確認',
+    c: `${'長'.repeat(60)}。`,
+    b: '背景情報は十分な長さの自然な日本語として返しています。',
+    i: '影響についても重複しない別の内容を日本語で説明しています。'
+  };
+  return new Response(JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }]
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+
+try {
+  const longFastSummary = await generateStructuredSingle({
+    title: '高速要約の文字数許容確認',
+    description: '高速要約で55文字を少し超えても、情報を捨てずに採用できることを確認するための十分な本文です。背景と影響についても別々の内容を含めています。',
+    preparedSource: 'rss',
+    fast: true
+  });
+  assert.equal(longFastCalls, 1, '56〜90文字程度は再生成せず採用する');
+  assert.equal(longFastSummary.provider, 'gemini-structured-v2195');
+  assert.ok(longFastSummary.lineLengths[0] > 55 && longFastSummary.lineLengths[0] <= 90, '55文字超でも90文字以内ならhard failしない');
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+let repairCalls = 0;
+globalThis.fetch = async () => {
+  repairCalls += 1;
+  const payload = repairCalls === 1
+    ? {
+        h: '壊れた応答の再生成テスト',
+        c: '短い。',
+        b: '背景情報は十分な長さで具体的な内容を説明しています。',
+        i: '影響情報も十分な長さで別の具体的な内容を説明しています。'
+      }
+    : {
+        h: '壊れた応答の再生成テスト',
+        c: '重要な事実を十分な長さの自然な日本語で説明しています。',
+        b: '背景情報は十分な長さで具体的な内容を説明しています。',
+        i: '影響情報も十分な長さで別の具体的な内容を説明しています。'
+      };
+  return new Response(JSON.stringify({
+    candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }]
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+};
+
+try {
+  const repairedSummary = await generateStructuredSingle({
+    title: '壊れた応答だけを再生成',
+    description: '必須項目欠落や極端に短い文章など、本当に壊れた応答だけを一度再生成する挙動を確認するための本文です。十分な長さがあります。',
+    preparedSource: 'rss',
+    fast: true
+  });
+  assert.equal(repairCalls, 2, '本当に壊れた応答だけ1回再生成する');
+  assert.equal(repairedSummary.repaired, true);
+  assert.equal(repairedSummary.failureStage, 'none');
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+globalThis.fetch = async () => {
+  throw new Error('mock upstream unavailable');
+};
+
+try {
+  const englishFallback = await generateStructuredSingle({
+    title: 'English fallback test',
+    description: 'The first sentence contains enough concrete information for fallback. The second sentence explains important background and context clearly. The third sentence describes the expected impact and future direction.',
+    preparedSource: 'article',
+    fast: true
+  });
+  assert.equal(englishFallback.provider, 'extractive-v2195', '英文のピリオドを文区切りとしてfallbackできる');
+  assert.equal(englishFallback.lines.length, 3);
+  assert.equal(englishFallback.lines.every(line => /\.$/.test(line.text)), true, '英文fallbackのピリオドを保持する');
 } finally {
   globalThis.fetch = originalFetch;
 }

@@ -7,7 +7,7 @@ import { setAsciiHeader, summaryServerErrorCode } from '../lib/http-response-saf
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const ARTICLE_PREPARE_TIMEOUT_MS = 7500;
-const FAST_ARTICLE_PREPARE_TIMEOUT_MS = 1400;
+const FAST_ARTICLE_PREPARE_TIMEOUT_MS = 2400;
 const FAST_RSS_MIN_CHARS = 160;
 const FAST_RSS_MIN_SENTENCES = 2;
 const RESEARCH_ARTICLE_TIMEOUT_MS = 5000;
@@ -261,11 +261,13 @@ function isolateSummaryWork(body = {}) {
 }
 async function articleOnlyDiagnostic(req, res) {
   const startedAt = Date.now(), incoming = rawBody(req);
+  const prepareStartedAt = Date.now();
   const prepared = await prepareSummaryBody({ ...incoming, preferFullText: true });
+  const articlePrepareMs = Date.now() - prepareStartedAt;
   const preparedChars = Array.from(clean(prepared.description || '')).length;
   const articleOk = ['article', 'pdf'].includes(String(prepared.preparedSource || ''));
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Route', 'diagnostic-article-only-v2195');
-  return res.status(200).json({ diagnostic: 'article-only-v2195', ok: articleOk, preparedSource: clean(prepared.preparedSource || 'missing', 80), prepareReason: clean(prepared.prepareReason || 'unknown', 120), prepareError: clean(prepared.prepareError || '', 160), preparedChars, inputDescriptionChars: Array.from(clean(incoming.description || '')).length, elapsedMs: Date.now() - startedAt });
+  return res.status(200).json({ diagnostic: 'article-only-v2195', ok: articleOk, preparedSource: clean(prepared.preparedSource || 'missing', 80), prepareReason: clean(prepared.prepareReason || 'unknown', 120), prepareError: clean(prepared.prepareError || '', 160), preparedChars, articlePrepareMs, inputDescriptionChars: Array.from(clean(incoming.description || '')).length, elapsedMs: Date.now() - startedAt });
 }
 async function routeSummaryRequest(req, res) {
   if (req.method === 'GET' && String(req.query?.technologyResearch || '') === '1') return technologyResearchFeed(req, res);
@@ -279,14 +281,18 @@ async function routeSummaryRequest(req, res) {
       res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Summary-Prepared-Source', 'web-research'); res.setHeader('X-Summary-Route', 'technology-research-prepared-v10');
       return res.status(200).json(preparedResearch);
     }
+    const prepareStartedAt = Date.now();
     const prepared = await prepareSummaryBody(incoming);
-    req.body = isolateSummaryWork(prepared);
+    const articlePrepareMs = Date.now() - prepareStartedAt;
+    const preparedChars = Array.from(clean(prepared.description || '')).length;
+    req.body = isolateSummaryWork({ ...prepared, articlePrepareMs, preparedChars });
     setAsciiHeader(res, 'X-Summary-Prepared-Source', prepared.preparedSource || 'unknown');
     setAsciiHeader(res, 'X-Summary-Prepare-Reason', prepared.prepareReason || 'unknown');
     setAsciiHeader(res, 'X-Summary-Prepare-Error', prepared.prepareError || '');
-    res.setHeader('X-Summary-Prepared-Chars', String(Array.from(clean(prepared.description || '')).length));
+    res.setHeader('X-Summary-Prepared-Chars', String(preparedChars));
+    res.setHeader('X-Summary-Article-Prepare-Ms', String(articlePrepareMs));
     res.setHeader('X-Summary-Prefer-Full-Text', String(Boolean(incoming?.preferFullText)));
-    if (prepared.prepareError) console.warn('[summary] prepared with fallback', { articleId: clean(incoming?.articleId, 180), preparedSource: prepared.preparedSource || 'unknown', prepareReason: prepared.prepareReason || 'unknown', prepareError: prepared.prepareError });
+    if (prepared.prepareError) console.warn('[summary] prepared with fallback', { articleId: clean(incoming?.articleId, 180), preparedSource: prepared.preparedSource || 'unknown', prepareReason: prepared.prepareReason || 'unknown', prepareError: prepared.prepareError, articlePrepareMs, preparedChars });
     if (String(req.query?.stream || '') === '1') return summaryV2184(req, res);
     return summarySingleV2195(req, res);
   }
