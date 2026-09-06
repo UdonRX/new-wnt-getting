@@ -3,7 +3,7 @@ import { el, openSheet } from '../../shared/dom.js';
 import { segmented, installShrinkingHeader } from '../../shared/components.js';
 import { attachSwipe } from '../../shared/gestures.js';
 import { cleanupYouTubePlayer, mountYouTubePlayer } from './youtube-player.js';
-import { createDiscoveryButton, openYouTubeDiscovery, recordYouTubeOpen, searchYouTubeChannels } from './youtube-discovery.js';
+import { createDiscoveryButton, openYouTubeDiscovery, recordYouTubeOpen, searchYouTubeChannels, warmYouTubeDiscovery } from './youtube-discovery.js';
 
 const TABS=['long','short','live'];
 const CACHE_KEY='pdv2:youtubeCache:kind4-lockup';
@@ -18,6 +18,7 @@ let loadWarnings=[];
 let listSwipeDetach=null;
 let compactDetach=null;
 let renderGeneration=0;
+let discoveryWarmTimer=0;
 
 function channelKey(ch){return String(ch?.value||ch?.url||ch?.name||'').trim().toLowerCase()}
 function configuredChannels(){return (Array.isArray(state.youtubeChannels)?state.youtubeChannels:[]).filter(ch=>channelKey(ch))}
@@ -27,6 +28,14 @@ function rowMatchesSelection(row,value=selected){return value==='all'||rowKey(ro
 function configuredMatchesSelection(ch,value=selected){const key=channelKey(ch);if(value==='all'||key===String(value||'').toLowerCase())return true;const row=cache.find(item=>rowKey(item)===key);return String(row?.channel?.id||'')===String(value||'')}
 function configuredLabel(ch){const key=channelKey(ch);const row=cache.find(item=>rowKey(item)===key);return String(ch?.name||row?.channel?.name||ch?.value||ch?.url||'YouTube').trim()||'YouTube'}
 function selectedLabel(){if(selected==='all')return'すべて';const ch=configuredChannels().find(item=>configuredMatchesSelection(item));if(ch)return configuredLabel(ch);const row=cache.find(item=>rowMatchesSelection(item));return row?.channel?.name||row?._configuredName||'YouTube'}
+function scheduleDiscoveryWarmup(seedItems,registeredChannelIds){
+  clearTimeout(discoveryWarmTimer);
+  discoveryWarmTimer=setTimeout(()=>{
+    discoveryWarmTimer=0;
+    const run=()=>warmYouTubeDiscovery({seedItems,registeredChannelIds}).catch(error=>console.warn('[youtube discovery warmup]',error?.message||error));
+    if(typeof window.requestIdleCallback==='function')window.requestIdleCallback(run,{timeout:900});else run();
+  },90);
+}
 
 async function loadChannel(ch){
   const input=ch?.value||ch?.url||ch?.name;
@@ -229,6 +238,7 @@ export async function renderYouTube(host,{refresh=false}={}){
     children.push(list);host.replaceChildren(...children);
     if(tab==='short'){
       const registeredChannelIds=[...new Set(cache.map(row=>String(row?.channel?.id||'')).filter(Boolean))];
+      scheduleDiscoveryWarmup(allSeedItems,registeredChannelIds);
       host.append(createDiscoveryButton(()=>{
         playerOpen=true;
         openYouTubeDiscovery({seedItems:allSeedItems,registeredChannelIds,onRegister:item=>{if(!item?.channelId)return false;if(candidateRegistered({channelId:item.channelId}))return true;saveManagedChannels([...configuredChannels(),{name:item.channelName||'',value:item.channelId}]);return true},onClose:()=>{playerOpen=false;renderYouTube(host,{refresh:false})}}).catch(()=>{playerOpen=false});
