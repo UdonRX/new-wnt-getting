@@ -29,14 +29,53 @@ function first(value) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function rssItemCount(body) {
+  const text = Buffer.isBuffer(body) ? body.toString('utf8') : typeof body === 'string' ? body : '';
+  if (!text) return 0;
+  const rssItems = text.match(/<item\b/gi)?.length || 0;
+  return rssItems || (text.match(/<entry\b/gi)?.length || 0);
+}
+
+function installXUpstreamSuccessLog(req, res) {
+  if (typeof res.send !== 'function') return;
+  const originalSend = res.send;
+  res.send = function diagnosticSend(body) {
+    res.send = originalSend;
+    try {
+      const raw = String(first(req.query?.url) || '');
+      const host = new URL(raw).hostname.toLowerCase();
+      const status = Number(res.statusCode || 200);
+      const items = rssItemCount(body);
+      if (status >= 200 && status < 300) {
+        console.info(`[x-upstream] OK host=${host} items=${items} status=${status}`);
+      }
+    } catch (error) {
+      console.warn('[x-upstream-diagnostic]', error?.message || String(error));
+    }
+    return originalSend.call(this, body);
+  };
+}
+
 export default async function handler(req, res) {
   const route = String(req.query?.__route || '').trim();
   const xUpstream = String(first(req.query?.xUpstream) || '').trim() === '1';
-  const target = route === 'rss' && isXHistoryRequest(req) && !xUpstream ? xHistory : handlers.get(route);
+  const xRequest = route === 'rss' && isXHistoryRequest(req);
+  const target = xRequest && !xUpstream ? xHistory : handlers.get(route);
   if (!target) return res.status(404).json({ error: 'Unknown API route', route });
 
+  if (xRequest && xUpstream) installXUpstreamSuccessLog(req, res);
+
   try {
-    return await target(req, res);
+    const result = await target(req, res);
+    if (xRequest && !xUpstream) {
+      const source = String(res.getHeader?.('X-X-History-Source') || '');
+      const backend = String(res.getHeader?.('X-X-History-Backend') || '');
+      const items = Number(res.getHeader?.('X-X-History-Items'));
+      if (source === 'redis' && Number.isFinite(items)) {
+        console.info(`[x-history] OK backend=${backend || 'unknown'} items=${items} source=${source}`);
+      }
+    }
+    return result;
   } catch (error) {
     console.error('[api-feeds-router]', { route, name: error?.name, message: error?.message || String(error) });
     if (res.headersSent) return res.end();
