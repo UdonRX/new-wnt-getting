@@ -13,9 +13,14 @@ const CHANNEL_SEARCH_TTL=24*60*60*1000;
 const DISCOVERY_DAILY_SOFT_LIMIT=85;
 const SEARCH_TOTAL_SOFT_LIMIT=94;
 const HISTORY_MAX=200;
+const DISCOVERY_WARMUP_MIN_ITEMS=10;
+const DISCOVERY_WARMUP_COOLDOWN=12*60*1000;
+const DISCOVERY_LOADING_DELAY_MS=150;
 const CHANNEL_ID_RE=/^UC[A-Za-z0-9_-]{22}$/;
 let discoverySession=null;
 let discoveryLoading=null;
+let discoveryWarmupPromise=null;
+let discoveryWarmupAt=0;
 let pendingShortOverlayObserver=null;
 let pendingShortItem=null;
 const shortsInterestStates=new WeakMap();
@@ -61,7 +66,7 @@ function ensureStyles(){
 .youtube-discovery-fab{position:fixed;z-index:118;right:max(18px,calc(env(safe-area-inset-right) + 14px));bottom:calc(var(--nav-total) + 18px);width:58px;height:58px;min-width:58px;min-height:58px;padding:0;border-radius:50%;border:1px solid color-mix(in srgb,var(--feature-color) 55%,rgba(255,255,255,.12));background:color-mix(in srgb,var(--feature-color) 84%,#11161d);color:#fff;display:grid;place-items:center;box-shadow:0 10px 28px rgba(0,0,0,.34),0 4px 14px color-mix(in srgb,var(--feature-color) 26%,transparent);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);touch-action:manipulation}.youtube-discovery-fab svg{width:27px;height:27px}.youtube-discovery-fab:active{transform:scale(.94)}
 .youtube-channel-manager{display:grid;gap:12px}.youtube-channel-search-box{display:flex;gap:8px}.youtube-channel-search-input{flex:1;min-width:0;min-height:46px;padding:0 13px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--text);font:inherit;outline:none}.youtube-channel-search-input:focus{border-color:var(--feature-color)}.youtube-channel-search-status{min-height:18px;color:var(--muted);font-size:11px}.youtube-channel-search-results,.youtube-channel-registered{display:grid;gap:8px}.youtube-channel-result,.youtube-channel-registered-row{width:100%;display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2);color:var(--text);text-align:left}.youtube-channel-result img{width:42px;height:42px;border-radius:50%;object-fit:cover;background:#111}.youtube-channel-result-copy{min-width:0}.youtube-channel-result-copy strong,.youtube-channel-result-copy small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.youtube-channel-result-copy small{margin-top:3px;color:var(--muted);font-size:10px}.youtube-channel-add,.youtube-channel-remove{min-width:38px;min-height:38px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--text);font-weight:800}.youtube-channel-add.is-added{color:var(--success)}.youtube-channel-manual{padding-top:4px}.youtube-channel-manual summary{color:var(--muted);font-size:11px;cursor:pointer}.youtube-channel-manual-row{display:flex;gap:8px;margin-top:8px}.youtube-channel-manual-row input{flex:1;min-width:0;min-height:42px;padding:0 11px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2);color:var(--text)}
 .youtube-discovery-loading-shell{position:fixed;z-index:430;inset:0;display:grid;place-content:center;gap:12px;padding:24px;text-align:center;background:#000;color:#fff}.youtube-discovery-loading-shell .youtube-discovery-spinner{width:30px;height:30px;margin:auto;border:2px solid rgba(255,255,255,.22);border-top-color:#fff;border-radius:50%;animation:youtubeDiscoverySpin .75s linear infinite}@keyframes youtubeDiscoverySpin{to{transform:rotate(360deg)}}.youtube-discovery-loading-close{position:absolute;left:max(12px,env(safe-area-inset-left));top:max(12px,env(safe-area-inset-top));width:42px;height:42px;border:0;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:19px}
-.youtube-shorts-player .youtube-discovery-rail{position:absolute;z-index:30;right:max(12px,calc(env(safe-area-inset-right) + 6px));bottom:max(118px,calc(env(safe-area-inset-bottom) + 104px));display:grid;gap:13px}.youtube-shorts-player .youtube-discovery-action{width:50px;min-height:50px;padding:5px 2px;border:0;background:transparent;color:#fff;display:grid;place-items:center;gap:2px;text-shadow:0 1px 4px #000}.youtube-shorts-player .youtube-discovery-action span:first-child{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.48);font-size:22px;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px)}.youtube-shorts-player .youtube-discovery-action small{font-size:9px}.youtube-shorts-player .youtube-discovery-action.is-on span:first-child{background:rgba(255,45,85,.78)}.youtube-shorts-player .youtube-discovery-action.is-added span:first-child{background:rgba(48,209,88,.72)}
+.youtube-shorts-player .youtube-discovery-rail{position:absolute;z-index:30;right:max(10px,calc(env(safe-area-inset-right) + 5px));bottom:max(124px,calc(env(safe-area-inset-bottom) + 110px));display:grid;gap:11px;opacity:.48;transition:opacity .2s ease,transform .2s ease;transform:translateZ(0)}.youtube-shorts-player.youtube-actions-awake .youtube-discovery-rail,.youtube-shorts-player .youtube-discovery-rail:focus-within{opacity:.96}.youtube-shorts-player .youtube-discovery-action{width:46px;min-height:46px;padding:3px 1px;border:0;background:transparent;color:#fff;display:grid;place-items:center;gap:2px;text-shadow:0 1px 4px #000;touch-action:manipulation}.youtube-shorts-player .youtube-discovery-action span:first-child{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;border:1px solid rgba(255,255,255,.14);background:rgba(8,10,12,.27);font-size:21px;box-shadow:0 4px 14px rgba(0,0,0,.16);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);transition:background .16s ease,border-color .16s ease,transform .12s ease}.youtube-shorts-player .youtube-discovery-action small{font-size:9px;opacity:.38;transition:opacity .18s ease}.youtube-shorts-player.youtube-actions-awake .youtube-discovery-action small,.youtube-shorts-player .youtube-discovery-action:focus-visible small{opacity:.9}.youtube-shorts-player .youtube-discovery-action:active span:first-child{transform:scale(.94);background:rgba(20,22,24,.52)}.youtube-shorts-player .youtube-discovery-action.is-on span:first-child{background:rgba(255,45,85,.62);border-color:rgba(255,255,255,.2)}.youtube-shorts-player .youtube-discovery-action.is-added span:first-child{background:rgba(48,209,88,.58);border-color:rgba(255,255,255,.2)}
 `;
   document.head.append(style);
 }
@@ -70,15 +75,18 @@ function currentVideoId(overlay){const href=overlay?.querySelector('.youtube-sho
 function ensureShortsInterestControl(overlay,getItem){
   if(!overlay)return null;ensureStyles();
   const existing=shortsInterestStates.get(overlay);
-  if(existing){if(typeof getItem==='function')existing.getItem=getItem;existing.sync();return existing}
+  if(existing){if(typeof getItem==='function')existing.getItem=getItem;existing.sync();existing.wake?.();return existing}
   const rail=document.createElement('div');rail.className='youtube-discovery-rail';rail.dataset.youtubeInterestRail='1';
   const like=document.createElement('button');like.type='button';like.className='youtube-discovery-action';like.innerHTML='<span>♡</span><small>興味あり</small>';like.setAttribute('aria-label','興味あり');rail.append(like);overlay.append(rail);
-  const state={rail,like,observer:null,getItem:typeof getItem==='function'?getItem:()=>{const videoId=currentVideoId(overlay);return videoId?{videoId,kind:'short'}:null},sync:null};
+  const state={rail,like,observer:null,wakeTimer:0,wakeHandler:null,focusHandler:null,getItem:typeof getItem==='function'?getItem:()=>{const videoId=currentVideoId(overlay);return videoId?{videoId,kind:'short'}:null},sync:null,wake:null};
+  state.wake=()=>{if(!overlay.isConnected)return;overlay.classList.add('youtube-actions-awake');clearTimeout(state.wakeTimer);state.wakeTimer=setTimeout(()=>overlay.classList.remove('youtube-actions-awake'),2200)};
+  state.wakeHandler=()=>state.wake();state.focusHandler=()=>state.wake();overlay.addEventListener('pointerdown',state.wakeHandler,{passive:true});rail.addEventListener('focusin',state.focusHandler);
   state.sync=()=>{const item=state.getItem?.();const liked=Boolean(item?.videoId)&&setValues(LIKES_KEY).has(String(item.videoId));like.classList.toggle('is-on',liked);like.setAttribute('aria-pressed',liked?'true':'false')};
-  like.onclick=()=>{const item=state.getItem?.();if(!item?.videoId)return;toggleInterestLike(item);state.sync()};
+  like.onclick=()=>{state.wake();const item=state.getItem?.();if(!item?.videoId)return;toggleInterestLike(item);state.sync()};
   const external=overlay.querySelector('.youtube-shorts-external');state.observer=new MutationObserver(state.sync);if(external)state.observer.observe(external,{attributes:true,attributeFilter:['href']});
-  overlay.querySelector('.youtube-shorts-close')?.addEventListener('click',()=>{try{state.observer?.disconnect?.()}catch{}},{once:true});
-  shortsInterestStates.set(overlay,state);state.sync();return state;
+  const cleanup=()=>{clearTimeout(state.wakeTimer);try{state.observer?.disconnect?.()}catch{}overlay.removeEventListener('pointerdown',state.wakeHandler);rail.removeEventListener('focusin',state.focusHandler);overlay.classList.remove('youtube-actions-awake')};
+  overlay.querySelector('.youtube-shorts-close')?.addEventListener('click',cleanup,{once:true});
+  shortsInterestStates.set(overlay,state);state.sync();state.wake();return state;
 }
 function armRegisteredShortInterest(item){
   pendingShortItem=item||null;
@@ -108,7 +116,21 @@ export async function searchYouTubeChannels(query){
   addUsage('channel',Number(data.searchCalls||1));cache[key]={at:Date.now(),items:data.items||[]};const entries=Object.entries(cache).sort((a,b)=>Number(b[1]?.at||0)-Number(a[1]?.at||0)).slice(0,40);writeJson(CHANNEL_SEARCH_CACHE_KEY,Object.fromEntries(entries));return data.items||[];
 }
 
-function validPool(){const value=readJson(POOL_KEY,null);if(!value||Date.now()-Number(value.at||0)>POOL_TTL||!Array.isArray(value.items))return null;const items=value.items.filter(item=>isAllowed(item));return items.length?{...value,items}:null}
+function poolSnapshot({allowStale=false}={}){
+  const value=readJson(POOL_KEY,null);if(!value||!Array.isArray(value.items))return null;
+  const age=Date.now()-Number(value.at||0);if(!allowStale&&age>POOL_TTL)return null;
+  const items=value.items.filter(item=>isAllowed(item));return items.length?{...value,items,stale:age>POOL_TTL}:null;
+}
+function usablePoolItems(items=[],registeredChannelIds=[]){
+  const registeredSet=new Set(registeredChannelIds.map(String)),seenSet=new Set(recentlySeenIds());
+  return(items||[]).filter(item=>isAllowed(item,registeredChannelIds)&&!registeredSet.has(String(item.channelId||''))&&!seenSet.has(String(item.videoId||'')));
+}
+function mergePoolItems(existing=[],incoming=[],registeredChannelIds=[]){
+  const out=[],seen=new Set();
+  for(const item of [...existing,...incoming]){const id=String(item?.videoId||'');if(!id||seen.has(id)||!isAllowed(item,registeredChannelIds))continue;seen.add(id);out.push(item);if(out.length>=55)break}
+  return out;
+}
+function validPool(){return poolSnapshot()}
 function savePool(items){writeJson(POOL_KEY,{at:Date.now(),items:(items||[]).filter(item=>isAllowed(item)).slice(0,55)})}
 async function requestPool({seedItems=[],registeredChannelIds=[],existingItems=[],refill=false}={}){
   const requested=allowedDiscoverySearchCount(refill?3:5);if(requested<1)throw new Error('今日のYouTube検索の安全上限に近いため、新しい発見候補の検索を停止しています。');
@@ -116,6 +138,24 @@ async function requestPool({seedItems=[],registeredChannelIds=[],existingItems=[
   const hidden=[...setValues(HIDDEN_CHANNELS_KEY)].filter(x=>CHANNEL_ID_RE.test(x));const disliked=[...setValues(DISLIKES_KEY)];const excluded=[...new Set([...recentlySeenIds(),...disliked,...existingItems.map(x=>x.videoId)])].slice(0,180);
   const response=await fetch('/api/youtube-feed?action=discover',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',body:JSON.stringify({action:'discover',searchCount:requested,seedVideoIds,history:historyPayload(),registeredChannelIds,hiddenChannelIds:hidden,excludedVideoIds:excluded})});
   const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'発見Shortsを取得できませんでした');addUsage('discover',Number(data.searchCalls||requested));return(data.items||[]).filter(item=>isAllowed(item,registeredChannelIds));
+}
+
+export async function warmYouTubeDiscovery({seedItems=[],registeredChannelIds=[],force=false}={}){
+  ensureStyles();
+  const cached=poolSnapshot({allowStale:true});const usable=usablePoolItems(cached?.items||[],registeredChannelIds);const fresh=Boolean(cached&&!cached.stale);
+  if(!force&&fresh&&usable.length>=DISCOVERY_WARMUP_MIN_ITEMS)return usable;
+  if(!force&&discoveryWarmupPromise)return discoveryWarmupPromise;
+  if(!force&&Date.now()-discoveryWarmupAt<DISCOVERY_WARMUP_COOLDOWN&&usable.length)return usable;
+  discoveryWarmupAt=Date.now();
+  const pending=(async()=>{
+    try{
+      const existing=cached?.items||[];
+      const extra=await requestPool({seedItems,registeredChannelIds,existingItems:existing,refill:existing.length>0});
+      const merged=mergePoolItems(existing,extra,registeredChannelIds);savePool(merged);return usablePoolItems(merged,registeredChannelIds);
+    }catch(error){if(usable.length)return usable;throw error}
+  })();
+  discoveryWarmupPromise=pending;
+  try{return await pending}finally{if(discoveryWarmupPromise===pending)discoveryWarmupPromise=null}
 }
 
 function removeLoading(){discoveryLoading?.remove();discoveryLoading=null}
@@ -135,22 +175,25 @@ export function createDiscoveryButton(onClick){
   ensureStyles();const button=document.createElement('button');button.type='button';button.className='youtube-discovery-fab';button.setAttribute('aria-label','似ているShortsを発見');button.title='発見';button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m15.8 8.2-2.3 5.3-5.3 2.3 2.3-5.3 5.3-2.3Z"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg>';button.onclick=onClick;return button;
 }
 function showLoading(onClose){
-  removeLoading();const root=document.getElementById('overlay-root')||document.body;const shell=document.createElement('section');shell.className='youtube-discovery-loading-shell';shell.innerHTML='<div class="youtube-discovery-spinner"></div><strong>好みに近いShortsを探しています…</strong><small>登録済みShortsと視聴傾向から選定中</small>';const close=document.createElement('button');close.type='button';close.className='youtube-discovery-loading-close';close.textContent='✕';close.onclick=()=>{removeLoading();onClose?.()};shell.append(close);root.append(shell);discoveryLoading=shell;return shell;
+  removeLoading();const root=document.getElementById('overlay-root')||document.body;const shell=document.createElement('section');shell.className='youtube-discovery-loading-shell';shell.innerHTML='<div class="youtube-discovery-spinner"></div><strong>おすすめShortsを準備中</strong><small>まもなく表示します</small>';const close=document.createElement('button');close.type='button';close.className='youtube-discovery-loading-close';close.textContent='✕';close.onclick=()=>{removeLoading();onClose?.()};shell.append(close);root.append(shell);discoveryLoading=shell;return shell;
 }
 function currentIndex(overlay,pool){const id=currentVideoId(overlay);return id?pool.findIndex(x=>String(x.videoId)===id):-1}
 function currentItem(overlay,pool){const index=currentIndex(overlay,pool);return index>=0?pool[index]:null}
 function nextButton(overlay){return[...overlay.querySelectorAll('button.youtube-shorts-action')].find(button=>String(button.textContent||'').includes('次'))||null}
 
 export async function openYouTubeDiscovery({seedItems=[],registeredChannelIds=[],onRegister,onClose}={}){
-  ensureStyles();finishDiscovery({closePlayer:true,notify:false});showLoading(onClose);
-  const registeredSet=new Set(registeredChannelIds.map(String));const seenSet=new Set(recentlySeenIds());
-  let pool=(validPool()?.items||[]).filter(item=>isAllowed(item,registeredChannelIds)&&!registeredSet.has(String(item.channelId||''))&&!seenSet.has(String(item.videoId||'')));
-  if(pool.length<3){
-    try{pool=await requestPool({seedItems,registeredChannelIds});savePool(pool)}
-    catch(error){if(discoveryLoading){discoveryLoading.innerHTML=`<strong>発見Shortsを開始できませんでした</strong><small>${String(error?.message||error)}</small>`;const close=document.createElement('button');close.type='button';close.className='youtube-discovery-loading-close';close.textContent='✕';close.onclick=()=>{removeLoading();onClose?.()};discoveryLoading.append(close)}return null}
+  ensureStyles();finishDiscovery({closePlayer:true,notify:false});
+  let loadingTimer=null;
+  const armLoading=()=>{loadingTimer=setTimeout(()=>{loadingTimer=null;showLoading(onClose)},DISCOVERY_LOADING_DELAY_MS)};
+  let pool=usablePoolItems(poolSnapshot({allowStale:true})?.items||[],registeredChannelIds);
+  if(!pool.length){
+    armLoading();
+    try{pool=await warmYouTubeDiscovery({seedItems,registeredChannelIds})}
+    catch(error){if(loadingTimer){clearTimeout(loadingTimer);loadingTimer=null;showLoading(onClose)}if(discoveryLoading){discoveryLoading.innerHTML=`<strong>発見Shortsを開始できませんでした</strong><small>${String(error?.message||error)}</small>`;const close=document.createElement('button');close.type='button';close.className='youtube-discovery-loading-close';close.textContent='✕';close.onclick=()=>{removeLoading();onClose?.()};discoveryLoading.append(close)}return null}
   }
+  if(loadingTimer){clearTimeout(loadingTimer);loadingTimer=null}
   pool=pool.filter(item=>isAllowed(item,registeredChannelIds));
-  if(!pool.length){if(discoveryLoading)discoveryLoading.innerHTML='<strong>似ているShortsが見つかりませんでした</strong>';return null}
+  if(!pool.length){showLoading(onClose);if(discoveryLoading)discoveryLoading.innerHTML='<strong>似ているShortsが見つかりませんでした</strong>';return null}
   removeLoading();
 
   // 発見Shortsも登録済みShortsも、同じ完成済みShorts内部プレーヤーを使用する。
@@ -189,9 +232,9 @@ export async function openYouTubeDiscovery({seedItems=[],registeredChannelIds=[]
   };
   const onItemChanged=()=>{if(discoverySession!==session||!overlay.isConnected)return;const item=currentItem(overlay,pool);if(!item)return;if(!isAllowed(item,registeredChannelIds)&&!session.actionBusy){queueMicrotask(()=>goNext());return}if(session.lastVideoId!==String(item.videoId)){session.lastVideoId=String(item.videoId);upsertHistory(item,{delta:.8,reason:'open'});maybeRefill()}syncButtons()};
 
-  add.onclick=()=>{const item=currentItem(overlay,pool);if(!item?.channelId)return;if(registered().has(String(item.channelId))){showToast('登録済みです');return}const ok=onRegister?.(item);if(ok!==false){registeredChannelIds.push(String(item.channelId));const index=currentIndex(overlay,pool);purgeFuture(index);syncButtons();showToast(`${item.channelName||'チャンネル'}を登録しました`)}};
-  uninterested.onclick=async()=>{if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const dislikes=setValues(DISLIKES_KEY);dislikes.add(String(item.videoId));saveSet(DISLIKES_KEY,dislikes);upsertHistory(item,{delta:-5,reason:'dislike'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('興味なしを反映しました');await goNext()}finally{session.actionBusy=false}};
-  hide.onclick=async()=>{if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const hidden=setValues(HIDDEN_CHANNELS_KEY);for(const token of hiddenTokens(item))hidden.add(token);saveSet(HIDDEN_CHANNELS_KEY,hidden);upsertHistory(item,{delta:-5,reason:'hide-channel'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('このチャンネルを発見から除外しました');await goNext()}finally{session.actionBusy=false}};
+  add.onclick=()=>{interest.wake?.();const item=currentItem(overlay,pool);if(!item?.channelId)return;if(registered().has(String(item.channelId))){showToast('登録済みです');return}const ok=onRegister?.(item);if(ok!==false){registeredChannelIds.push(String(item.channelId));const index=currentIndex(overlay,pool);purgeFuture(index);syncButtons();showToast(`${item.channelName||'チャンネル'}を登録しました`)}};
+  uninterested.onclick=async()=>{interest.wake?.();if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const dislikes=setValues(DISLIKES_KEY);dislikes.add(String(item.videoId));saveSet(DISLIKES_KEY,dislikes);upsertHistory(item,{delta:-5,reason:'dislike'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('興味なしを反映しました');await goNext()}finally{session.actionBusy=false}};
+  hide.onclick=async()=>{interest.wake?.();if(session.actionBusy)return;const item=currentItem(overlay,pool);if(!item)return;session.actionBusy=true;try{const hidden=setValues(HIDDEN_CHANNELS_KEY);for(const token of hiddenTokens(item))hidden.add(token);saveSet(HIDDEN_CHANNELS_KEY,hidden);upsertHistory(item,{delta:-5,reason:'hide-channel'});const index=currentIndex(overlay,pool);purgeFuture(index);showToast('このチャンネルを発見から除外しました');await goNext()}finally{session.actionBusy=false}};
 
   const external=overlay.querySelector('.youtube-shorts-external');session.observer=new MutationObserver(onItemChanged);if(external)session.observer.observe(external,{attributes:true,attributeFilter:['href']});
   const stage=overlay.querySelector('.youtube-shorts-stage');session.playbackObserver=new MutationObserver(()=>queueMicrotask(skipExternalFallback));if(stage)session.playbackObserver.observe(stage,{childList:true,subtree:true});
