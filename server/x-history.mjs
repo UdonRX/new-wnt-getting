@@ -1,3 +1,5 @@
+import net from 'node:net';
+import tls from 'node:tls';
 import rss from './rss.mjs';
 import { X_LIST_ID as LIST_ID, X_LIST_PATH as LIST_PATH, X_RSS_URL as RSS_URL, X_RSSHUB_HOSTNAME } from '../src/shared/x-feed-config.js';
 
@@ -128,11 +130,96 @@ function historyRss(items) {
   return { xml: prefix + parts.join('') + suffix, count: parts.length };
 }
 
-async function readRedisHistory() {
-  const restUrl = String(process.env.UPSTASH_REDIS_REST_URL || '').trim().replace(/\/+$/, '');
-  const token = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
-  if (!restUrl || !token) throw new Error('Upstash Redis credentials are not configured');
+function redisCommand(parts) {
+  return `*${parts.length}\r\n${parts.map(part => {
+    const text = String(part ?? '');
+    return `$${Buffer.byteLength(text)}\r\n${text}\r\n`;
+  }).join('')}`;
+}
 
+function parseRedisResponse(buffer) {
+  if (!buffer?.length) return null;
+  const type = String.fromCharCode(buffer[0]);
+  const lineEnd = buffer.indexOf('\r\n');
+  if (lineEnd < 0) return null;
+  const line = buffer.subarray(1, lineEnd).toString('utf8');
+
+  if (type === '+' || type === ':' || type === '-') {
+    return {
+      bytes: lineEnd + 2,
+      value: type === ':' ? Number(line) : line,
+      error: type === '-' ? new Error(`Redis error: ${line}`) : null
+    };
+  }
+
+  if (type !== '$') return { bytes: lineEnd + 2, error: new Error(`Unsupported Redis response type: ${type}`) };
+  const length = Number(line);
+  if (!Number.isInteger(length)) return { bytes: lineEnd + 2, error: new Error('Invalid Redis bulk response') };
+  if (length === -1) return { bytes: lineEnd + 2, value: null, error: null };
+  const bodyStart = lineEnd + 2;
+  const bodyEnd = bodyStart + length;
+  if (buffer.length < bodyEnd + 2) return null;
+  return { bytes: bodyEnd + 2, value: buffer.subarray(bodyStart, bodyEnd).toString('utf8'), error: null };
+}
+
+async function readRedisUrlValue(rawUrl, key) {
+  const target = new URL(rawUrl);
+  if (target.protocol !== 'redis:' && target.protocol !== 'rediss:') throw new Error('REDIS_URL must use redis:// or rediss://');
+  if (!target.hostname) throw new Error('REDIS_URL hostname is missing');
+
+  const secure = target.protocol === 'rediss:';
+  const port = Number(target.port || 6379);
+  const username = decodeURIComponent(target.username || '');
+  const password = decodeURIComponent(target.password || '');
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let stage = password ? 'auth' : 'get';
+    let pending = Buffer.alloc(0);
+    const socket = secure
+      ? tls.connect({ host: target.hostname, port, servername: target.hostname, rejectUnauthorized: true })
+      : net.connect({ host: target.hostname, port });
+
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      error ? reject(error) : resolve(value);
+    };
+
+    const sendGet = () => {
+      stage = 'get';
+      socket.write(redisCommand(['GET', key]));
+    };
+
+    const onReady = () => {
+      if (!password) return sendGet();
+      socket.write(redisCommand(username ? ['AUTH', username, password] : ['AUTH', password]));
+    };
+
+    socket.setTimeout(REDIS_TIMEOUT_MS, () => finish(new Error('REDIS_URL connection timed out')));
+    socket.once(secure ? 'secureConnect' : 'connect', onReady);
+    socket.once('error', error => finish(new Error(`REDIS_URL connection failed: ${error?.message || error}`)));
+    socket.on('data', chunk => {
+      pending = Buffer.concat([pending, chunk]);
+      while (!settled) {
+        const parsed = parseRedisResponse(pending);
+        if (!parsed) return;
+        pending = pending.subarray(parsed.bytes);
+        if (parsed.error) return finish(parsed.error);
+        if (stage === 'auth') {
+          if (String(parsed.value || '').toUpperCase() !== 'OK') return finish(new Error('REDIS_URL authentication failed'));
+          sendGet();
+          continue;
+        }
+        return finish(null, parsed.value);
+      }
+    });
+  });
+}
+
+async function readUpstashRestValue(restUrl, token, key) {
   const response = await fetch(restUrl, {
     method: 'POST',
     headers: {
@@ -140,16 +227,47 @@ async function readRedisHistory() {
       'Content-Type': 'application/json',
       Accept: 'application/json'
     },
-    body: JSON.stringify(['GET', HISTORY_KEY]),
+    body: JSON.stringify(['GET', key]),
     signal: AbortSignal.timeout(REDIS_TIMEOUT_MS),
     cache: 'no-store'
   });
   const payload = await response.json().catch(() => null);
-  if (!response.ok || payload?.error) throw new Error(`Upstash Redis read failed (${response.status})`);
+  if (!response.ok || payload?.error) throw new Error(`Upstash Redis REST read failed (${response.status})`);
+  return payload?.result;
+}
 
-  const items = historyItemsFromStored(payload?.result);
-  if (!items.length) throw new Error('Upstash Redis history is empty');
-  return items;
+async function readRedisHistory() {
+  const redisUrl = String(process.env.REDIS_URL || '').trim();
+  const restUrl = String(process.env.UPSTASH_REDIS_REST_URL || '').trim().replace(/\/+$/, '');
+  const token = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  const errors = [];
+
+  if (redisUrl) {
+    try {
+      const value = await readRedisUrlValue(redisUrl, HISTORY_KEY);
+      const items = historyItemsFromStored(value);
+      if (!items.length) throw new Error('Redis history is empty');
+      return { items, backend: 'redis-url' };
+    } catch (error) {
+      errors.push(error?.message || String(error));
+    }
+  }
+
+  if (restUrl && token) {
+    try {
+      const value = await readUpstashRestValue(restUrl, token, HISTORY_KEY);
+      const items = historyItemsFromStored(value);
+      if (!items.length) throw new Error('Upstash Redis history is empty');
+      return { items, backend: 'upstash-rest' };
+    } catch (error) {
+      errors.push(error?.message || String(error));
+    }
+  }
+
+  if (!redisUrl && !(restUrl && token)) {
+    throw new Error('Redis credentials are not configured (set REDIS_URL or Upstash REST credentials)');
+  }
+  throw new Error(errors.filter(Boolean).join('; ') || 'Redis history is unavailable');
 }
 
 function fallbackRequest(req) {
@@ -159,9 +277,10 @@ function fallbackRequest(req) {
   return proxy;
 }
 
-function setHistoryHeaders(res, source, count = null) {
+function setHistoryHeaders(res, source, count = null, backend = '') {
   res.setHeader('X-X-History-Source', source);
   if (Number.isFinite(count)) res.setHeader('X-X-History-Items', String(count));
+  if (backend) res.setHeader('X-X-History-Backend', backend);
 }
 
 export default async function handler(req, res) {
@@ -173,11 +292,11 @@ export default async function handler(req, res) {
   const historyOnly = String(first(req.query?.historyOnly) || '').trim() === '1';
 
   try {
-    const items = await readRedisHistory();
+    const { items, backend } = await readRedisHistory();
     const { xml, count } = historyRss(items);
     res.setHeader('Content-Type', 'application/rss+xml; charset=utf-8');
     res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-    setHistoryHeaders(res, 'redis', count);
+    setHistoryHeaders(res, 'redis', count, backend);
     if (req.method === 'HEAD') return res.status(200).end();
     return res.status(200).send(xml);
   } catch (error) {
