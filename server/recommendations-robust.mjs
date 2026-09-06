@@ -9,21 +9,21 @@ import { resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
 
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
-const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-v7';
+const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-unbounded-v8';
 const RECOMMENDATION_TTL_MS = 10 * 60 * 1000;
 const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
 const GDELT_TIMEOUT_MS = 2200;
 const GDELT_CHECK_COUNT = 4;
-const GOOGLE_NEWS_CANDIDATE_COUNT = 20;
-const INITIAL_SOURCE_DATE_CHECK_COUNT = 12;
-const RECOMMENDATION_TARGET_COUNT = 10;
+// ここから下の件数は表示上限ではなく、追加メタデータ取得の速度を守るための enrichment budget。
+// 未確認の記事も Google News の日時が12時間以内なら候補から落とさない。
+const SOURCE_DATE_ENRICHMENT_COUNT = 12;
 const RECOMMENDATION_MIN_COUNT = 5;
 const SOURCE_DATE_STAGE_TIMEOUT_MS = 1300;
 const RECENT_NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
 const PUBLISHER_VERIFY_TIMEOUT_MS = 1200;
 const PUBLISHER_VERIFY_MAX_BYTES = 256 * 1024;
-const PUBLISHER_VERIFY_MAX_COUNT = 6;
+const PUBLISHER_VERIFY_ENRICHMENT_COUNT = 6;
 
 // 明らかな一覧タイトルだけはGoogle News候補の時点で除外する。
 const NON_ARTICLE_TITLE_RE = /(?:新着記事一覧|記事一覧|ニュース一覧|検索結果|タグ一覧|関連タグ|カテゴリ(?:ー)?一覧|アーカイブ一覧|新着一覧)/i;
@@ -253,7 +253,7 @@ function mergeSourceResult(row, result = {}) {
 async function verifyPublisherPathHints(rows = []) {
   const targets = rows
     .filter(row => row.publisherUrl && row.publisherPathHint && !row.nonArticle)
-    .slice(0, PUBLISHER_VERIFY_MAX_COUNT);
+    .slice(0, PUBLISHER_VERIFY_ENRICHMENT_COUNT);
   const checks = await Promise.all(targets.map(async row => {
     try {
       const page = await fetchPublisherHtmlPrefix(row.publisherUrl);
@@ -305,7 +305,6 @@ function finalizeSelection(rows = []) {
       if (byDate) return byDate;
       return Number(b.score || 0) - Number(a.score || 0) || Number(a.googleRank || 0) - Number(b.googleRank || 0);
     })
-    .slice(0, RECOMMENDATION_TARGET_COUNT)
     .map(row => {
       const effectiveTimestamp = selectionTimestamp(row);
       const usePublisherLink = Boolean(row.publisherArticleConfirmed && row.publisherUrl);
@@ -348,11 +347,12 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   const sourceAllowed = filterBlockedSources(allNews);
   // ここではタイトルだけをhard filterにする。publisher pathは後段の参考情報。
   const articleTitleAllowed = filterArticleCandidates(sourceAllowed);
-  const allowedNews = articleTitleAllowed.slice(0, GOOGLE_NEWS_CANDIDATE_COUNT);
+  // 記事件数では切らない。Google News RSSが返した全候補を12時間フィルタへ渡す。
+  const allowedNews = articleTitleAllowed;
   stage.googleNewsCandidates = allNews.length;
   stage.blockedSourceCandidates = allNews.length - sourceAllowed.length;
   stage.nonArticleTitleCandidates = sourceAllowed.length - articleTitleAllowed.length;
-  stage.candidatePoolLimit = GOOGLE_NEWS_CANDIDATE_COUNT;
+  stage.candidatePoolUnbounded = true;
   stage.candidatePool = allowedNews.length;
   if (!allowedNews.length) throw Object.assign(new Error('No article candidates after source/title filtering'), { stage: 'article-filter' });
 
@@ -364,7 +364,8 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
 
   let ranked = preliminaryScore(recent, trendResult.rows);
   const gdeltTargets = ranked.slice(0, Math.min(GDELT_CHECK_COUNT, ranked.length));
-  const initialSourceTargets = ranked.slice(0, Math.min(INITIAL_SOURCE_DATE_CHECK_COUNT, ranked.length));
+  // 配信元日時は上位だけを enrichment するが、未確認の記事も最終候補には残す。
+  const initialSourceTargets = ranked.slice(0, Math.min(SOURCE_DATE_ENRICHMENT_COUNT, ranked.length));
 
   // GDELTと配信元日時は並列。日時確認に失敗しても後段でGoogle News日時を使って補充する。
   const parallelStarted = Date.now();
@@ -386,6 +387,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   }).sort((a, b) => Number(b.score || 0) - Number(a.score || 0) || Number(a.googleRank || 0) - Number(b.googleRank || 0));
 
   const sourceById = new Map(initialSourceRows.map(({ item, result }) => [item.id, result]));
+  stage.sourceDateEnrichmentLimit = SOURCE_DATE_ENRICHMENT_COUNT;
   stage.sourceDateChecked = sourceById.size;
   stage.sourceDateReplenishChecked = 0;
   stage.sourceDateSucceeded = [...sourceById.values()].filter(row => row?.sourcePublishedTimestamp).length;
@@ -400,6 +402,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   checkedRows = await verifyPublisherPathHints(checkedRows);
   const checkedById = new Map(checkedRows.map(row => [row.id, row]));
 
+  stage.publisherVerifyEnrichmentLimit = PUBLISHER_VERIFY_ENRICHMENT_COUNT;
   stage.publisherPathHints = checkedRows.filter(row => row.publisherPathHint).length;
   stage.publisherHtmlChecked = checkedRows.filter(row => row.publisherHtmlChecked).length;
   stage.publisherHtmlConfirmedArticle = checkedRows.filter(row => row.publisherHtmlSignals?.confirmedArticle).length;
@@ -433,13 +436,14 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
       effectivePublishedTimestamp: Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0)
     }));
 
-  const needed = Math.max(0, RECOMMENDATION_TARGET_COUNT - verifiedRecent.length);
-  const selectedRows = [...verifiedRecent, ...supplementRows.slice(0, needed)];
+  // 表示件数の目標値・上限値は設けない。12時間条件を満たす候補をすべて返す。
+  const selectedRows = [...verifiedRecent, ...supplementRows];
   const items = finalizeSelection(selectedRows);
 
   stage.verifiedCount = verifiedRecent.length;
   stage.supplementedCount = items.filter(item => item.recommendationDateSource === 'google-news').length;
   stage.itemsReturned = items.length;
+  stage.outputCountUnbounded = true;
 
   // 1件だけを成功扱いにはしない。最低5件に届かない場合は既存RSS fallbackへ渡す。
   if (items.length < RECOMMENDATION_MIN_COUNT) {
@@ -523,6 +527,7 @@ export default async function handler(req, res) {
       publisherHtmlConfirmedNonArticle: payload.diagnostics.publisherHtmlConfirmedNonArticle,
       sourceDateChecked: payload.diagnostics.sourceDateChecked,
       sourceDateRecent: payload.diagnostics.sourceDateRecent,
+      outputCountUnbounded: payload.diagnostics.outputCountUnbounded,
       elapsedMs: payload.diagnostics.totalMs
     });
     return res.status(200).json({
