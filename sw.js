@@ -1,5 +1,5 @@
-// v2.19.9: Instagram多アカウント安定化と全追加シートの固定×を新しいSW世代で再配布する。
-const CACHE_NAME='personal-dashboard-v2-19-9-sns-multi-stability1';
+// v2.20.0: Home Today + Weather cache-first UI を新しいSW世代で再配布する。
+const CACHE_NAME='personal-dashboard-v2-home-weather-today1';
 const INSTAGRAM_MEDIA_CACHE='pdv2-instagram-media-v1';
 const INSTAGRAM_MEDIA_PREFIX='/__pdv2_ig_media/';
 const INSTAGRAM_MEDIA_MAX_ENTRIES=360;
