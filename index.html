@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <title>Personal Dashboard V2</title>
-  <!-- v2.20.1: split final full-screen Home shell / weather theme / Hero navigation -->
+  <!-- v2.20.2: audited full-screen Home / weather theme / Hero navigation -->
   <link rel="stylesheet" href="/src/styles/tokens.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/base.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/navigation.css?v=2197keyboard1" />
@@ -35,8 +35,8 @@
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
   <script>
     (()=>{
-      const BUILD='2201homesplit1';
-      const RECOVERY_KEY='pdv2:startup-recovery:2201homesplit1';
+      const BUILD='2202audit1';
+      const RECOVERY_KEY='pdv2:startup-recovery:2202audit1';
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
@@ -59,7 +59,7 @@
     })();
   </script>
   <script src="/src/features/twitch/twitch-sync.js?v=2196twitchsync1"></script>
-  <!-- v2.20.1: split final Home build -->
-  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2201homesplit1"></script>
+  <!-- v2.20.2: audited Home build -->
+  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2202audit1"></script>
 </body>
 </html>
