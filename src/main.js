@@ -1,12 +1,18 @@
 import './runtime-v2195.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
+import { installFinalTheme } from './app/final-theme.js';
+import { createHeroNavigator } from './app/hero-transition.js';
+import { installQuickLauncher } from './app/quick-launcher.js';
+import { installHomeServiceState } from './app/home-service-state.js';
 
-const BUILD='2197sns3';
+const BUILD='2201homesplit1';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
 const importFailures=new Map();
+const heroNavigator=createHeroNavigator({root});
+let themeController=null;
 
 const SCREEN={
   home:{path:'./features/home/home.js',exportName:'renderHome',label:'ホーム'},
@@ -37,14 +43,12 @@ function loadModule(path,{force=false}={}){
   return modulePromises.get(path);
 }
 async function loadRenderer(screen,{force=false}={}){
-  const config=SCREEN[screen];
-  if(!config)throw new Error(`Unknown screen: ${screen}`);
-  const module=await loadModule(config.path,{force});
-  const renderer=module?.[config.exportName];
+  const config=SCREEN[screen];if(!config)throw new Error(`Unknown screen: ${screen}`);
+  const module=await loadModule(config.path,{force}),renderer=module?.[config.exportName];
   if(typeof renderer!=='function')throw new Error(`${config.path} に ${config.exportName} がありません`);
-  return {renderer};
+  return{renderer};
 }
-function loadingText(screen){if(screen==='reader')return '読むカードを準備しています…';if(screen==='twitter')return 'SNSカードを準備しています…';return `${SCREEN[screen]?.label||'画面'}を準備しています…`;}
+function loadingText(screen){if(screen==='reader')return'読むカードを準備しています…';if(screen==='twitter')return'SNSカードを準備しています…';return`${SCREEN[screen]?.label||'画面'}を準備しています…`;}
 function renderLoading(screen){if(root)root.innerHTML=`<section class="screen pd-feature-loading"><div class="card pd-feature-loading-card" role="status"><div class="pd-feature-loading-spinner"></div><div class="pd-feature-loading-title">${loadingText(screen)}</div></div></section>`;}
 
 async function clearDashboardRuntime(){
@@ -53,44 +57,40 @@ async function clearDashboardRuntime(){
     if('caches'in window){const keys=await caches.keys();await Promise.allSettled(keys.filter(key=>key.startsWith('personal-dashboard-')).map(key=>caches.delete(key)));}
   }catch(error){console.warn('[pdv2 clear runtime]',error);}
 }
-
 function renderScreenError(screen,error,options={}){
-  if(!root)return;
-  const label=SCREEN[screen]?.label||'画面';
+  if(!root)return;const label=SCREEN[screen]?.label||'画面';
   root.innerHTML=`<section class="screen pd-feature-error"><div class="error-box"><strong>${label}を表示できませんでした</strong><br><small>${safeMessage(error)}</small><div class="pd-feature-error-actions"><button type="button" class="soft-button" data-pdv2-feature-retry>もう一度試す</button><button type="button" class="soft-button" data-pdv2-feature-cache>キャッシュを更新</button></div></div></section>`;
   root.querySelector('[data-pdv2-feature-retry]')?.addEventListener('click',()=>{const path=SCREEN[screen]?.path;if(path)modulePromises.delete(path);navigate(screen,{...options,forceModuleReload:true});});
   root.querySelector('[data-pdv2-feature-cache]')?.addEventListener('click',async()=>{await clearDashboardRuntime();location.replace(`/?v=${BUILD}&feature-recovery=${encodeURIComponent(screen)}`);});
 }
 function renderBootError(error){console.error('[pdv2] boot failed:',error);if(!root)return;root.innerHTML=`<section class="screen pd-startup-error"><div class="error-box"><strong>アプリの起動に失敗しました</strong><br><small>${safeMessage(error)}</small><div class="pd-feature-error-actions"><button type="button" class="soft-button" onclick="location.reload()">再読み込み</button></div></div></section>`;}
 
-export async function navigate(screen,options={}){
+async function navigateCore(screen,options={}){
   if(!SCREEN[screen])screen='home';
   const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
   window.dispatchEvent(new CustomEvent('pdv2:before-navigate',{detail:{screen,mediaMode:destinationMediaMode,source:options.source||''}}));
   if(options.readerMode)update('lastReaderMode',options.readerMode);
-  if(screen==='media'&&!options.mediaMode)update('lastMediaMode','youtube');
-  else if(options.mediaMode)update('lastMediaMode',options.mediaMode);
+  if(screen==='media'&&!options.mediaMode)update('lastMediaMode','youtube');else if(options.mediaMode)update('lastMediaMode',options.mediaMode);
   if(options.paperTrack)update('paperTrack',options.paperTrack);
-  setScreen(screen);
-  renderNav(navigate);
-  const serial=++renderSerial;
-  renderLoading(screen);
+  setScreen(screen);renderNav(navigate);themeController?.sync?.();
+  const serial=++renderSerial;renderLoading(screen);
   try{
-    const {renderer}=await loadRenderer(screen,{force:Boolean(options.forceModuleReload)});
-    if(serial!==renderSerial)return;
+    const {renderer}=await loadRenderer(screen,{force:Boolean(options.forceModuleReload)});if(serial!==renderSerial)return;
     await renderer(root,{navigate,refresh:Boolean(options.refresh),navigationSource:options.source||'',readerRecommendations:screen==='reader'&&options.source==='bottom-nav',...options});
     if(serial===renderSerial&&root&&!root.childElementCount)throw new Error(`${SCREEN[screen].label} の描画結果が空です`);
+    if(serial===renderSerial)window.dispatchEvent(new CustomEvent('pdv2:navigation-complete',{detail:{screen,options}}));
   }catch(error){console.error('[pdv2] render failed:',screen,error);if(serial===renderSerial)renderScreenError(screen,error,options);}
+}
+export async function navigate(screen,options={}){
+  if(!SCREEN[screen])screen='home';
+  return heroNavigator.go(screen,options,navigateCore,()=>loadRenderer(screen,{force:Boolean(options.forceModuleReload)}));
 }
 
 function idle(callback,delay=0){if('requestIdleCallback'in window)window.requestIdleCallback(callback,{timeout:Math.max(1000,delay+1500)});else setTimeout(callback,delay);}
 function preloadFeature(screen,{warm=false}={}){
   const config=SCREEN[screen];if(!config)return;
   loadModule(config.path).then(module=>{
-    if(screen==='reader'&&warm){
-      window.__PDV2_READER_WARM_CACHE_ONLY=true;
-      return Promise.resolve(module.warmReaderRecommendations?.()).finally(()=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;});
-    }
+    if(screen==='reader'&&warm){window.__PDV2_READER_WARM_CACHE_ONLY=true;return Promise.resolve(module.warmReaderRecommendations?.()).finally(()=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;});}
     if(screen==='twitter'&&warm)return module.warmTwitterFeeds?.({force:true});
   }).catch(error=>{window.__PDV2_READER_WARM_CACHE_ONLY=false;console.warn(`[${screen}-preload]`,error);});
 }
@@ -98,74 +98,35 @@ function jstDay(){return new Date(Date.now()+9*60*60*1000).toISOString().slice(0
 async function warmWikipediaDaily(){
   const key='pdv2:wikipediaDaily:v213';
   try{const cached=JSON.parse(localStorage.getItem(key)||'null');if(cached?.date===jstDay()&&Array.isArray(cached?.items)&&cached.items.length)return cached;}catch{}
-  try{
-    const response=await fetch('/api/wikipedia?mode=daily',{cache:'no-store',signal:AbortSignal.timeout(9000)});
-    const data=await response.json().catch(()=>null);
-    if(response.ok&&data?.date===jstDay()&&Array.isArray(data?.items)&&data.items.length){try{localStorage.setItem(key,JSON.stringify(data));}catch{}return data;}
-  }catch(error){console.warn('[wikipedia-prewarm]',error?.message||error);}
+  try{const response=await fetch('/api/wikipedia?mode=daily',{cache:'no-store',signal:AbortSignal.timeout(9000)}),data=await response.json().catch(()=>null);if(response.ok&&data?.date===jstDay()&&Array.isArray(data?.items)&&data.items.length){try{localStorage.setItem(key,JSON.stringify(data));}catch{}return data;}}catch(error){console.warn('[wikipedia-prewarm]',error?.message||error);}
   return null;
 }
 function startBackgroundJobs(){
-  preloadFeature('reader',{warm:true});
-  idle(()=>warmWikipediaDaily(),20);
-  idle(()=>preloadFeature('wikipedia'),320);
-  idle(()=>preloadFeature('weather'),450);
-  idle(()=>preloadFeature('media'),700);
-  // 起動直後にXの履歴同期/Render起動を走らせない。SNSモジュールだけアイドル時に先読みし、
-  // Xのネットワーク取得はユーザーがSNSを開いた時に既存renderTwitterへ任せる。
-  idle(()=>preloadFeature('twitter'),1800);
+  preloadFeature('reader',{warm:true});idle(()=>warmWikipediaDaily(),20);idle(()=>preloadFeature('wikipedia'),320);idle(()=>preloadFeature('weather'),450);idle(()=>preloadFeature('media'),700);idle(()=>preloadFeature('twitter'),1800);
 }
 
 function installKeyboardNavAnchor(){
-  const viewport=window.visualViewport;
-  if(!viewport)return;
-  const html=document.documentElement;
-  let editing=false;
-  let stableBottom=Math.max(1,viewport.offsetTop+viewport.height);
-  let blurTimer=0;
-
-  const isTextEditor=node=>{
-    if(!(node instanceof Element))return false;
-    if(node.matches('textarea,select,[contenteditable="true"]'))return true;
-    if(!node.matches('input'))return false;
-    const type=String(node.getAttribute('type')||'text').toLowerCase();
-    return !['button','submit','reset','checkbox','radio','range','color','file','image','hidden'].includes(type);
-  };
-  const setOffset=value=>{
-    const offset=Math.max(0,Math.round(Number(value)||0));
-    html.style.setProperty('--keyboard-nav-offset',`${offset}px`);
-    html.classList.toggle('keyboard-open',offset>=48);
-  };
-  const measure=()=>{
-    const currentBottom=viewport.offsetTop+viewport.height;
-    if(!editing){stableBottom=Math.max(1,currentBottom);setOffset(0);return;}
-    const covered=Math.max(0,stableBottom-currentBottom);setOffset(covered>=48?covered:0);
-  };
+  const viewport=window.visualViewport;if(!viewport)return;const html=document.documentElement;let editing=false,stableBottom=Math.max(1,viewport.offsetTop+viewport.height),blurTimer=0;
+  const isTextEditor=node=>{if(!(node instanceof Element))return false;if(node.matches('textarea,select,[contenteditable="true"]'))return true;if(!node.matches('input'))return false;const type=String(node.getAttribute('type')||'text').toLowerCase();return!['button','submit','reset','checkbox','radio','range','color','file','image','hidden'].includes(type);};
+  const setOffset=value=>{const offset=Math.max(0,Math.round(Number(value)||0));html.style.setProperty('--keyboard-nav-offset',`${offset}px`);html.classList.toggle('keyboard-open',offset>=48);};
+  const measure=()=>{const currentBottom=viewport.offsetTop+viewport.height;if(!editing){stableBottom=Math.max(1,currentBottom);setOffset(0);return;}const covered=Math.max(0,stableBottom-currentBottom);setOffset(covered>=48?covered:0);};
   const settle=()=>{requestAnimationFrame(measure);setTimeout(measure,70);setTimeout(measure,220);};
-
   document.addEventListener('focusin',event=>{if(!isTextEditor(event.target))return;if(blurTimer)clearTimeout(blurTimer);stableBottom=Math.max(stableBottom,viewport.offsetTop+viewport.height);editing=true;settle();},true);
   document.addEventListener('focusout',()=>{if(blurTimer)clearTimeout(blurTimer);blurTimer=setTimeout(()=>{if(isTextEditor(document.activeElement))return;editing=false;setOffset(0);setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},260);},40);},true);
   viewport.addEventListener('resize',measure,{passive:true});viewport.addEventListener('scroll',measure,{passive:true});window.addEventListener('resize',()=>{if(editing)measure();else stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},{passive:true});
   window.addEventListener('orientationchange',()=>{editing=false;setOffset(0);setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},320);},{passive:true});measure();
 }
-
-async function resolveTwitchOAuthReturn(){
-  try{const module=await loadModule('./features/twitch/twitch-chat.js');return await module.handleTwitchOAuthReturn?.();}
-  catch(error){console.warn('[twitch-oauth]',error);return null;}
-}
-async function resolveTwitchPlaybackRecovery(){
-  try{const module=await loadModule('./features/twitch/twitch-player.js');return module.getRecentTwitchPlayback?.()||null;}
-  catch(error){console.warn('[twitch-recovery]',error);return null;}
-}
+async function resolveTwitchOAuthReturn(){try{const module=await loadModule('./features/twitch/twitch-chat.js');return await module.handleTwitchOAuthReturn?.();}catch(error){console.warn('[twitch-oauth]',error);return null;}}
+async function resolveTwitchPlaybackRecovery(){try{const module=await loadModule('./features/twitch/twitch-player.js');return module.getRecentTwitchPlayback?.()||null;}catch(error){console.warn('[twitch-recovery]',error);return null;}}
 
 async function boot(){
   if(!root)throw new Error('#app-main が見つかりません');
-  applyTheme();installKeyboardNavAnchor();const twitchOAuth=await resolveTwitchOAuthReturn();renderNav(navigate);
-  if(twitchOAuth?.handled){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});}
-  else{const twitchRecovery=await resolveTwitchPlaybackRecovery();if(twitchRecovery){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});}else{await navigate('home');}}
+  applyTheme();themeController=installFinalTheme({state});installQuickLauncher({navigate,getScreen:()=>state.screen});installHomeServiceState({root});installKeyboardNavAnchor();
+  const twitchOAuth=await resolveTwitchOAuthReturn();renderNav(navigate);
+  if(twitchOAuth?.handled){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});}else{const twitchRecovery=await resolveTwitchPlaybackRecovery();if(twitchRecovery){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});}else await navigate('home');}
   startBackgroundJobs();
   if('serviceWorker'in navigator)navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});}).catch(error=>console.warn('[sw]',error));
-  window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();}catch{}});window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();renderNav(navigate);}catch{}});window.addEventListener('popstate',()=>navigate(state.screen||'home'));
+  window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();themeController?.sync?.();}catch{}});window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();themeController?.sync?.();renderNav(navigate);}catch{}});window.addEventListener('popstate',()=>navigate(state.screen||'home'));
   document.documentElement.dataset.pdv2Booted='1';window.dispatchEvent(new CustomEvent('pdv2:booted',{detail:{build:BUILD}}));
 }
 boot().catch(renderBootError);
