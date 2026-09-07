@@ -64,7 +64,9 @@ export async function renderNewsToday(root, { navigate, openId = '' }) {
   };
   renderList(host, snapshot, open);
   if (openId && snapshot?.items?.length) {
-    const index = snapshot.items.findIndex(item => String(item.id) === String(openId)); if (index >= 0) requestAnimationFrame(() => open(snapshot.items[index], index, snapshot.items));
+    const index = snapshot.items.findIndex(item => String(item.id) === String(openId));
+    // Paint the requested article detail before this renderer resolves. AI summary work remains asynchronous.
+    if (index >= 0) open(snapshot.items[index], index, snapshot.items);
   }
   const applySnapshot = next => {
     if (disposed || !next?.items?.length) return; snapshot = next;
