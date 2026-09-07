@@ -211,7 +211,7 @@ function postTimestamp(item) { const time = Date.parse(String(item?.createdAt ||
 export async function renderTwitter(root, { navigate, refresh = false }) {
   const generation = ++viewGeneration, feed = X_FEED; let cached = { posts: [], fetchedAt: 0 };
   try { cached = await readXPostCache(); } catch (error) { console.warn('[x-cache-read]', error?.message || error); } if (generation !== viewGeneration) return;
-  let requestRefresh = () => Promise.resolve(); const screen = el('section', { class: 'screen' }); screen.append(topbar('X', { subtitle: 'タイムライン', actions: [{ label: '↻', title: '更新', onClick: () => requestRefresh() }, { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }] }));
+  let requestRefresh = (_options = {}) => Promise.resolve(); const screen = el('section', { class: 'screen' }); screen.append(topbar('X', { subtitle: 'タイムライン', actions: [{ label: '↻', title: '更新', onClick: () => requestRefresh() }, { html: iconSvg('settings', { size: 20 }), title: '設定', onClick: () => navigate('settings') }] }));
   const updateStatus = el('div', { class: 'twitter-update-status media-meta', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true', style: 'min-height:16px;margin:0 4px 4px;opacity:.82;' }); updateStatus.hidden = true;
   const pullIndicator = el('div', { class: 'twitter-pull-refresh', 'aria-hidden': 'true' }, [el('span', { class: 'twitter-pull-spinner', text: '↻' }), el('span', { class: 'twitter-pull-label', text: '下に引いて更新' })]);
   const host = el('div', { class: 'twitter-feed-host', style: 'display:block;margin:0 -14px;padding:0;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;overflow:visible;' }); screen.append(updateStatus, pullIndicator, host);
@@ -230,7 +230,22 @@ export async function renderTwitter(root, { navigate, refresh = false }) {
   let statusTimer = null, refreshSerial = 0; const setUpdateStatus = (text = '', autoHideMs = 0) => { if (statusTimer) clearTimeout(statusTimer); statusTimer = null; if (!text) { updateStatus.textContent = ''; updateStatus.hidden = true; return; } updateStatus.textContent = text; updateStatus.hidden = false; if (autoHideMs > 0) statusTimer = setTimeout(() => { if (!updateStatus.isConnected) return; updateStatus.textContent = ''; updateStatus.hidden = true; }, autoHideMs); };
   const applyMergedResult = async result => { if (generation !== viewGeneration) return false; let posts = Array.isArray(result?.posts) ? result.posts : []; if (!posts.length) posts = (await readXPostCache()).posts || []; if (generation !== viewGeneration || !posts.length) return false; mergeNewPosts(posts); return true; };
   const watchBackgroundResult = job => job.then(applyMergedResult).catch(error => { console.warn('[x-sync-background]', error?.message || error); return false; });
-  requestRefresh = () => { const serial = ++refreshSerial; setUpdateStatus('更新中…'); const history = historyJobFor(feed), upstream = upstreamJobFor(feed); history.then(async result => { await applyMergedResult(result); if (generation === viewGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => { console.warn('[x-manual-refresh-history]', error?.message || error); if (generation === viewGeneration && serial === refreshSerial) setUpdateStatus('更新できませんでした（履歴を表示中）', 2600); }); upstream.then(async result => { await applyMergedResult(result); if (generation === viewGeneration && serial === refreshSerial) setUpdateStatus(''); }).catch(error => console.warn('[x-manual-refresh-upstream]', error?.message || error)); return Promise.resolve(); };
-  root.replaceChildren(screen); attachPullToRefresh(screen, pullIndicator, () => requestRefresh()); const history = historyJobFor(feed), upstream = upstreamJobFor(feed); watchBackgroundResult(history); watchBackgroundResult(upstream); if (refresh) requestRefresh(); if (cached?.posts?.length) return;
+  requestRefresh = ({ scrollToTop = false } = {}) => {
+    const serial = ++refreshSerial; setUpdateStatus('更新中…'); const history = historyJobFor(feed), upstream = upstreamJobFor(feed);
+    history.then(applyMergedResult).catch(error => { console.warn('[x-manual-refresh-history]', error?.message || error); });
+    return upstream.then(async result => {
+      const applied = await applyMergedResult(result);
+      if (generation === viewGeneration && serial === refreshSerial) {
+        setUpdateStatus('');
+        if (scrollToTop && applied) requestAnimationFrame(() => { if (generation === viewGeneration) window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); });
+      }
+      return applied;
+    }).catch(error => {
+      console.warn('[x-manual-refresh-upstream]', error?.message || error);
+      if (generation === viewGeneration && serial === refreshSerial) setUpdateStatus('更新できませんでした（履歴を表示中）', 2600);
+      return false;
+    });
+  };
+  root.replaceChildren(screen); attachPullToRefresh(screen, pullIndicator, () => requestRefresh({ scrollToTop: true })); const history = historyJobFor(feed), upstream = upstreamJobFor(feed); watchBackgroundResult(history); watchBackgroundResult(upstream); if (refresh) requestRefresh(); if (cached?.posts?.length) return;
   try { const first = await Promise.any([history, upstream]); await applyMergedResult(first); } catch { if (generation !== viewGeneration) return; const fallback = await readXPostCache(); if (generation !== viewGeneration || !fallback?.posts?.length) return; draw(fallback.posts); }
 }
