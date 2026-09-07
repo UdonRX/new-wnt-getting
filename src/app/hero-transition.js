@@ -13,6 +13,16 @@ function ensureStyles(){
 }
 function homeTarget(root,key){return[...root.querySelectorAll('[data-home-hero-key]')].find(node=>node.dataset.homeHeroKey===key)||null;}
 function clearName(node){if(node?.style?.viewTransitionName)node.style.viewTransitionName='';}
+function waitForDetailShell(root,timeoutMs=48){
+  const ready=()=>Boolean(root?.firstElementChild&&!root.firstElementChild.classList.contains('pd-feature-loading'));
+  if(ready())return Promise.resolve();
+  return new Promise(resolve=>{
+    let done=false,timer=0;const finish=()=>{if(done)return;done=true;observer?.disconnect?.();if(timer)clearTimeout(timer);resolve();};
+    const observer=new MutationObserver(()=>{if(ready())finish();});
+    try{observer.observe(root,{childList:true});}catch{return finish();}
+    timer=setTimeout(finish,timeoutMs);
+  });
+}
 export function createHeroNavigator({root}={}){
   ensureStyles();let active=null,closeButton=null,busy=false;
   const installClose=()=>{if(closeButton?.isConnected)return;closeButton=document.createElement('button');closeButton.type='button';closeButton.className='pdv2-hero-close';closeButton.setAttribute('aria-label','閉じてホームへ戻る');closeButton.textContent='×';closeButton.onclick=()=>close();document.body.append(closeButton);};
@@ -29,7 +39,13 @@ export function createHeroNavigator({root}={}){
     if(!key||!source){busy=false;return navigateCore(screen,options);}
     try{await prepare?.();}catch{}
     active={key,scrollY};document.body.classList.add('pdv2-hero-detail');
-    const run=async()=>{await navigateCore(screen,{...options,__heroBypass:true});const target=root?.firstElementChild;if(target)target.style.viewTransitionName='pdv2-hero-card';};
+    const run=async()=>{
+      // The renderer may continue its own network work, but Hero only waits for its first detail shell.
+      // Twitch / YouTube / X fetch completion is therefore outside the transition critical path.
+      Promise.resolve(navigateCore(screen,{...options,__heroBypass:true})).catch(()=>{});
+      await waitForDetailShell(root);
+      const target=root?.firstElementChild;if(target)target.style.viewTransitionName='pdv2-hero-card';
+    };
     if(typeof document.startViewTransition==='function'&&!reducedMotion()){
       source.style.viewTransitionName='pdv2-hero-card';const transition=document.startViewTransition(run);await transition.finished.catch(()=>{});clearName(source);clearName(root?.firstElementChild);
     }else await fallbackOpen(source,run);
