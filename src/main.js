@@ -11,6 +11,8 @@ const importFailures=new Map();
 const SCREEN={
   home:{path:'./features/home/home.js',exportName:'renderHome',label:'ホーム'},
   weather:{path:'./features/weather/weather.js',exportName:'renderWeather',label:'天気'},
+  weatherDetail:{path:'./features/weather/weather-detail.js',exportName:'renderWeatherDetail',label:'天気'},
+  newsToday:{path:'./features/reader/news-today.js',exportName:'renderNewsToday',label:'ニュース'},
   reader:{path:'./features/reader/reader.js',exportName:'renderReader',label:'読む'},
   media:{path:'./features/media/media.js',exportName:'renderMedia',label:'動画'},
   twitter:{path:'./features/twitter/sns.js',exportName:'renderSNS',label:'SNS'},
@@ -136,91 +138,34 @@ function installKeyboardNavAnchor(){
   };
   const measure=()=>{
     const currentBottom=viewport.offsetTop+viewport.height;
-    if(!editing){
-      stableBottom=Math.max(1,currentBottom);
-      setOffset(0);
-      return;
-    }
-    const covered=Math.max(0,stableBottom-currentBottom);
-    setOffset(covered>=48?covered:0);
+    if(!editing){stableBottom=Math.max(1,currentBottom);setOffset(0);return;}
+    const covered=Math.max(0,stableBottom-currentBottom);setOffset(covered>=48?covered:0);
   };
-  const settle=()=>{
-    requestAnimationFrame(measure);
-    setTimeout(measure,70);
-    setTimeout(measure,220);
-  };
+  const settle=()=>{requestAnimationFrame(measure);setTimeout(measure,70);setTimeout(measure,220);};
 
-  document.addEventListener('focusin',event=>{
-    if(!isTextEditor(event.target))return;
-    if(blurTimer)clearTimeout(blurTimer);
-    stableBottom=Math.max(stableBottom,viewport.offsetTop+viewport.height);
-    editing=true;
-    settle();
-  },true);
-  document.addEventListener('focusout',()=>{
-    if(blurTimer)clearTimeout(blurTimer);
-    blurTimer=setTimeout(()=>{
-      if(isTextEditor(document.activeElement))return;
-      editing=false;
-      setOffset(0);
-      setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},260);
-    },40);
-  },true);
-  viewport.addEventListener('resize',measure,{passive:true});
-  viewport.addEventListener('scroll',measure,{passive:true});
-  window.addEventListener('resize',()=>{if(editing)measure();else stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},{passive:true});
-  window.addEventListener('orientationchange',()=>{
-    editing=false;
-    setOffset(0);
-    setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},320);
-  },{passive:true});
-  measure();
+  document.addEventListener('focusin',event=>{if(!isTextEditor(event.target))return;if(blurTimer)clearTimeout(blurTimer);stableBottom=Math.max(stableBottom,viewport.offsetTop+viewport.height);editing=true;settle();},true);
+  document.addEventListener('focusout',()=>{if(blurTimer)clearTimeout(blurTimer);blurTimer=setTimeout(()=>{if(isTextEditor(document.activeElement))return;editing=false;setOffset(0);setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},260);},40);},true);
+  viewport.addEventListener('resize',measure,{passive:true});viewport.addEventListener('scroll',measure,{passive:true});window.addEventListener('resize',()=>{if(editing)measure();else stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},{passive:true});
+  window.addEventListener('orientationchange',()=>{editing=false;setOffset(0);setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},320);},{passive:true});measure();
 }
 
 async function resolveTwitchOAuthReturn(){
-  try{
-    const module=await loadModule('./features/twitch/twitch-chat.js');
-    return await module.handleTwitchOAuthReturn?.();
-  }catch(error){
-    console.warn('[twitch-oauth]',error);
-    return null;
-  }
+  try{const module=await loadModule('./features/twitch/twitch-chat.js');return await module.handleTwitchOAuthReturn?.();}
+  catch(error){console.warn('[twitch-oauth]',error);return null;}
 }
-
 async function resolveTwitchPlaybackRecovery(){
-  try{
-    const module=await loadModule('./features/twitch/twitch-player.js');
-    return module.getRecentTwitchPlayback?.()||null;
-  }catch(error){
-    console.warn('[twitch-recovery]',error);
-    return null;
-  }
+  try{const module=await loadModule('./features/twitch/twitch-player.js');return module.getRecentTwitchPlayback?.()||null;}
+  catch(error){console.warn('[twitch-recovery]',error);return null;}
 }
 
 async function boot(){
   if(!root)throw new Error('#app-main が見つかりません');
-  applyTheme();
-  installKeyboardNavAnchor();
-  const twitchOAuth=await resolveTwitchOAuthReturn();
-  renderNav(navigate);
-  if(twitchOAuth?.handled){
-    update('lastMediaMode','twitch');
-    await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});
-  }else{
-    const twitchRecovery=await resolveTwitchPlaybackRecovery();
-    if(twitchRecovery){
-      update('lastMediaMode','twitch');
-      await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});
-    }else{
-      await navigate('home');
-    }
-  }
+  applyTheme();installKeyboardNavAnchor();const twitchOAuth=await resolveTwitchOAuthReturn();renderNav(navigate);
+  if(twitchOAuth?.handled){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});}
+  else{const twitchRecovery=await resolveTwitchPlaybackRecovery();if(twitchRecovery){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});}else{await navigate('home');}}
   startBackgroundJobs();
   if('serviceWorker'in navigator)navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});}).catch(error=>console.warn('[sw]',error));
-  window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();}catch{}});
-  window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();renderNav(navigate);}catch{}});
-  window.addEventListener('popstate',()=>navigate(state.screen||'home'));
-  document.documentElement.dataset.pdv2Booted='1';
-  window.dispatchEvent(new CustomEvent('pdv2:booted',{detail:{build:BUILD}}));
+  window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();}catch{}});window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();renderNav(navigate);}catch{}});window.addEventListener('popstate',()=>navigate(state.screen||'home'));
+  document.documentElement.dataset.pdv2Booted='1';window.dispatchEvent(new CustomEvent('pdv2:booted',{detail:{build:BUILD}}));
 }
 boot().catch(renderBootError);
