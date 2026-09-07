@@ -1,19 +1,19 @@
-// v2.20.2: audit fixes for non-blocking Hero, Story direct-open and Quick Launcher fan.
-const CACHE_NAME='personal-dashboard-v2-home-audit1';
+// PWA cache and App Shell.
+const CACHE_NAME='personal-dashboard-v2-structure1';
 const INSTAGRAM_MEDIA_CACHE='pdv2-instagram-media-v1';
 const INSTAGRAM_MEDIA_PREFIX='/__pdv2_ig_media/';
 const INSTAGRAM_MEDIA_MAX_ENTRIES=360;
 const STATIC_FETCH_TIMEOUT_MS=5500;
 const APP_SHELL=[
   '/','/index.html','/manifest.webmanifest',
-  '/src/styles/tokens.css','/src/styles/base.css','/src/styles/navigation.css','/src/styles/screens.css','/src/styles/app.css','/src/styles/motion.css','/src/styles/v2181.css','/src/styles/v2182.css','/src/styles/v2189.css','/src/styles/v2194.css','/src/styles/v2195.css',
-  '/src/bootstrap-v2195-summary.js','/src/main.js','/src/runtime-v2182.js','/src/runtime-v2184.js','/src/runtime-v2185.js','/src/runtime-v2192.js','/src/runtime-v2195.js','/src/app/router.js','/src/app/store.js','/src/app/final-theme.js','/src/app/hero-transition.js','/src/app/quick-launcher.js','/src/app/home-service-state.js',
+  '/src/styles/tokens.css','/src/styles/base.css','/src/styles/navigation.css','/src/styles/screens.css','/src/styles/app.css','/src/styles/motion.css','/src/styles/active-overrides.css','/src/styles/fullscreen-cleanup.css','/src/styles/weather-detail.css',
+  '/src/bootstrap.js','/src/main.js','/src/runtime.js','/src/app/router.js','/src/app/store.js','/src/app/final-theme.js','/src/app/hero-transition.js','/src/app/quick-launcher.js','/src/app/home-service-state.js',
   '/src/shared/components.js','/src/shared/dom.js','/src/shared/sheet-close-global.js','/src/shared/gestures.js','/src/shared/icons.js','/src/shared/playing-title.js','/src/shared/reader-debug.js','/src/shared/rss.js','/src/shared/storage.js','/src/shared/time.js',
   '/src/features/home/home.js',
-  '/src/features/weather/weather.js','/src/features/weather/weather-detail.js','/src/features/weather/weather-api.js','/src/features/weather/weather-icons.js','/src/features/weather/weather-sources.js',
-  '/src/features/reader/news-today.js','/src/features/reader/reader.js','/src/features/reader/reader-data.js','/src/features/reader/reader-flow.js','/src/features/reader/reader-focus.js','/src/features/reader/reader-rank.js','/src/features/reader/reader-recommendations.js','/src/features/reader/summary-request-coordinator.js','/src/features/reader/summary-fetch-gate.js',
-  '/src/features/media/media.js','/src/features/youtube/youtube.js','/src/features/youtube/youtube-player.js','/src/features/youtube/youtube-discovery.js',
-  '/src/features/twitch/twitch.js','/src/features/twitch/twitch-player.js','/src/features/twitch/twitch-chat.js',
+  '/src/features/weather/weather.js','/src/features/weather/weather-detail.js','/src/features/weather/weather-detail-view.js','/src/features/weather/weather-current-location.js','/src/features/weather/weather-current-runtime.js','/src/features/weather/weather-api.js','/src/features/weather/weather-icons.js','/src/features/weather/weather-sources.js',
+  '/src/features/reader/news-today.js','/src/features/reader/reader.js','/src/features/reader/reader-data.js','/src/features/reader/reader-flow.js','/src/features/reader/reader-focus.js','/src/features/reader/reader-rank.js','/src/features/reader/reader-recommendations.js','/src/features/reader/summary-request-coordinator.js','/src/features/reader/summary-fetch-gate.js','/src/features/reader/summary-instant-ux.js','/src/features/reader/reader-summary-accelerator.js','/src/features/reader/reader-deep-dive-page-unit.js','/src/features/reader/reader-deep-dive-long-wait.js','/src/features/reader/reader-recommend-loading-ui.js','/src/features/reader/reader-recommend-latest-labels.js','/src/features/reader/reader-recommend-cache-fast.js','/src/features/reader/reader-list-ux.js',
+  '/src/features/media/media.js','/src/features/media/media-landscape-ui.js','/src/features/youtube/youtube.js','/src/features/youtube/youtube-player.js','/src/features/youtube/youtube-discovery.js',
+  '/src/features/twitch/twitch.js','/src/features/twitch/twitch-player.js','/src/features/twitch/twitch-chat.js','/src/features/twitch/twitch-sync.js',
   '/src/features/twitter/twitter.js','/src/features/twitter/x-cache.js','/src/features/twitter/x-normalizer.js','/src/features/twitter/sns.js','/src/features/twitter/instagram-accounts.js','/src/features/twitter/instagram-timeline.js','/src/features/twitter/instagram-stories.js','/src/features/twitter/instagram-video.js','/src/features/twitter/instagram-cache.js','/src/features/twitter/instagram-image-fast.js','/src/features/twitter/instagram-stability.js','/src/features/twitter/image-viewer.js',
   '/src/features/wikipedia/wikipedia.js','/src/features/settings/settings.js',
   '/shared/paper-creative-keywords.js','/icons/icon-192.png','/icons/icon-512.png'

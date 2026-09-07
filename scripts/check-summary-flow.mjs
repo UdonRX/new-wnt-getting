@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { dispatchSummaryBatchItems, splitSummaryBatchItems } from '../lib/summary-dispatch-v2195.mjs';
+import { dispatchSummaryBatchItems, splitSummaryBatchItems } from '../lib/summary-dispatch.mjs';
 
 function fakeSummary(label) {
   return {
@@ -33,8 +33,6 @@ assert.deepEqual(firstChunks.map(chunk => chunk.items.length), [5, 5], '1〜10�
 
 const calls = [];
 const mockRunner = async chunk => {
-  // 旧実装の10件一括を仮想的に失敗させる条件。
-  // 修正後はここへ6件以上が来てはいけない。
   assert.ok(chunk.length <= 5, `Geminiへ一度に${chunk.length}件送っています`);
   calls.push(chunk.map(item => item.id));
   return chunk.map((item, index) => ({
@@ -50,15 +48,13 @@ const firstTen = await dispatchSummaryBatchItems(articles.slice(0, 10), mockRunn
 assert.equal(firstTen.results.length, 10);
 assert.ok(firstTen.results.every(row => row.summary), '1〜10件目が全件要約される');
 
-// 「10件目を見た後」に次の10件を先読みする状態を再現。
 const afterTen = await dispatchSummaryBatchItems(articles.slice(10, 20), mockRunner);
 assert.equal(afterTen.results.length, 10);
 assert.ok(afterTen.results[0]?.summary, '11件目の要約が取得できる');
 assert.equal(afterTen.results[0]?.url, 'https://example.com/article-11');
 assert.ok(afterTen.results.every(row => row.summary), '11〜20件目も全件要約される');
 
-// Bento一覧から未要約記事を直接開くケース。
-const bentoTargetIndex = 3; // このグループ内の14件目
+const bentoTargetIndex = 3;
 assert.ok(afterTen.results[bentoTargetIndex]?.summary, 'Bentoから直接開いた未要約記事にも要約がある');
 assert.equal(afterTen.results[bentoTargetIndex]?.url, 'https://example.com/article-14');
 

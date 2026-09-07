@@ -1,9 +1,9 @@
-import './runtime-v2195.js';
+import './runtime.js';
 import { setScreen, renderNav, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 import { installFinalTheme } from './app/final-theme.js';
 
-const BUILD='2202audit1';
+const BUILD='2210structure1';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();

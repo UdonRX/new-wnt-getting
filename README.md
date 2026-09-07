@@ -12,23 +12,36 @@ iPhone Safari / PWA を主対象にした個人ダッシュボードです。`ma
 
 ```text
 index.html
+├─ src/styles/
+│  ├─ tokens.css / base.css / navigation.css
+│  ├─ screens.css / app.css / motion.css
+│  ├─ active-overrides.css
+│  ├─ fullscreen-cleanup.css
+│  └─ weather-detail.css
 ├─ src/features/twitch/twitch-sync.js
-└─ src/bootstrap-v2195-summary.js
-   ├─ Reader / Media / Weather の現行補助モジュール
+└─ src/bootstrap.js
+   ├─ 起動時に必要な現行補助モジュール
    └─ src/main.js
+      ├─ src/runtime.js
       ├─ src/app/*
-      ├─ src/features/* を画面単位で遅延読込
-      └─ active runtime compatibility chain
-         runtime-v2195.js
-           -> runtime-v2192.js
-           -> runtime-v2185.js
-           -> runtime-v2184.js
-           -> runtime-v2182.js
+      └─ src/features/* を画面単位で遅延読込
 ```
 
 `sw.js` が PWA の App Shell とキャッシュを管理します。
 
-`runtime-v2195 / v2192 / v2185 / v2184 / v2182` は名前に旧バージョン番号が残っていますが、現在も実際に使われている互換レイヤーです。単に古そうという理由では削除しません。将来統合する場合は、挙動を現行モジュールへ移してから同じコミットで参照と旧ファイルを削除します。
+### 固定ファイル方針
+
+バージョンごとの差分ファイルを積み重ねる方式は廃止しました。
+
+- Browser runtime: `src/runtime.js`
+- Browser bootstrap: `src/bootstrap.js`
+- UI override CSS: `src/styles/active-overrides.css`
+- Summary stream: `lib/summary-stream.mjs`
+- Summary dispatch: `lib/summary-dispatch.mjs`
+
+今後の修正では上記の既存ファイルを直接更新します。`runtime-vXXXX.js`、`vXXXX.css`、`bootstrap-vXXXX*.js`、`summary-vXXXX.mjs` のようなバージョン名付き実装ファイルを新しく作成しません。
+
+URLのキャッシュ破棄用 `?v=...` や localStorage の移行キー、診断レスポンス中の旧version文字列は、ファイルを増やす仕組みではないため必要に応じて維持できます。ただし実装ファイル名にはversion番号を使いません。
 
 ### API
 
@@ -64,13 +77,14 @@ vercel.json
 
 1. 必ず作業開始時に最新 `main` を確認する。
 2. 既存の正規ファイルを修正し、`-vXXXX`、`*_FIX`、`ALL_CODE.txt`、`FILE_TREE.txt` のような版別コピーや一時スナップショットを増やさない。
-3. 実装を置き換えた場合、旧実装・旧UI・旧CSSは参照が無いことを確認し、同じコミットで削除する。
-4. `index.html`、`sw.js`、import、`vercel.json` の参照を同時に確認する。
-5. 可能な作業環境では反映前に `npm run check` を実行する。
-6. 1つの改善依頼は、調査・修正・テストをまとめて **mainへ1コミット**で反映する。
-7. main反映後は GitHub の `Vercel` commit status が `success` になることを確認する。
-8. Vercelのbuild/deploy rate limit中は追加の「再試行用コミット」を作らない。
-9. 通常はGit連携に任せ、不要な手動Production Deployを追加しない。
+3. 特に `runtime-vXXXX.js` / `vXXXX.css` / `bootstrap-vXXXX*.js` / `summary-vXXXX.mjs` は作らず、固定名ファイルを更新する。
+4. 実装を置き換えた場合、旧実装・旧UI・旧CSSは参照が無いことを確認し、同じコミットで削除する。
+5. `index.html`、`sw.js`、import、`vercel.json`、回帰テストの参照を同時に確認する。
+6. 可能な作業環境では反映前に `npm run check` を実行する。
+7. 1つの改善依頼は、調査・修正・テストをまとめて **mainへ1コミット**で反映する。
+8. main反映後は GitHub の `Vercel` commit status が `success` になることを確認する。
+9. Vercelのbuild/deploy rate limit中は追加の「再試行用コミット」を作らない。
+10. 通常はGit連携に任せ、不要な手動Production Deployを追加しない。
 
 ## 回帰チェック
 
@@ -87,6 +101,7 @@ npm run check:hobby
 
 - 新APIは原則として既存4 routerのどれかへrouteを追加する。
 - 新しいUI改善は既存featureへ統合し、バージョン別ファイルを横に増やさない。
+- 複数の後付けoverrideが同じ役割になった場合は、次の改善時に既存の固定ファイルへ統合する。
 - 診断コードは恒久的に必要なら既存のdebug/diagnostic導線へ統合し、一時診断ファイルを残さない。
 - Home表示を外部API待ちで止めない。キャッシュ即表示・バックグラウンド更新を維持する。
 - iPhone Safari / PWAを最優先し、不要な大型依存を追加しない。

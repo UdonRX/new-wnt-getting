@@ -47,7 +47,7 @@ const [weatherRain, weatherSources, weatherView, mediaCss, feedsRouter, twitchPl
   read('server/weather-rain.mjs'),
   read('src/features/weather/weather-sources.js'),
   read('src/features/weather/weather.js'),
-  read('src/styles/v2195.css'),
+  read('src/styles/active-overrides.css'),
   read('api/feeds.mjs'),
   read('src/features/twitch/twitch-player.js')
 ]);
@@ -61,7 +61,6 @@ if (!/fetchRapidRainAlert/.test(weatherView) || !/if \(alertNode && card\.isConn
   fail('Heavy-rain UI must remain conditional instead of changing the normal weather layout.');
 }
 
-// v2.19.6: the landscape button must always rotate only the media stage by exactly 90 degrees.
 if (!/\.youtube-inline-stage\s*\{[\s\S]*?width:\s*100dvh[\s\S]*?height:\s*100dvw[\s\S]*?rotate\(90deg\)/.test(mediaCss)) {
   fail('Landscape mode must size the stage to the swapped viewport and rotate it by 90 degrees.');
 }

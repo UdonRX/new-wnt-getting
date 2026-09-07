@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { prepareSummaryBody, researchSummaryFromBody } from '../server/summary.mjs';
-import { generateStructuredSingle } from '../lib/summary-dispatch-v2195.mjs';
+import { generateStructuredSingle } from '../lib/summary-dispatch.mjs';
 
 const rssDescription = [
   'ロシアとイギリスを巡る安全保障環境について、政府関係者の発言や最近のサイバー攻撃、',

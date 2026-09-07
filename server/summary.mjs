@@ -1,8 +1,8 @@
-import summaryV2184 from '../lib/summary-v2184.mjs';
+import summaryV2184 from '../lib/summary-stream.mjs';
 import { extractArticleFromUrl } from '../lib/article-reader.mjs';
 import { technologyResearchFeed } from '../lib/technology-research.mjs';
 import paperTitles from '../lib/paper-titles.mjs';
-import { summaryBatchV2195, summarySingleV2195 } from '../lib/summary-dispatch-v2195.mjs';
+import { summaryBatchV2195, summarySingleV2195 } from '../lib/summary-dispatch.mjs';
 import { setAsciiHeader, summaryServerErrorCode } from '../lib/http-response-safe.mjs';
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
