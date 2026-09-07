@@ -10,12 +10,29 @@ const NAV = [
   ['twitter', 'SNS', 'sns'],
   ['wikipedia', 'Wiki', 'wikipedia']
 ];
+const WEATHER_META = {
+  sunny: '#5b382e',
+  cloudy: '#35414a',
+  rain: '#23435e',
+  snow: '#49616c',
+  night: '#20254f'
+};
+const WEATHER_KINDS = new Set(Object.keys(WEATHER_META));
 
 const featureColorKey = screen => {
   if (screen === 'media') return state.mediaMode;
   if (screen === 'reader') return state.readerMode;
   return screen;
 };
+
+export function applyWeatherShellTheme(kind = 'cloudy') {
+  const next = WEATHER_KINDS.has(String(kind)) ? String(kind) : 'cloudy';
+  const root = document.documentElement;
+  if (root.dataset.appWeather !== next) root.dataset.appWeather = next;
+  document.body?.setAttribute('data-app-weather', next);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', WEATHER_META[next]);
+  return next;
+}
 
 export function applyTheme() {
   const settings = state.settings;
@@ -28,12 +45,18 @@ export function applyTheme() {
   root.style.setProperty('--edge-opacity-pct', `${Math.round(Number(settings.edgeOpacity ?? .38) * 100)}%`);
   root.style.setProperty('--edge-glow', `${Number(settings.edgeGlow ?? 4)}px`);
   document.body.classList.toggle('edge-off', !settings.edgeEnabled);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#090b0e');
+  applyWeatherShellTheme(root.dataset.appWeather || 'cloudy');
 }
 
 export function renderNav(onNavigate) {
   const nav = document.getElementById('bottom-nav');
+  if (!nav) return;
   clear(nav);
+  const hidden = state.screen === 'home' || document.body.classList.contains('pdv2-hero-detail');
+  nav.hidden = hidden;
+  nav.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+  document.body.classList.toggle('pdv2-home-fullscreen', state.screen === 'home');
+  if (hidden) return;
   NAV.forEach(([key, label, icon]) => {
     const button = el('button', {
       class: `nav-item ${state.screen === key ? 'active' : ''}`,
