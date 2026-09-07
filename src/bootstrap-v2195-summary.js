@@ -20,4 +20,5 @@ import './features/reader/reader-list-ux.js?v=21917tabs2';
 import './features/media/media-landscape-ui.js?v=21917landscape2';
 // 全画面共通: 長い追加/編集シートでも上部の×を常時表示して閉じられるようにする。
 import './shared/sheet-close-global.js?v=2199sheetclose1';
-import './main.js?v=2197sns3';
+// v2.20.1: split final Home modules / Hero / Quick Launcher.
+import './main.js?v=2201homesplit1';
