@@ -11,7 +11,7 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <title>Personal Dashboard V2</title>
-  <!-- v2.20.2: audited full-screen Home / weather theme / Hero navigation -->
+  <!-- v2.21.0: full-screen Home / current-location Weather / retired edge frame -->
   <link rel="stylesheet" href="/src/styles/tokens.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/base.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/navigation.css?v=2197keyboard1" />
@@ -23,10 +23,10 @@
   <link rel="stylesheet" href="/src/styles/v2189.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/v2194.css?v=2196media1" />
   <link rel="stylesheet" href="/src/styles/v2195.css?v=2196media1" />
+  <link rel="stylesheet" href="/src/styles/fullscreen-cleanup.css?v=2210weather1" />
+  <link rel="stylesheet" href="/src/styles/weather-detail.css?v=2210weather1" />
 </head>
 <body>
-  <div id="edge-mask" aria-hidden="true"></div>
-  <div id="edge-frame" aria-hidden="true"></div>
   <div id="app-shell">
     <main id="app-main" tabindex="-1"></main>
     <nav id="bottom-nav" class="bottom-nav" aria-label="メインナビゲーション"></nav>
@@ -35,8 +35,8 @@
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
   <script>
     (()=>{
-      const BUILD='2202audit1';
-      const RECOVERY_KEY='pdv2:startup-recovery:2202audit1';
+      const BUILD='2210weather1';
+      const RECOVERY_KEY='pdv2:startup-recovery:2210weather1';
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
@@ -59,7 +59,7 @@
     })();
   </script>
   <script src="/src/features/twitch/twitch-sync.js?v=2196twitchsync1"></script>
-  <!-- v2.20.2: audited Home build -->
-  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2202audit1"></script>
+  <!-- v2.21.0: split weather/fullscreen implementation -->
+  <script type="module" src="/src/bootstrap-v2195-summary.js?v=2210weather1"></script>
 </body>
 </html>

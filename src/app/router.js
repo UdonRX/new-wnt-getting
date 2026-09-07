@@ -38,14 +38,8 @@ export function applyTheme() {
   const settings = state.settings;
   const key = featureColorKey(state.screen);
   const color = settings.colors[key] || settings.colors.home;
-  const root = document.documentElement;
-  root.style.setProperty('--feature-color', color);
-  root.style.setProperty('--edge-width', `${Number(settings.edgeWidth || 1.5)}px`);
-  root.style.setProperty('--edge-opacity', Number(settings.edgeOpacity ?? .38));
-  root.style.setProperty('--edge-opacity-pct', `${Math.round(Number(settings.edgeOpacity ?? .38) * 100)}%`);
-  root.style.setProperty('--edge-glow', `${Number(settings.edgeGlow ?? 4)}px`);
-  document.body.classList.toggle('edge-off', !settings.edgeEnabled);
-  applyWeatherShellTheme(root.dataset.appWeather || 'cloudy');
+  document.documentElement.style.setProperty('--feature-color', color);
+  applyWeatherShellTheme(document.documentElement.dataset.appWeather || 'cloudy');
 }
 
 export function renderNav(onNavigate) {

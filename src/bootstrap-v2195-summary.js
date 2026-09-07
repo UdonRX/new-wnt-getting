@@ -20,5 +20,7 @@ import './features/reader/reader-list-ux.js?v=21917tabs2';
 import './features/media/media-landscape-ui.js?v=21917landscape2';
 // 全画面共通: 長い追加/編集シートでも上部の×を常時表示して閉じられるようにする。
 import './shared/sheet-close-global.js?v=2199sheetclose1';
-// v2.20.2: audited Home / non-blocking Hero / direct Story / lazy final UI modules.
-import './main.js?v=2202audit1';
+// v2.21: 現在地はホーム描画を待たせず、起動後のidleで取得・天気キャッシュ更新する。
+import './features/weather/weather-current-runtime.js?v=2210weather1';
+// v2.21: full-screen Home / flat Weather / Hero navigation.
+import './main.js?v=2210weather1';

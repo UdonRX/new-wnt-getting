@@ -22,10 +22,6 @@ export const DEFAULTS = {
   youtubeChannels: [],
   twitchChannels: [],
   settings: {
-    edgeEnabled: true,
-    edgeWidth: 1.5,
-    edgeOpacity: .38,
-    edgeGlow: 4,
     rankWithAi: true,
     twitchCommentDensity: 'normal',
     colors: {
@@ -49,7 +45,14 @@ export const state = {
   twitchChannels: load('twitchChannels', DEFAULTS.twitchChannels),
   settings: (() => {
     const saved = load('settings', DEFAULTS.settings) || {};
-    const { twitterRssBase: _legacyTwitterRssBase, ...savedSettings } = saved;
+    const {
+      twitterRssBase: _legacyTwitterRssBase,
+      edgeEnabled: _legacyEdgeEnabled,
+      edgeWidth: _legacyEdgeWidth,
+      edgeOpacity: _legacyEdgeOpacity,
+      edgeGlow: _legacyEdgeGlow,
+      ...savedSettings
+    } = saved;
     return {
       ...DEFAULTS.settings,
       ...savedSettings,

@@ -1,0 +1,33 @@
+/* v2.21: remove the retired edge frame and reclaim the former bottom-nav area. */
+#edge-mask,
+#edge-frame,
+#edge-frame::before,
+#edge-frame::after {
+  display: none !important;
+  content: none !important;
+}
+
+body.pdv2-home-fullscreen #app-main {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body.pdv2-home-fullscreen .home-screen {
+  min-height: 100dvh !important;
+  padding-bottom: max(12px, env(safe-area-inset-bottom)) !important;
+}
+
+body.pdv2-home-fullscreen .home-stack {
+  padding-bottom: max(14px, env(safe-area-inset-bottom)) !important;
+}
+
+body.pdv2-hero-detail #bottom-nav {
+  display: none !important;
+}
+
+::view-transition-group(pdv2-hero-card) {
+  animation-duration: 420ms !important;
+  animation-timing-function: cubic-bezier(.18,.82,.22,1) !important;
+}

@@ -1,3 +1,5 @@
+import { readCurrentWeatherLocation, readWeatherCache } from '../features/weather/weather-current-location.js';
+
 const STYLE_ID='pdv2-final-theme-style';
 const META={sunny:'#5b382e',cloudy:'#35414a',rain:'#23435e',snow:'#49616c',night:'#20254f'};
 
@@ -18,21 +20,23 @@ function ensureStyles(){
   html[data-app-weather="snow"]{--app-weather-accent:#a9d5e6;--app-weather-accent-2:#d8eef5;--app-weather-deep:#274454;--app-shell-bg:color-mix(in srgb,#d8eef5 14%,var(--bg))}
   html[data-app-weather="night"]{--app-weather-accent:#5669bd;--app-weather-accent-2:#7868bf;--app-weather-deep:#181c43;--app-shell-bg:color-mix(in srgb,#5669bd 15%,var(--bg))}
   html,body,#app-shell{background:var(--app-shell-bg,var(--bg))!important}body,#app-shell{min-height:100dvh}
-  #edge-frame::before{border-color:color-mix(in srgb,var(--app-weather-accent) var(--edge-opacity-pct,38%),transparent)!important;box-shadow:0 0 var(--edge-glow,4px) var(--app-weather-accent),inset 0 0 var(--edge-glow,4px) var(--app-weather-accent)!important}
-  #edge-frame::after{border-color:color-mix(in srgb,var(--app-weather-accent) 34%,transparent)!important}
-  body.pdv2-home-fullscreen #edge-frame::before,body.pdv2-home-fullscreen #edge-frame::after{bottom:max(2px,env(safe-area-inset-bottom));border-radius:clamp(15px,4.8vw,24px)}
   `;document.head.append(style);
+}
+function kindFromCache(cache){
+  if(!cache?.model)return'';
+  const hour=new Date().getHours();
+  return(hour<6||hour>=18)?'night':kindFromCode(cache.model?.current?.weather_code);
 }
 function resolveKind(state){
   try{
+    const current=readCurrentWeatherLocation();
+    const currentKind=current?kindFromCache(readWeatherCache(current)):'';
+    if(currentKind)return currentKind;
     const locations=state?.weatherLocations||[];
     const raw=Number(localStorage.getItem('pdv2:weatherIndex')||0);
     const index=Number.isFinite(raw)?Math.max(0,Math.min(locations.length-1,raw)):0;
     const location=locations[index];if(!location)return'cloudy';
-    const cache=JSON.parse(localStorage.getItem(`pdv2:weatherCache:multi-source:${location.lat},${location.lon}`)||'null');
-    if(!cache?.model)return'cloudy';
-    const hour=new Date().getHours();
-    return(hour<6||hour>=18)?'night':kindFromCode(cache.model?.current?.weather_code);
+    return kindFromCache(readWeatherCache(location))||'cloudy';
   }catch{return'cloudy';}
 }
 export function installFinalTheme({state}={}){
@@ -46,8 +50,10 @@ export function installFinalTheme({state}={}){
   const onWeather=()=>sync();
   const onVisible=()=>{if(document.visibilityState==='visible')sync();};
   window.addEventListener('pdv2:weather-cache-updated',onWeather);
+  window.addEventListener('pdv2:current-location-updated',onWeather);
   window.addEventListener('pdv2:context-changed',onWeather);
+  window.addEventListener('pdv2:navigation-complete',onWeather);
   document.addEventListener('visibilitychange',onVisible,{passive:true});
   sync();
-  return {sync,destroy(){window.removeEventListener('pdv2:weather-cache-updated',onWeather);window.removeEventListener('pdv2:context-changed',onWeather);document.removeEventListener('visibilitychange',onVisible);}};
+  return {sync,destroy(){window.removeEventListener('pdv2:weather-cache-updated',onWeather);window.removeEventListener('pdv2:current-location-updated',onWeather);window.removeEventListener('pdv2:context-changed',onWeather);window.removeEventListener('pdv2:navigation-complete',onWeather);document.removeEventListener('visibilitychange',onVisible);}};
 }
