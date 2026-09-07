@@ -1,5 +1,5 @@
-// v2.20.1: split final Home modules are precached without adding API Functions.
-const CACHE_NAME='personal-dashboard-v2-home-split1';
+// v2.20.2: audit fixes for non-blocking Hero, Story direct-open and Quick Launcher fan.
+const CACHE_NAME='personal-dashboard-v2-home-audit1';
 const INSTAGRAM_MEDIA_CACHE='pdv2-instagram-media-v1';
 const INSTAGRAM_MEDIA_PREFIX='/__pdv2_ig_media/';
 const INSTAGRAM_MEDIA_MAX_ENTRIES=360;
