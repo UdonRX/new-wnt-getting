@@ -1,133 +1,15 @@
-/* Personal Dashboard v2.18.0 — physical-bottom navigation, slightly larger labels/icons */
+/* The legacy bottom tab bar has been removed. This file now only keeps the
+ * zero-height compatibility values used by older layout calculations. */
 :root {
-  --nav-height: 64px;
-  --nav-total: calc(var(--nav-height) + env(safe-area-inset-bottom));
+  --nav-height: 0px;
+  --nav-total: env(safe-area-inset-bottom);
   --keyboard-nav-offset: 0px;
 }
 
 #app-main {
-  padding-bottom: calc(var(--nav-total) + 16px);
+  padding-bottom: calc(env(safe-area-inset-bottom) + 28px);
 }
 
-/* X / Instagram share the twitter screen, and Wikipedia no longer use the legacy bottom tabs. */
-body.pdv2-navless {
-  --nav-height: 0px;
-  --nav-total: env(safe-area-inset-bottom);
+html, body {
+  overscroll-behavior-y: none;
 }
-body.pdv2-navless #app-main {
-  padding-bottom: env(safe-area-inset-bottom);
-}
-body.pdv2-navless .bottom-nav {
-  display: none !important;
-}
-
-.bottom-nav {
-  position: fixed !important;
-  z-index: 300 !important;
-  left: 0 !important;
-  right: 0 !important;
-  top: auto !important;
-  bottom: 0 !important;
-  width: 100vw !important;
-  height: var(--nav-total) !important;
-  min-height: var(--nav-total) !important;
-  margin: 0 !important;
-  padding: 0 max(2px, env(safe-area-inset-right)) 0 max(2px, env(safe-area-inset-left)) !important;
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0;
-  background: #0c1014;
-  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
-  box-shadow: 0 -8px 22px rgba(0,0,0,.16);
-  transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
-  -webkit-transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
-  will-change: transform !important;
-  contain: layout paint;
-  overscroll-behavior: none;
-  touch-action: manipulation;
-}
-
-.nav-item {
-  position: relative;
-  min-width: 0;
-  width: 100%;
-  height: var(--nav-total);
-  min-height: var(--nav-total);
-  margin: 0;
-  padding: 6px 1px env(safe-area-inset-bottom);
-  background: transparent;
-  color: var(--muted-2);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 4px;
-  cursor: pointer;
-  transition: color .16s ease, opacity .16s ease, transform .16s ease;
-}
-
-.nav-item::before {
-  content: '';
-  flex: 0 0 1px;
-}
-
-.nav-item:active {
-  opacity: .68;
-  transform: scale(.97);
-}
-
-.nav-item svg {
-  width: 23px;
-  height: 23px;
-  flex: 0 0 23px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.9;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.nav-item span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  line-height: 1;
-  font-weight: 720;
-  letter-spacing: 0;
-}
-
-.nav-item.active { color: var(--feature-color); }
-
-@media (max-width: 365px) {
-  .nav-item svg {
-    width: 22px;
-    height: 22px;
-    flex-basis: 22px;
-  }
-  .nav-item span { font-size: 9.3px; }
-}
-
-/*
- * iOS software keyboard shrinks VisualViewport and normally lifts position:fixed
- * elements above the keyboard. main.js measures that covered area and moves the
- * nav by the same amount so it stays at the physical layout bottom, behind the
- * keyboard, on every screen.
- */
-html.sheet-open .bottom-nav,
-html.media-player-open .bottom-nav,
-body.sheet-lock .bottom-nav {
-  position: fixed !important;
-  left: 0 !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
-  -webkit-transform: translate3d(0, var(--keyboard-nav-offset), 0) !important;
-}
-
-html.keyboard-open .bottom-nav {
-  pointer-events: none !important;
-}
-
-html, body { overscroll-behavior-y: none; }

@@ -1,15 +1,5 @@
 import { state, update } from './store.js';
-import { el, clear } from '../shared/dom.js';
-import { iconPath } from '../shared/icons.js';
 
-const NAV = [
-  ['home', 'ホーム', 'home'],
-  ['weather', '天気', 'weather'],
-  ['reader', '読む', 'reader'],
-  ['media', '動画', 'media'],
-  ['twitter', 'SNS', 'sns'],
-  ['wikipedia', 'Wiki', 'wikipedia']
-];
 const WEATHER_META = {
   sunny: '#5b382e',
   cloudy: '#35414a',
@@ -18,7 +8,6 @@ const WEATHER_META = {
   night: '#20254f'
 };
 const WEATHER_KINDS = new Set(Object.keys(WEATHER_META));
-const NAVLESS_SCREENS = new Set(['twitter', 'wikipedia']);
 
 const featureColorKey = screen => {
   if (screen === 'media') return state.mediaMode;
@@ -43,32 +32,10 @@ export function applyTheme() {
   applyWeatherShellTheme(document.documentElement.dataset.appWeather || 'cloudy');
 }
 
-export function renderNav(onNavigate) {
-  const nav = document.getElementById('bottom-nav');
-  if (!nav) return;
-  clear(nav);
-  const featureNavless = NAVLESS_SCREENS.has(state.screen);
-  const hidden = state.screen === 'home' || featureNavless || document.body.classList.contains('pdv2-hero-detail');
-  nav.hidden = hidden;
-  nav.setAttribute('aria-hidden', hidden ? 'true' : 'false');
-  document.body.classList.toggle('pdv2-home-fullscreen', state.screen === 'home');
-  document.body.classList.toggle('pdv2-navless', featureNavless);
-  if (hidden) return;
-  NAV.forEach(([key, label, icon]) => {
-    const button = el('button', {
-      class: `nav-item ${state.screen === key ? 'active' : ''}`,
-      type: 'button',
-      'aria-label': label,
-      onclick: () => onNavigate(key, { source: 'bottom-nav' })
-    });
-    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${iconPath(icon)}</svg><span>${label}</span>`;
-    nav.append(button);
-  });
-}
-
 export function setScreen(screen) {
   state.screen = screen;
   update('lastScreen', screen);
+  document.body.classList.toggle('pdv2-home-fullscreen', screen === 'home');
   applyTheme();
   window.scrollTo({ top: 0, behavior: 'instant' });
 }

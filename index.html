@@ -11,32 +11,35 @@
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   <title>Personal Dashboard V2</title>
-  <link rel="stylesheet" href="/src/styles/tokens.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/base.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/navigation.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/screens.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/app.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/motion.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/active-overrides.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/fullscreen-cleanup.css?v=2210structure1" />
-  <link rel="stylesheet" href="/src/styles/weather-detail.css?v=2210structure1" />
+  <link rel="stylesheet" href="/src/styles/tokens.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/base.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/navigation.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/screens.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/app.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/motion.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/active-overrides.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/fullscreen-cleanup.css?v=2210fix2" />
+  <link rel="stylesheet" href="/src/styles/weather-detail.css?v=2210fix2" />
+  <style>
+    /* Align the weather screen's first content row with the other top-level screens. */
+    .weather-screen { margin-top: -8px; }
+  </style>
 </head>
 <body>
   <div id="app-shell">
     <main id="app-main" tabindex="-1"></main>
-    <nav id="bottom-nav" class="bottom-nav" aria-label="メインナビゲーション"></nav>
   </div>
   <div id="overlay-root"></div>
   <div id="toast-root" aria-live="polite" aria-atomic="true"></div>
   <script>
     (()=>{
-      const BUILD='2210structure1';
-      const RECOVERY_KEY='pdv2:startup-recovery:2210structure1';
+      const BUILD='2210fix2';
+      const RECOVERY_KEY='pdv2:startup-recovery:2210fix2';
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
       window.addEventListener('unhandledrejection',event=>remember(event?.reason?.message||event?.reason||'Promise rejection'));
-      const booted=()=>document.documentElement.dataset.pdv2Booted==='1'||Boolean(document.getElementById('app-main')?.childElementCount||document.getElementById('bottom-nav')?.childElementCount);
+      const booted=()=>document.documentElement.dataset.pdv2Booted==='1'||Boolean(document.getElementById('app-main')?.childElementCount);
       const clearOld=async()=>{
         if('serviceWorker'in navigator){const regs=await navigator.serviceWorker.getRegistrations();await Promise.allSettled(regs.map(r=>r.unregister()));}
         if('caches'in window){const keys=await caches.keys();await Promise.allSettled(keys.filter(k=>k.startsWith('personal-dashboard-')).map(k=>caches.delete(k)));}
@@ -53,7 +56,7 @@
       },6500);
     })();
   </script>
-  <script src="/src/features/twitch/twitch-sync.js?v=2210structure1"></script>
-  <script type="module" src="/src/bootstrap.js?v=2210structure1"></script>
+  <script src="/src/features/twitch/twitch-sync.js?v=2210fix2"></script>
+  <script type="module" src="/src/bootstrap.js?v=2210fix2"></script>
 </body>
 </html>

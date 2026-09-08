@@ -1,9 +1,9 @@
 import './runtime.js';
-import { setScreen, renderNav, applyTheme } from './app/router.js';
+import { setScreen, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 import { installFinalTheme } from './app/final-theme.js';
 
-const BUILD='2210structure1';
+const BUILD='2210fix2';
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -72,11 +72,11 @@ async function navigateCore(screen,options={}){
   if(options.readerMode)update('lastReaderMode',options.readerMode);
   if(screen==='media'&&!options.mediaMode)update('lastMediaMode','youtube');else if(options.mediaMode)update('lastMediaMode',options.mediaMode);
   if(options.paperTrack)update('paperTrack',options.paperTrack);
-  setScreen(screen);renderNav(navigate);themeController?.sync?.();
+  setScreen(screen);themeController?.sync?.();
   const serial=++renderSerial;renderLoading(screen);
   try{
     const {renderer}=await loadRenderer(screen,{force:Boolean(options.forceModuleReload)});if(serial!==renderSerial)return;
-    await renderer(root,{navigate,refresh:Boolean(options.refresh),navigationSource:options.source||'',readerRecommendations:screen==='reader'&&options.source==='bottom-nav',...options});
+    await renderer(root,{navigate,refresh:Boolean(options.refresh),navigationSource:options.source||'',...options});
     if(serial===renderSerial&&root&&!root.childElementCount)throw new Error(`${SCREEN[screen].label} の描画結果が空です`);
     if(serial===renderSerial)window.dispatchEvent(new CustomEvent('pdv2:navigation-complete',{detail:{screen,options}}));
   }catch(error){console.error('[pdv2] render failed:',screen,error);if(serial===renderSerial)renderScreenError(screen,error,options);}
@@ -118,32 +118,21 @@ async function warmWikipediaDaily(){
   return null;
 }
 function startBackgroundJobs(){
-  preloadFeature('reader',{warm:true});idle(()=>warmWikipediaDaily(),20);idle(()=>preloadFeature('wikipedia'),320);idle(()=>preloadFeature('weather'),450);idle(()=>preloadFeature('media'),700);idle(()=>preloadFeature('twitter'),1800);
+  preloadFeature('reader',{warm:true});idle(()=>preloadFeature('media'),80);idle(()=>warmWikipediaDaily(),160);idle(()=>preloadFeature('wikipedia'),360);idle(()=>preloadFeature('weather'),520);idle(()=>preloadFeature('twitter'),1800);
 }
 function scheduleFinalUiAfterPaint(){requestAnimationFrame(()=>requestAnimationFrame(()=>installFinalUiModules()));}
 
-function installKeyboardNavAnchor(){
-  const viewport=window.visualViewport;if(!viewport)return;const html=document.documentElement;let editing=false,stableBottom=Math.max(1,viewport.offsetTop+viewport.height),blurTimer=0;
-  const isTextEditor=node=>{if(!(node instanceof Element))return false;if(node.matches('textarea,select,[contenteditable="true"]'))return true;if(!node.matches('input'))return false;const type=String(node.getAttribute('type')||'text').toLowerCase();return!['button','submit','reset','checkbox','radio','range','color','file','image','hidden'].includes(type);};
-  const setOffset=value=>{const offset=Math.max(0,Math.round(Number(value)||0));html.style.setProperty('--keyboard-nav-offset',`${offset}px`);html.classList.toggle('keyboard-open',offset>=48);};
-  const measure=()=>{const currentBottom=viewport.offsetTop+viewport.height;if(!editing){stableBottom=Math.max(1,currentBottom);setOffset(0);return;}const covered=Math.max(0,stableBottom-currentBottom);setOffset(covered>=48?covered:0);};
-  const settle=()=>{requestAnimationFrame(measure);setTimeout(measure,70);setTimeout(measure,220);};
-  document.addEventListener('focusin',event=>{if(!isTextEditor(event.target))return;if(blurTimer)clearTimeout(blurTimer);stableBottom=Math.max(stableBottom,viewport.offsetTop+viewport.height);editing=true;settle();},true);
-  document.addEventListener('focusout',()=>{if(blurTimer)clearTimeout(blurTimer);blurTimer=setTimeout(()=>{if(isTextEditor(document.activeElement))return;editing=false;setOffset(0);setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},260);},40);},true);
-  viewport.addEventListener('resize',measure,{passive:true});viewport.addEventListener('scroll',measure,{passive:true});window.addEventListener('resize',()=>{if(editing)measure();else stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},{passive:true});
-  window.addEventListener('orientationchange',()=>{editing=false;setOffset(0);setTimeout(()=>{stableBottom=Math.max(1,viewport.offsetTop+viewport.height);},320);},{passive:true});measure();
-}
 async function resolveTwitchOAuthReturn(){try{const module=await loadModule('./features/twitch/twitch-chat.js');return await module.handleTwitchOAuthReturn?.();}catch(error){console.warn('[twitch-oauth]',error);return null;}}
 async function resolveTwitchPlaybackRecovery(){try{const module=await loadModule('./features/twitch/twitch-player.js');return module.getRecentTwitchPlayback?.()||null;}catch(error){console.warn('[twitch-recovery]',error);return null;}}
 
 async function boot(){
   if(!root)throw new Error('#app-main が見つかりません');
-  applyTheme();themeController=installFinalTheme({state});installKeyboardNavAnchor();
-  const twitchOAuth=await resolveTwitchOAuthReturn();renderNav(navigate);
+  applyTheme();themeController=installFinalTheme({state});
+  const twitchOAuth=await resolveTwitchOAuthReturn();
   if(twitchOAuth?.handled){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});}else{const twitchRecovery=await resolveTwitchPlaybackRecovery();if(twitchRecovery){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});}else await navigate('home');}
   scheduleFinalUiAfterPaint();startBackgroundJobs();
   if('serviceWorker'in navigator)navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});}).catch(error=>console.warn('[sw]',error));
-  window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();themeController?.sync?.();}catch{}});window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();themeController?.sync?.();renderNav(navigate);}catch{}});window.addEventListener('popstate',()=>navigate(state.screen||'home'));
+  window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();themeController?.sync?.();}catch{}});window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();themeController?.sync?.();}catch{}});window.addEventListener('popstate',()=>navigate(state.screen||'home'));
   document.documentElement.dataset.pdv2Booted='1';window.dispatchEvent(new CustomEvent('pdv2:booted',{detail:{build:BUILD}}));
 }
 boot().catch(renderBootError);

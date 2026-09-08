@@ -23,10 +23,6 @@ body.pdv2-home-fullscreen .home-stack {
   padding-bottom: max(14px, env(safe-area-inset-bottom)) !important;
 }
 
-body.pdv2-hero-detail #bottom-nav {
-  display: none !important;
-}
-
 ::view-transition-group(pdv2-hero-card) {
   animation-duration: 420ms !important;
   animation-timing-function: cubic-bezier(.18,.82,.22,1) !important;
