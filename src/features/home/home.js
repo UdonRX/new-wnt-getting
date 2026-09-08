@@ -32,6 +32,17 @@ function jstDay() {
   catch { return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10); }
 }
 function weatherContext() {
+  const current = readJson('pdv2:weatherCurrentLocation:v1', null);
+  if (Number.isFinite(Number(current?.lat)) && Number.isFinite(Number(current?.lon))) {
+    const location = {
+      name: String(current.name || '現在地'),
+      lat: Number(current.lat),
+      lon: Number(current.lon),
+      isCurrent: true,
+      locatedAt: Number(current.locatedAt || 0)
+    };
+    return { location, key: `pdv2:weatherCache:multi-source:${location.lat},${location.lon}` };
+  }
   const locations = state.weatherLocations || [];
   if (!locations.length) return {};
   const stored = Number(localStorage.getItem('pdv2:weatherIndex') || 0);
@@ -310,7 +321,8 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
   const stack = el('div', { class: 'home-stack' });
   const cards = new Map(); screen.append(stack);
 
-  const { location, key: weatherKey } = weatherContext(), weatherCached = weatherKey ? readJson(weatherKey, null) : null;
+  let { location, key: weatherKey } = weatherContext();
+  let weatherCached = weatherKey ? readJson(weatherKey, null) : null;
   const weatherCard = el('button', { class: 'home-weather-card home-stack-card', type: 'button', 'data-stack-key': 'weather', 'data-home-hero-key': 'weather' });
   weatherCard.onclick = event => heroNavigate(navigate, event.currentTarget, 'weather', 'weatherDetail');
   weatherCached?.model ? paintWeather(weatherCard, screen, location, weatherCached.model) : weatherPlaceholder(weatherCard, location);
@@ -333,6 +345,16 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
     domMs: Math.round((performance.now() - started) * 10) / 10,
     weatherCacheHit: Boolean(weatherCached?.model), newsCacheHit: Boolean(newsSnapshot?.items?.length),
     initialCards: stack.childElementCount, syncOnly: true, at: Date.now()
+  };
+
+  const syncWeatherContext = () => {
+    const next = weatherContext();
+    if (!next.location || !next.key) return;
+    location = next.location;
+    weatherKey = next.key;
+    weatherCached = readJson(weatherKey, null);
+    if (weatherCached?.model) paintWeather(weatherCard, screen, location, weatherCached.model);
+    else weatherPlaceholder(weatherCard, location);
   };
 
   const updateWeather = async (force = false) => {
@@ -382,6 +404,12 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
     updateNews(Boolean(refresh || navigationEntry?.type === 'reload'));
   });
 
+  const onCurrentWeather = () => { if (!disposed) syncWeatherContext(); };
+  const onWeatherCache = event => {
+    if (disposed || event?.detail?.key !== weatherKey || !event.detail.model) return;
+    weatherCached = { at: Number(event.detail.at || Date.now()), model: event.detail.model };
+    paintWeather(weatherCard, screen, location, event.detail.model);
+  };
   const onNews = event => { if (!disposed && event.detail && newsCard.isConnected) updateNewsCard(newsCard, event.detail, navigate); };
   const onStory = () => { if (!disposed) placeCard(stack, cards, 'instagram', instagramCard(navigate, forcedReturn === 'instagram')); };
   const onSeen = event => {
@@ -403,6 +431,8 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
     if (hiddenAt && Date.now() - hiddenAt >= 60 * 1000) { hiddenAt = 0; afterPaint(() => { updateWeather(false); updateNews(false); updateXFromCache(); }); }
   };
   const onNavigate = () => cleanupHome();
+  window.addEventListener('pdv2:current-location-updated', onCurrentWeather);
+  window.addEventListener('pdv2:weather-cache-updated', onWeatherCache);
   window.addEventListener('pdv2:recommendations-updated', onNews);
   window.addEventListener('pdv2:instagram-story-cache-updated', onStory);
   window.addEventListener('pdv2:service-seen', onSeen);
@@ -411,6 +441,8 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
   window.addEventListener('pdv2:before-navigate', onNavigate, { once: true });
   cleanupHome = () => {
     if (disposed) return; disposed = true;
+    window.removeEventListener('pdv2:current-location-updated', onCurrentWeather);
+    window.removeEventListener('pdv2:weather-cache-updated', onWeatherCache);
     window.removeEventListener('pdv2:recommendations-updated', onNews);
     window.removeEventListener('pdv2:instagram-story-cache-updated', onStory);
     window.removeEventListener('pdv2:service-seen', onSeen);

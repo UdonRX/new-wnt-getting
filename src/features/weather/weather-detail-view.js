@@ -63,49 +63,79 @@ function dayKey(date) {
   return date.toLocaleDateString('en-CA');
 }
 
-function hourlyRows(model, date, { fromNow = false, limit = 10 } = {}) {
-  const h = model?.hourly || {}, times = h.time || [], wanted = dayKey(date), now = Date.now(), rows = [];
-  for (let i = 0; i < times.length && rows.length < limit; i += 1) {
+function graphRows(model, date, fromNow = false) {
+  const h = model?.hourly || {}, times = h.time || [], wanted = dayKey(date), now = Date.now();
+  const rows = [];
+  for (let i = 0; i < times.length; i += 1) {
     if (String(times[i]).slice(0, 10) !== wanted) continue;
-    const stamp = new Date(times[i]).getTime();
-    if (fromNow && stamp < now - 30 * 60 * 1000) continue;
+    if (fromNow && new Date(times[i]).getTime() < now - 30 * 60 * 1000) continue;
     const temp = Number(h.temperature_2m?.[i]);
     if (!Number.isFinite(temp)) continue;
-    rows.push({ time: times[i], temp, code: h.weather_code?.[i], rain: Number(h.precipitation?.[i] || 0) });
+    rows.push({ time: times[i], temp, code: h.weather_code?.[i], rain: Math.max(0, Number(h.precipitation?.[i] || 0)) });
   }
-  return rows;
+  if (rows.length <= 10) return rows;
+  return Array.from({ length: 9 }, (_, n) => rows[Math.round(n * (rows.length - 1) / 8)]);
 }
 
-function hourStrip(rows) {
-  if (!rows.length) return '<div class="wd-empty-line">時間別予報がありません</div>';
-  return `<div class="wd-hour-strip">${rows.map(row => {
-    const visual = weatherVisual(row.code), hour = new Date(row.time).getHours();
-    return `<div class="wd-hour"><small>${hour}時</small><span>${iconSvg(visual.icon, { size: 38 })}</span><strong>${Math.round(row.temp)}°</strong><em>${row.rain >= .1 ? `${row.rain.toFixed(1)}mm` : ''}</em></div>`;
-  }).join('')}</div>`;
+function weatherGlyph(code) {
+  const c = Number(code);
+  if (c <= 2) return '☀︎';
+  if (c === 3) return '☁︎';
+  if ([45, 48].includes(c)) return '≋';
+  if ((c >= 71 && c <= 77) || (c >= 85 && c <= 86)) return '❄︎';
+  if (c >= 95) return '⚡︎';
+  if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return '☂︎';
+  return '☁︎';
+}
+
+function graphHtml(rows) {
+  if (rows.length < 2) return '<div class="wd-graph-empty">時間別予報がありません</div>';
+  const width = 344;
+  const high = Math.max(...rows.map(row => row.temp));
+  const low = Math.min(...rows.map(row => row.temp));
+  const range = Math.max(5, high - low);
+  const points = rows.map((row, i) => ({ ...row, x: 16 + i / (rows.length - 1) * (width - 32), y: 48 + (high - row.temp) / range * 62 }));
+  const line = points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+  const labels = points.map(point => {
+    const hour = new Date(point.time).getHours();
+    return `<text class="wd-glyph" x="${point.x}" y="${point.y - 14}">${weatherGlyph(point.code)}</text><circle cx="${point.x}" cy="${point.y}" r="2.4"/><text class="wd-temp-label" x="${point.x}" y="${point.y + 17}">${Math.round(point.temp)}°</text><text class="wd-time-label" x="${point.x}" y="148">${hour}時</text>${point.rain >= .1 ? `<text class="wd-rain-label" x="${point.x}" y="164">${point.rain.toFixed(1)}mm</text>` : ''}`;
+  }).join('');
+  return `<div class="wd-graph"><svg viewBox="0 0 ${width} 170" preserveAspectRatio="xMidYMid meet" aria-label="時間別の気温と天気"><polyline points="${line}"/>${labels}</svg></div>`;
 }
 
 export function currentHoursHtml(model) {
-  const now = new Date();
-  return hourStrip(hourlyRows(model, now, { fromNow: true, limit: 10 }));
+  return `<div class="wd-graph-heading"><strong>時間変化</strong><small>気温・天気・降水量</small></div>${graphHtml(graphRows(model, new Date(), true))}`;
 }
 
 export function nextDaysHtml(model) {
-  const base = new Date(); base.setHours(12, 0, 0, 0);
-  const blocks = [];
-  for (let offset = 1; offset <= 2; offset += 1) {
-    const date = new Date(base); date.setDate(base.getDate() + offset);
+  const base = new Date();
+  base.setHours(12, 0, 0, 0);
+  return [1, 2].map(offset => {
+    const date = new Date(base);
+    date.setDate(base.getDate() + offset);
     const label = offset === 1 ? '明日' : '明後日';
-    blocks.push(`<section class="wd-flat-section"><div class="wd-flat-label">${label}</div>${hourStrip(hourlyRows(model, date, { limit: 8 }))}</section>`);
-  }
-  return blocks.join('');
+    return `<section class="wd-flat-section wd-graph-day"><div class="wd-graph-heading"><strong>${label}</strong><small>${date.getMonth() + 1}/${date.getDate()}</small></div>${graphHtml(graphRows(model, date))}</section>`;
+  }).join('');
 }
 
 export function weekHtml(model) {
-  const d = model?.daily || {}, times = (d.time || []).slice(0, 7);
-  if (!times.length) return '<div class="wd-empty-line">週間予報がありません</div>';
-  return `<div class="wd-week-list">${times.map((time, index) => {
-    const date = new Date(`${time}T00:00:00`), visual = weatherVisual(d.weather_code?.[index]);
-    const hi = Number(d.temperature_2m_max?.[index]), lo = Number(d.temperature_2m_min?.[index]);
-    return `<div class="wd-week-row"><strong>${date.toLocaleDateString('ja-JP', { weekday: 'short' })}</strong><span>${iconSvg(visual.icon, { size: 38 })}</span><small>${visual.label}</small><em>${Number.isFinite(lo) ? Math.round(lo) : '—'}°</em><b>${Number.isFinite(hi) ? Math.round(hi) : '—'}°</b></div>`;
-  }).join('')}</div>`;
+  const d = model?.daily || {};
+  const days = (d.time || []).slice(0, 7).map((time, index) => ({
+    time,
+    high: Number(d.temperature_2m_max?.[index]),
+    low: Number(d.temperature_2m_min?.[index]),
+    code: d.weather_code?.[index]
+  })).filter(row => Number.isFinite(row.high) && Number.isFinite(row.low));
+  if (!days.length) return '<div class="wd-graph-empty">週間予報がありません</div>';
+  const globalHigh = Math.max(...days.map(row => row.high));
+  const globalLow = Math.min(...days.map(row => row.low));
+  const range = Math.max(5, globalHigh - globalLow);
+  const columns = days.map(row => {
+    const date = new Date(`${row.time}T00:00:00`);
+    const top = 8 + (globalHigh - row.high) / range * 80;
+    const bottom = 8 + (globalHigh - row.low) / range * 80;
+    const height = Math.max(18, bottom - top);
+    return `<div class="wd-week-day"><div class="wd-week-date">${date.getMonth() + 1}/${date.getDate()}</div><div class="wd-week-high">${Math.round(row.high)}°</div><div class="wd-week-axis"><span class="wd-week-range" style="top:${top.toFixed(1)}%;height:${height.toFixed(1)}%"></span><span class="wd-week-glyph" style="top:${((top + bottom) / 2).toFixed(1)}%">${weatherGlyph(row.code)}</span></div><div class="wd-week-low">${Math.round(row.low)}°</div></div>`;
+  }).join('');
+  return `<div class="wd-week-card"><div class="wd-graph-heading"><strong>1週間の気温幅</strong><small>最高 ↕ 最低</small></div><div class="wd-week-grid">${columns}</div></div>`;
 }

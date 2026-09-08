@@ -1,4 +1,4 @@
-/* v2.21 weather detail: flat, full-screen, swipeable location pages. */
+/* Full-screen Weather with the forecast graph geometry restored from b4f34d65. */
 #app-main:has(.weather-detail-screen) {
   width: 100%;
   max-width: none;
@@ -60,11 +60,7 @@
   color: rgba(255,255,255,.78);
   margin-bottom: 12px;
 }
-.wd-current-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
+.wd-current-row { display: flex; align-items: center; gap: 14px; }
 .wd-current-icon {
   flex: 0 0 96px;
   width: 96px;
@@ -118,39 +114,55 @@
 .wd-dots span { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.28); transition: transform .18s ease, background .18s ease; }
 .wd-dots span.active { background: #fff; transform: scale(1.35); }
 
+/* CARROT-like lower half, using the same 344x170 SVG layout as b4f34d65. */
 .wd-flat-section,
 .wd-more-forecast {
   min-width: 0;
-  padding: 14px 0;
-  border-top: 1px solid rgba(255,255,255,.11);
+  border: 0;
   background: transparent;
 }
-.wd-now-hours { padding-top: 8px; }
-.wd-flat-label { margin: 0 2px 10px; font-size: 12px; font-weight: 760; color: rgba(255,255,255,.64); }
-.wd-hour-strip {
+.wd-now-hours,
+.wd-graph-day,
+.wd-week-card {
+  overflow: hidden;
+  margin: 8px 0 12px;
+  padding: 12px 10px 8px;
+  border-radius: 24px;
+  background: rgba(255,255,255,.94);
+  color: #1b2530;
+  box-shadow: 0 12px 28px rgba(0,0,0,.13);
+}
+.wd-more-forecast { padding: 0; }
+.wd-graph-day { margin: 0 0 12px; }
+.wd-graph-heading {
+  min-height: 28px;
+  padding: 0 8px;
   display: flex;
-  gap: 4px;
-  overflow-x: auto;
-  padding: 2px 0 4px;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-  scroll-snap-type: x proximity;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
-.wd-hour-strip::-webkit-scrollbar { display: none; }
-.wd-hour {
-  flex: 0 0 68px;
-  min-height: 126px;
-  display: grid;
-  grid-template-rows: 18px 48px 22px 16px;
-  place-items: center;
-  scroll-snap-align: start;
-  color: #fff;
+.wd-graph-heading strong { font-size: 12px; font-weight: 780; }
+.wd-graph-heading small { font-size: 9px; color: #7c8791; }
+.wd-graph { min-height: 178px; padding: 2px 0 0; }
+.wd-graph svg { display: block; width: 100%; height: 178px; overflow: visible; }
+.wd-graph polyline {
+  fill: none;
+  stroke: color-mix(in srgb, var(--wd-accent) 74%, #2e4353);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
-.wd-hour small { font-size: 10px; color: rgba(255,255,255,.62); }
-.wd-hour span { display: grid; place-items: center; }
-.wd-hour .weather-glyph { width: 38px; height: 38px; stroke-width: 1.6; }
-.wd-hour strong { font-size: 14px; }
-.wd-hour em { min-height: 14px; font-size: 8px; color: #bdeaff; font-style: normal; }
+.wd-graph circle { fill: #21313d; }
+.wd-graph text {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  text-anchor: middle;
+}
+.wd-glyph { fill: #1c2c38; font-size: 15px; }
+.wd-temp-label { fill: #1c2c38; font-size: 9px; font-weight: 760; }
+.wd-time-label { fill: #8a949d; font-size: 8px; }
+.wd-rain-label { fill: #2597dc; font-size: 7px; font-weight: 760; }
+.wd-graph-empty { padding: 48px 16px; text-align: center; color: #7c8791; font-size: 11px; }
 
 .wd-mode-switch {
   position: sticky;
@@ -163,7 +175,7 @@
   grid-template-columns: 1fr 1fr;
   gap: 4px;
   border-radius: 999px;
-  background: rgba(20,28,35,.44);
+  background: rgba(20,28,35,.58);
   border: 1px solid rgba(255,255,255,.13);
   backdrop-filter: blur(18px) saturate(1.2);
   -webkit-backdrop-filter: blur(18px) saturate(1.2);
@@ -180,25 +192,60 @@
 }
 .wd-mode-switch button.active { background: rgba(255,255,255,.16); color: #fff; }
 
-.wd-week-list { display: grid; }
-.wd-week-row {
-  min-height: 58px;
+.wd-week-card { padding-bottom: 14px; }
+.wd-week-grid {
   display: grid;
-  grid-template-columns: 48px 44px minmax(0,1fr) 44px 44px;
-  gap: 8px;
-  align-items: center;
-  border-bottom: 1px solid rgba(255,255,255,.08);
+  grid-template-columns: repeat(7,minmax(39px,1fr));
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 4px 0 0;
 }
-.wd-week-row:last-child { border-bottom: 0; }
-.wd-week-row strong { font-size: 12px; }
-.wd-week-row span { display: grid; place-items: center; }
-.wd-week-row .weather-glyph { width: 38px; height: 38px; stroke-width: 1.6; }
-.wd-week-row small { color: rgba(255,255,255,.58); font-size: 10px; }
-.wd-week-row em { color: rgba(255,255,255,.56); font-size: 12px; font-style: normal; text-align: right; }
-.wd-week-row b { font-size: 13px; text-align: right; }
-.wd-loading-flat,
-.wd-empty-line { padding: 28px 0; text-align: center; color: rgba(255,255,255,.55); font-size: 11px; }
+.wd-week-grid::-webkit-scrollbar { display: none; }
+.wd-week-day {
+  min-width: 39px;
+  text-align: center;
+  display: grid;
+  grid-template-rows: auto auto 104px auto;
+  gap: 4px;
+}
+.wd-week-date { font-size: 8px; color: #8a949d; }
+.wd-week-high,
+.wd-week-low { font-size: 9px; font-weight: 760; }
+.wd-week-axis { position: relative; }
+.wd-week-range {
+  position: absolute;
+  left: 50%;
+  width: 5px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: linear-gradient(var(--wd-accent2),var(--wd-accent));
+}
+.wd-week-range::before,
+.wd-week-range::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%,-50%);
+  border-radius: 50%;
+  background: #21313d;
+}
+.wd-week-range::before { top: 0; }
+.wd-week-range::after { top: 100%; }
+.wd-week-glyph {
+  position: absolute;
+  left: 50%;
+  transform: translate(-50%,-50%);
+  z-index: 2;
+  padding: 1px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.96);
+  font-size: 15px;
+}
 
+.wd-loading-flat { padding: 28px 0; text-align: center; color: rgba(255,255,255,.55); font-size: 11px; }
 body.pdv2-hero-detail .weather-detail-screen { min-height: 100dvh !important; }
 body.pdv2-hero-detail .pdv2-hero-close {
   background: rgba(20,28,35,.44);
@@ -213,5 +260,8 @@ body.pdv2-hero-detail .pdv2-hero-close {
   .wd-current-icon .weather-glyph { width: 78px; height: 78px; }
   .wd-summary { font-size: 14px; }
   .wd-metrics-flat { gap: 5px; }
-  .wd-hour { flex-basis: 64px; }
+  .wd-now-hours,
+  .wd-graph-day,
+  .wd-week-card { border-radius: 21px; }
+  .wd-week-grid { gap: 1px; }
 }

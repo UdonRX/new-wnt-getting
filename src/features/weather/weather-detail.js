@@ -62,7 +62,7 @@ export async function renderWeatherDetail(root, { navigate }) {
 
   const refreshLocation = async (location, force = false) => {
     if (disposed) return;
-    if (location?.pending && location?.isCurrent) {
+    if (location?.isCurrent && (force || location?.pending)) {
       await refreshCurrentWeatherLocation({ refreshWeather: true });
       if (!disposed) render();
       return;
