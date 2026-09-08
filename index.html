@@ -24,27 +24,29 @@
     /* Align the weather screen's first content row with the other top-level screens. */
     .weather-screen { margin-top: -8px; }
 
-    /* Reader AI summary: compact hero + centered summary stack + bottom article action. */
+    /* Reader AI summary v3: fixed image hero + equal 3-line cards + safe bottom action. */
     .reader-story-card {
-      grid-template-rows: clamp(118px, 17dvh, 148px) minmax(0, 1fr) auto !important;
+      grid-template-rows: clamp(198px, 25.5dvh, 222px) minmax(0, 1fr) auto !important;
       align-content: stretch !important;
-      gap: clamp(7px, .9dvh, 10px) !important;
-      padding-bottom: max(88px, calc(env(safe-area-inset-bottom) + 78px)) !important;
+      gap: clamp(9px, 1.05dvh, 12px) !important;
+      padding-bottom: max(108px, calc(env(safe-area-inset-bottom) + 98px)) !important;
     }
     .reader-story-hero {
+      position: relative !important;
       justify-content: flex-start !important;
       padding: 11px 12px 12px !important;
       border-radius: 18px !important;
       background: #11161d !important;
+      overflow: hidden !important;
     }
-    .reader-story-hero-image,
     .reader-story-hero-mesh,
     .reader-story-hero-bottom,
-    .reader-story-category-badge,
-    .reader-story-source-mark {
+    .reader-story-category-badge {
       display: none !important;
     }
     .reader-story-hero-top {
+      position: relative !important;
+      z-index: 5 !important;
       grid-template-columns: minmax(0, 1fr) 36px !important;
       align-items: start !important;
       gap: 10px !important;
@@ -62,95 +64,173 @@
       height: 36px !important;
       border-radius: 12px !important;
     }
-    .reader-story-content {
-      min-height: 0 !important;
-      justify-content: center !important;
-      gap: 0 !important;
-      padding: 0 2px !important;
-      overflow: visible !important;
+
+    /* Prefer the article image already supplied by the feed. If it fails or is absent,
+       the publisher favicon/source mark becomes a fixed-size visual fallback so the hero never collapses. */
+    .reader-story-hero-image {
+      display: block !important;
+      position: absolute !important;
+      z-index: 1 !important;
+      top: 106px !important;
+      left: 12px !important;
+      right: 12px !important;
+      bottom: 12px !important;
+      width: calc(100% - 24px) !important;
+      height: auto !important;
+      border-radius: 14px !important;
+      object-fit: cover !important;
+      object-position: center !important;
+      opacity: 1 !important;
+      filter: none !important;
+      background: #0d1117 !important;
     }
+    .reader-story-hero:has(.reader-story-hero-image) .reader-story-source-mark {
+      display: none !important;
+    }
+    .reader-story-hero:not(:has(.reader-story-hero-image)) .reader-story-source-mark {
+      display: grid !important;
+      position: absolute !important;
+      z-index: 1 !important;
+      top: 106px !important;
+      left: 12px !important;
+      right: 12px !important;
+      bottom: 12px !important;
+      width: auto !important;
+      height: auto !important;
+      border-radius: 14px !important;
+      place-items: center !important;
+      overflow: hidden !important;
+      background: linear-gradient(145deg, #171d26, #0d1117) !important;
+      font-size: 34px !important;
+      color: rgba(255,255,255,.74) !important;
+    }
+    .reader-story-hero:not(:has(.reader-story-hero-image)) .reader-story-source-logo {
+      display: block !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      padding: 24px !important;
+      object-fit: contain !important;
+      background: rgba(255,255,255,.96) !important;
+    }
+
     .reader-story-title.reader-swipe-title {
       position: absolute !important;
-      z-index: 3 !important;
-      top: calc(max(12px, calc(env(safe-area-inset-top) + 8px)) + 61px) !important;
+      z-index: 6 !important;
+      top: calc(max(12px, calc(env(safe-area-inset-top) + 8px)) + 58px) !important;
       left: max(30px, calc(env(safe-area-inset-left) + 26px)) !important;
-      right: max(30px, calc(env(safe-area-inset-right) + 26px)) !important;
+      right: max(74px, calc(env(safe-area-inset-right) + 70px)) !important;
       margin: 0 !important;
-      font-size: clamp(17px, 4.8vw, 20px) !important;
+      font-size: clamp(17px, 4.7vw, 20px) !important;
       line-height: 1.18 !important;
       -webkit-line-clamp: 2 !important;
       line-clamp: 2 !important;
       pointer-events: none;
     }
+
+    .reader-story-content {
+      min-height: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: center !important;
+      gap: 0 !important;
+      padding: 0 2px !important;
+      overflow: visible !important;
+    }
     .reader-story-summary.reader-ai-summary {
       width: 100% !important;
-      gap: clamp(10px, 1.35dvh, 14px) !important;
+      display: grid !important;
+      grid-template-rows: repeat(3, clamp(96px, 11.4dvh, 108px)) !important;
+      gap: clamp(9px, 1.1dvh, 11px) !important;
       align-content: center !important;
-      transform: translateY(clamp(14px, 2.6dvh, 26px));
+      transform: none !important;
     }
     .reader-story-summary-row {
-      min-height: clamp(62px, 8.4dvh, 76px) !important;
+      width: 100% !important;
+      height: 100% !important;
+      min-height: 0 !important;
       box-sizing: border-box !important;
       display: flex !important;
       align-items: center !important;
-      padding: clamp(10px, 1.25dvh, 13px) 13px !important;
-      border-radius: 14px !important;
+      padding: 12px 14px !important;
+      border-radius: 15px !important;
+      overflow: hidden !important;
     }
     .reader-story-summary-copy {
       width: 100% !important;
+      min-width: 0 !important;
       display: grid !important;
       grid-template-columns: 1fr !important;
-      row-gap: 4px !important;
+      row-gap: 5px !important;
       align-items: start !important;
       font-size: 12px !important;
-      line-height: 1.46 !important;
+      line-height: 1.45 !important;
     }
     .reader-story-summary-label {
       padding-top: 0 !important;
-      font-size: 9px !important;
+      font-size: 9.2px !important;
       line-height: 1.2 !important;
     }
     .reader-story-summary-text {
-      font-size: clamp(11.7px, 3.15vw, 12.4px) !important;
-      line-height: 1.46 !important;
+      width: min(100%, 330px) !important;
+      max-width: 330px !important;
+      min-width: 0 !important;
+      font-size: clamp(11.8px, 3.15vw, 12.5px) !important;
+      line-height: 1.45 !important;
       display: -webkit-box !important;
       -webkit-box-orient: vertical !important;
       -webkit-line-clamp: 3 !important;
       line-clamp: 3 !important;
       overflow: hidden !important;
     }
+
     .reader-story-actions {
       position: relative !important;
       z-index: 8 !important;
       align-self: end !important;
       padding: 0 2px !important;
+      margin: 0 !important;
     }
     .reader-story-open {
-      min-height: 46px !important;
+      min-height: 48px !important;
+      margin: 0 !important;
     }
+
+    /* Keep the original-article button vertically clear of the fixed radial/+ control. */
+    .reader-global-recommend-fab {
+      bottom: calc(var(--nav-total) + 18px) !important;
+    }
+
     @media (max-height: 700px) {
       .reader-story-card {
-        grid-template-rows: 118px minmax(0, 1fr) auto !important;
-        padding-bottom: max(84px, calc(env(safe-area-inset-bottom) + 74px)) !important;
+        grid-template-rows: 178px minmax(0, 1fr) auto !important;
+        gap: 8px !important;
+        padding-bottom: max(92px, calc(env(safe-area-inset-bottom) + 82px)) !important;
       }
       .reader-story-title.reader-swipe-title {
-        top: calc(max(12px, calc(env(safe-area-inset-top) + 8px)) + 57px) !important;
-        font-size: 17px !important;
+        top: calc(max(12px, calc(env(safe-area-inset-top) + 8px)) + 54px) !important;
+        font-size: 16.5px !important;
+      }
+      .reader-story-hero-image,
+      .reader-story-hero:not(:has(.reader-story-hero-image)) .reader-story-source-mark {
+        top: 98px !important;
       }
       .reader-story-summary.reader-ai-summary {
-        gap: 8px !important;
-        transform: translateY(10px);
+        grid-template-rows: repeat(3, 78px) !important;
+        gap: 7px !important;
       }
       .reader-story-summary-row {
-        min-height: 56px !important;
         padding: 8px 11px !important;
       }
       .reader-story-summary-copy { row-gap: 2px !important; }
       .reader-story-summary-text {
-        font-size: 11.3px !important;
-        -webkit-line-clamp: 2 !important;
-        line-clamp: 2 !important;
+        max-width: 320px !important;
+        font-size: 11.1px !important;
+        line-height: 1.38 !important;
+        -webkit-line-clamp: 3 !important;
+        line-clamp: 3 !important;
       }
+      .reader-story-open { min-height: 44px !important; }
     }
   </style>
 </head>
@@ -164,6 +244,13 @@
     (()=>{
       const BUILD='2210fix2';
       const RECOVERY_KEY='pdv2:startup-recovery:2210fix2';
+      const READER_SUMMARY_LAYOUT_KEY='pdv2:reader-summary-layout-v3';
+      try {
+        if (localStorage.getItem(READER_SUMMARY_LAYOUT_KEY) !== '1') {
+          localStorage.removeItem('reader-summary-cache-v2180');
+          localStorage.setItem(READER_SUMMARY_LAYOUT_KEY, '1');
+        }
+      } catch {}
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);
