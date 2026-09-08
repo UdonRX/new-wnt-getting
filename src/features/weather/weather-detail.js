@@ -9,15 +9,10 @@ import {
   weatherCacheKey,
   weatherLocationsWithCurrent
 } from './weather-current-location.js';
-import { currentHeroHtml, currentHoursHtml, nextDaysHtml, weatherKind, weekHtml } from './weather-detail-view.js';
+import { currentHeroHtml, currentHoursHtml, weatherKind, weekHtml } from './weather-detail-view.js';
 
 const WEATHER_TTL = 10 * 60 * 1000;
-const MODE_KEY = 'pdv2:weatherDetailMode:v1';
 const PAGE_KEY = 'pdv2:weatherDetailPage:v1';
-
-function readMode() {
-  return localStorage.getItem(MODE_KEY) === 'week' ? 'week' : 'days';
-}
 
 function dotsHtml(count, index) {
   return `<div class="wd-dots" aria-label="地点 ${index + 1}/${count}">${Array.from({ length: count }, (_, i) => `<span class="${i === index ? 'active' : ''}"></span>`).join('')}</div>`;
@@ -29,7 +24,6 @@ function cacheIsFresh(cache) {
 
 export async function renderWeatherDetail(root, { navigate }) {
   let disposed = false;
-  let mode = readMode();
   let pageIndex = Math.max(0, Number(localStorage.getItem(PAGE_KEY) || 0));
   let refreshingKey = '';
 
@@ -121,18 +115,8 @@ export async function renderWeatherDetail(root, { navigate }) {
     }
 
     const hourly = el('section', { class: 'wd-flat-section wd-now-hours', html: currentHoursHtml(model) });
-    screen.append(hourly);
-
-    const switcher = el('div', { class: 'wd-mode-switch' });
-    const days = el('button', { type: 'button', class: mode === 'days' ? 'active' : '', text: '3日間' });
-    const week = el('button', { type: 'button', class: mode === 'week' ? 'active' : '', text: '1週間' });
-    days.onclick = () => { if (mode === 'days') return; mode = 'days'; localStorage.setItem(MODE_KEY, mode); render(); };
-    week.onclick = () => { if (mode === 'week') return; mode = 'week'; localStorage.setItem(MODE_KEY, mode); render(); };
-    switcher.append(days, week);
-    screen.append(switcher);
-
-    const more = el('section', { class: 'wd-more-forecast', html: mode === 'week' ? weekHtml(model) : nextDaysHtml(model) });
-    screen.append(more);
+    const weekly = el('section', { class: 'wd-flat-section wd-week-forecast', html: weekHtml(model) });
+    screen.append(hourly, weekly);
     root.replaceChildren(screen);
 
     if (!cacheIsFresh(cache)) requestAnimationFrame(() => refreshLocation(location, false));
