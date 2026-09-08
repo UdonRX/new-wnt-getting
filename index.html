@@ -24,11 +24,12 @@
     /* Align the weather screen's first content row with the other top-level screens. */
     .weather-screen { margin-top: -8px; }
 
-    /* Reader AI summary: compact article-info hero only. Display-layer override; data/AI logic is untouched. */
+    /* Reader AI summary: compact hero + centered summary stack + bottom article action. */
     .reader-story-card {
-      grid-template-rows: clamp(118px, 17dvh, 148px) auto auto !important;
-      align-content: start !important;
-      gap: clamp(6px, .8dvh, 9px) !important;
+      grid-template-rows: clamp(118px, 17dvh, 148px) minmax(0, 1fr) auto !important;
+      align-content: stretch !important;
+      gap: clamp(7px, .9dvh, 10px) !important;
+      padding-bottom: max(88px, calc(env(safe-area-inset-bottom) + 78px)) !important;
     }
     .reader-story-hero {
       justify-content: flex-start !important;
@@ -62,7 +63,10 @@
       border-radius: 12px !important;
     }
     .reader-story-content {
-      gap: clamp(6px, .8dvh, 9px) !important;
+      min-height: 0 !important;
+      justify-content: center !important;
+      gap: 0 !important;
+      padding: 0 2px !important;
       overflow: visible !important;
     }
     .reader-story-title.reader-swipe-title {
@@ -78,11 +82,74 @@
       line-clamp: 2 !important;
       pointer-events: none;
     }
+    .reader-story-summary.reader-ai-summary {
+      width: 100% !important;
+      gap: clamp(10px, 1.35dvh, 14px) !important;
+      align-content: center !important;
+      transform: translateY(clamp(14px, 2.6dvh, 26px));
+    }
+    .reader-story-summary-row {
+      min-height: clamp(62px, 8.4dvh, 76px) !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      align-items: center !important;
+      padding: clamp(10px, 1.25dvh, 13px) 13px !important;
+      border-radius: 14px !important;
+    }
+    .reader-story-summary-copy {
+      width: 100% !important;
+      display: grid !important;
+      grid-template-columns: 1fr !important;
+      row-gap: 4px !important;
+      align-items: start !important;
+      font-size: 12px !important;
+      line-height: 1.46 !important;
+    }
+    .reader-story-summary-label {
+      padding-top: 0 !important;
+      font-size: 9px !important;
+      line-height: 1.2 !important;
+    }
+    .reader-story-summary-text {
+      font-size: clamp(11.7px, 3.15vw, 12.4px) !important;
+      line-height: 1.46 !important;
+      display: -webkit-box !important;
+      -webkit-box-orient: vertical !important;
+      -webkit-line-clamp: 3 !important;
+      line-clamp: 3 !important;
+      overflow: hidden !important;
+    }
+    .reader-story-actions {
+      position: relative !important;
+      z-index: 8 !important;
+      align-self: end !important;
+      padding: 0 2px !important;
+    }
+    .reader-story-open {
+      min-height: 46px !important;
+    }
     @media (max-height: 700px) {
-      .reader-story-card { grid-template-rows: 118px auto auto !important; }
+      .reader-story-card {
+        grid-template-rows: 118px minmax(0, 1fr) auto !important;
+        padding-bottom: max(84px, calc(env(safe-area-inset-bottom) + 74px)) !important;
+      }
       .reader-story-title.reader-swipe-title {
         top: calc(max(12px, calc(env(safe-area-inset-top) + 8px)) + 57px) !important;
         font-size: 17px !important;
+      }
+      .reader-story-summary.reader-ai-summary {
+        gap: 8px !important;
+        transform: translateY(10px);
+      }
+      .reader-story-summary-row {
+        min-height: 56px !important;
+        padding: 8px 11px !important;
+      }
+      .reader-story-summary-copy { row-gap: 2px !important; }
+      .reader-story-summary-text {
+        font-size: 11.3px !important;
+        -webkit-line-clamp: 2 !important;
+        line-clamp: 2 !important;
       }
     }
   </style>
