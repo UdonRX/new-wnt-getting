@@ -1,9 +1,8 @@
-import { state, update } from '../../app/store.js';
+import { state } from '../../app/store.js';
 import { el } from '../../shared/dom.js';
-import { topbar, segmented } from '../../shared/components.js';
+import { topbar } from '../../shared/components.js';
 import { openYouTubeChannelManager, renderYouTube } from '../youtube/youtube.js';
 import { renderTwitch } from '../twitch/twitch.js';
-import { applyTheme } from '../../app/router.js';
 import { iconSvg } from '../../shared/icons.js';
 
 export async function renderMedia(root,{navigate,refresh=false}){
@@ -20,24 +19,13 @@ export async function renderMedia(root,{navigate,refresh=false}){
     }},
     {html:iconSvg('settings',{size:20}),title:'設定',onClick:()=>navigate('settings')}
   );
-  screen.append(topbar('動画',{
-    subtitle:'YouTube / Twitch',
+  screen.append(topbar(mode==='twitch'?'Twitch':'YouTube',{
+    subtitle:mode==='twitch'?'ライブ配信':'登録チャンネル',
     actions
   }));
-  const segHost=el('div',{class:'media-mode-nav'});
   host=el('div',{class:'media-content-host'});
-  screen.append(segHost,host);
+  screen.append(host);
   root.replaceChildren(screen);
-  segHost.replaceChildren(segmented([
-    {value:'youtube',label:'YouTube'},
-    {value:'twitch',label:'Twitch'}
-  ],mode,value=>{
-    if(value===state.mediaMode)return;
-    window.dispatchEvent(new CustomEvent('pdv2:before-navigate',{detail:{screen:'media',mediaMode:value,internal:true}}));
-    update('lastMediaMode',value);
-    applyTheme();
-    renderMedia(root,{navigate});
-  }));
   if(mode==='twitch')await renderTwitch(host,{refresh});
   else await renderYouTube(host,{refresh});
 }

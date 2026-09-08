@@ -1,8 +1,22 @@
 let observer=null;
+let homeSocialRefreshJob=null;
 function markSeen(service){
   if(service!=='youtube'&&service!=='x'&&service!=='instagram')return;
   try{localStorage.setItem(`pdv2:lastSeen:${service}`,String(Date.now()));}catch{}
   window.dispatchEvent(new CustomEvent('pdv2:service-seen',{detail:{service,at:Date.now()}}));
+}
+function refreshHomeSocial(){
+  if(homeSocialRefreshJob)return homeSocialRefreshJob;
+  homeSocialRefreshJob=import('../features/twitter/social-home-refresh.js')
+    .then(module=>module.refreshHomeSocialFeeds?.())
+    .catch(error=>console.warn('[home-social-refresh]',error?.message||error))
+    .finally(()=>{homeSocialRefreshJob=null});
+  return homeSocialRefreshJob;
+}
+function scheduleHomeSocial(root){
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    if(root?.querySelector('.home-screen'))refreshHomeSocial();
+  }));
 }
 function stopObserver(){try{observer?.disconnect?.();}catch{}observer=null;}
 function storyUsername(button){
@@ -40,8 +54,10 @@ export function installHomeServiceState({root}={}){
     else if(screen==='media'&&(options.mediaMode||'youtube')==='youtube')markSeen('youtube');
     else if(screen==='twitter'&&String(options.snsMode||localStorage.getItem('pdv2:lastSnsMode')||'x').toLowerCase()!=='instagram')markSeen('x');
     if(screen==='twitter'&&String(options.snsMode||'').toLowerCase()==='instagram')requestAnimationFrame(()=>armInstagram(root));else stopObserver();
+    if(screen==='home')scheduleHomeSocial(root);
   };
   const onBefore=()=>stopObserver();
   window.addEventListener('pdv2:navigation-complete',onComplete);window.addEventListener('pdv2:before-navigate',onBefore);
+  scheduleHomeSocial(root);
   return{destroy(){stopObserver();window.removeEventListener('pdv2:navigation-complete',onComplete);window.removeEventListener('pdv2:before-navigate',onBefore);}};
 }
