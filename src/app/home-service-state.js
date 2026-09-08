@@ -1,6 +1,6 @@
 let observer=null;
 function markSeen(service){
-  if(service!=='youtube'&&service!=='x')return;
+  if(service!=='youtube'&&service!=='x'&&service!=='instagram')return;
   try{localStorage.setItem(`pdv2:lastSeen:${service}`,String(Date.now()));}catch{}
   window.dispatchEvent(new CustomEvent('pdv2:service-seen',{detail:{service,at:Date.now()}}));
 }

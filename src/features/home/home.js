@@ -7,13 +7,11 @@ const WEATHER_TTL = 10 * 60 * 1000;
 const REC_KEY = 'pdv2:recommendationSnapshot:v1';
 const TWITCH_KEY = 'pdv2:twitchCache:v2195';
 const YOUTUBE_KEY = 'pdv2:youtubeCache:kind4-lockup';
-const STORY_KEY = 'pdv2:instagramStorySnapshot:v1';
-const STORY_VIEWED_KEY = 'instagramStoryViewedIdsV1';
 const DISCOVER_KEY = 'pdv2:homeDiscover:v1';
 const SEEN_YOUTUBE = 'pdv2:lastSeen:youtube';
 const SEEN_X = 'pdv2:lastSeen:x';
+const SEEN_INSTAGRAM = 'pdv2:lastSeen:instagram';
 const STYLE_ID = 'pdv2-home-final-style';
-const STACK_ORDER = ['weather', 'news', 'twitch', 'instagram', 'youtube', 'x', 'discover'];
 let cleanupHome = () => {};
 
 function readJson(key, fallback = null) {
@@ -30,6 +28,29 @@ function esc(value) {
 function jstDay() {
   try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date()); }
   catch { return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10); }
+}
+function plainText(value = '', max = 220) {
+  return String(value || '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:39|x27);/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+function relativeTime(value) {
+  const stamp = value instanceof Date ? value.getTime() : new Date(value || 0).getTime();
+  if (!Number.isFinite(stamp) || stamp <= 0) return '';
+  const minutes = Math.max(0, Math.round((Date.now() - stamp) / 60000));
+  if (minutes < 60) return `${minutes || 1}分前`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}時間前`;
+  return `${Math.floor(minutes / (24 * 60))}日前`;
 }
 function weatherContext() {
   const current = readJson('pdv2:weatherCurrentLocation:v1', null);
@@ -93,10 +114,10 @@ function paintWeather(card, screen, location, model) {
   screen.dataset.wx = kind;
   applyWeatherShellTheme(kind);
   const temp = Number(current.temperature_2m), feel = Number(current.apparent_temperature);
-  card.innerHTML = `<div class="hw-top"><div><b>${esc(location?.name || '天気')}</b><small>${glyph} ${label}</small></div><div class="hw-now"><strong>${Number.isFinite(temp) ? Math.round(temp) : '—'}°</strong><small>体感 ${Number.isFinite(feel) ? Math.round(feel) : '—'}°</small></div></div><div class="hw-hint">${rain ? (rain === rows[0] ? 'この先も雨' : `${new Date(rain.time).getHours()}時ごろから雨`) : ''}</div>${weatherGraph(rows)}<div class="hw-more">天気を詳しく ›</div>`;
+  card.innerHTML = `<div class="home-section-label home-section-label-inverse"><span>WEATHER</span></div><div class="hw-top"><div><b>${esc(location?.name || '天気')}</b><small>${glyph} ${label}</small></div><div class="hw-now"><strong>${Number.isFinite(temp) ? Math.round(temp) : '—'}°</strong><small>体感 ${Number.isFinite(feel) ? Math.round(feel) : '—'}°</small></div></div><div class="hw-hint">${rain ? (rain === rows[0] ? 'この先も雨' : `${new Date(rain.time).getHours()}時ごろから雨`) : ''}</div>${weatherGraph(rows)}<div class="hw-more">天気を詳しく ›</div>`;
 }
 function weatherPlaceholder(card, location) {
-  card.innerHTML = `<div class="hw-top"><div><b>${esc(location?.name || '天気')}</b><small>☁︎ 保存済み予報なし</small></div><div class="hw-now"><strong>—°</strong><small>体感 —°</small></div></div><div class="hw-empty">予報を更新中<small>ホームはこのまま使えます</small></div>`;
+  card.innerHTML = `<div class="home-section-label home-section-label-inverse"><span>WEATHER</span></div><div class="hw-top"><div><b>${esc(location?.name || '天気')}</b><small>☁︎ 保存済み予報なし</small></div><div class="hw-now"><strong>—°</strong><small>体感 —°</small></div></div><div class="hw-empty">予報を更新中<small>ホームはこのまま使えます</small></div>`;
 }
 function heroNavigate(navigate, element, key, screen, options = {}) {
   navigate(screen, { ...options, source: 'home-hero', heroKey: key, heroElement: element });
@@ -107,8 +128,25 @@ function makeImage(url, alt = '') {
   image.addEventListener('error', () => image.remove(), { once: true });
   return image;
 }
-function topicButton(topic, index, navigate) {
+function cardIcon(name, size = 24) {
+  try { return iconSvg(name, { size }); } catch { return ''; }
+}
+function statusBadge(text, className = '') {
+  if (!text) return null;
+  return el('span', { class: `home-status ${className}`.trim(), text });
+}
+function sectionHeader(label, status = null) {
+  const header = el('div', { class: 'home-section-label' }, [el('span', { text: label })]);
+  if (status) header.append(status);
+  return header;
+}
+function newsLeadItem(snapshot, topic) {
+  const items = snapshot?.items || [];
+  return items.find(item => String(item?.id || '') === String(topic?.leadId || '')) || null;
+}
+function newsTopicButton(topic, index, snapshot, navigate) {
   const key = `news:${topic.leadId || index}`;
+  const lead = newsLeadItem(snapshot, topic);
   const button = el('button', { class: `home-news-item ${index === 0 ? 'is-hero' : 'is-small'}`, type: 'button', 'data-home-hero-key': key });
   if (index === 0) {
     const media = el('div', { class: 'home-news-media' });
@@ -118,117 +156,175 @@ function topicButton(topic, index, navigate) {
     button.append(media);
   }
   const copy = el('div', { class: 'home-news-copy' });
-  copy.append(el(index === 0 ? 'h2' : 'h3', { text: topic.title || 'ニュース' }), el('small', { text: `${Math.max(1, Number(topic.mediaCount || 1))}媒体が報道` }));
+  if (index === 0) {
+    const meta = el('div', { class: 'home-news-meta' });
+    meta.append(el('span', { text: topic.category || lead?.importance || 'ニュース' }));
+    if (lead?.source) meta.append(el('span', { text: lead.source }));
+    const time = relativeTime(lead?.pubDate || lead?.effectivePublishedTimestamp);
+    if (time) meta.append(el('span', { text: time }));
+    copy.append(meta);
+  }
+  copy.append(el(index === 0 ? 'h2' : 'h3', { text: topic.title || 'ニュース' }));
+  const summary = index === 0 ? plainText(lead?.description || '', 210) : '';
+  if (summary) copy.append(el('p', { class: 'home-news-summary', text: summary }));
+  copy.append(el('small', { text: `${Math.max(1, Number(topic.mediaCount || 1))}媒体が報道` }));
   button.append(copy);
   button.onclick = () => heroNavigate(navigate, button, key, 'newsToday', { openId: topic.leadId });
   return button;
 }
 function makeNewsCard(snapshot, navigate) {
-  const shell = el('section', { class: 'home-news-shell home-stack-card', 'data-stack-key': 'news' });
-  const topics = (snapshot?.topics || []).slice(0, 3), count = snapshot?.items?.length || 0;
-  const host = el('div', { class: 'home-news-items' });
-  if (topics.length) topics.forEach((topic, index) => host.append(topicButton(topic, index, navigate)));
-  else host.append(el('div', { class: 'home-news-empty' }, [el('b', { text: '12時間ニュースを準備中' }), el('small', { text: '初回描画後に裏で更新します' })]));
-  const all = el('button', { class: 'home-news-all', type: 'button', onclick: () => navigate('newsToday', { source: 'home-news-all' }) }, [el('span', { text: `12時間以内のニュース ${count}件` }), el('span', { text: '→' })]);
-  shell.append(host, all);
+  const shell = el('section', { class: 'home-card home-news-shell', 'data-home-section': 'news' });
+  updateNewsCard(shell, snapshot, navigate);
   return shell;
 }
 function updateNewsCard(shell, snapshot, navigate) {
-  const replacement = makeNewsCard(snapshot, navigate);
-  shell.replaceChildren(...replacement.childNodes);
+  const topics = (snapshot?.topics || []).slice(0, 3), count = snapshot?.items?.length || 0;
+  const host = el('div', { class: 'home-news-items' });
+  if (topics.length) topics.forEach((topic, index) => host.append(newsTopicButton(topic, index, snapshot, navigate)));
+  else host.append(el('div', { class: 'home-empty-copy' }, [el('b', { text: '重要ニュースを準備中' }), el('small', { text: '保存済みデータが入るとここに表示します' })]));
+  const all = el('button', { class: 'home-card-footer', type: 'button', onclick: () => navigate('newsToday', { source: 'home-news-all' }) }, [el('span', { text: count ? `12時間以内 ${count}件` : 'ニュースを見る' }), el('span', { text: '→' })]);
+  shell.replaceChildren(sectionHeader('NEWS'), host, all);
 }
-function cardIcon(name, size = 24) {
-  try { return iconSvg(name, { size }); } catch { return ''; }
-}
-function serviceCard({ key, eyebrow, title, detail = '', image = '', icon = '', count = 0, className = '', onClick }) {
-  const button = el('button', { class: `home-service-card home-stack-card ${className}`, type: 'button', 'data-stack-key': key, 'data-home-hero-key': key, 'data-new-count': String(count || 0) });
-  const visual = el('div', { class: 'home-service-visual' });
-  if (image) {
-    const img = makeImage(image, '');
-    if (img) visual.append(img);
-  }
-  if (!visual.childElementCount) visual.innerHTML = icon || '<span class="home-service-dot">•</span>';
-  const copy = el('div', { class: 'home-service-copy' });
-  copy.append(el('small', { text: eyebrow }), el('strong', { text: title }));
-  if (detail) copy.append(el('span', { text: detail }));
-  button.append(visual, copy, el('span', { class: 'home-service-arrow', text: '›', 'aria-hidden': 'true' }));
-  button.onclick = onClick;
-  return button;
-}
-function twitchCard(navigate, force = false) {
-  const cache = readJson(TWITCH_KEY, null), live = (cache?.rows || []).find(row => row?.live?.isLive);
-  if (!live && !force) return null;
-  const broadcaster = live?.broadcaster || {}, stream = live?.live || {};
-  const card = serviceCard({
-    key: 'twitch', eyebrow: '● LIVE', title: broadcaster.displayName || 'Twitch', detail: stream.title || (force ? '配信を確認済み' : 'LIVE配信中'),
-    image: broadcaster.profileImageUrl || '', icon: cardIcon('twitch'), className: 'service-twitch',
-    onClick: event => heroNavigate(navigate, event.currentTarget, 'twitch', 'media', { mediaMode: 'twitch' })
-  });
+
+function makeXCard(navigate) {
+  const card = el('button', { class: 'home-card home-social-card home-x-card', type: 'button', 'data-home-hero-key': 'x', 'data-home-section': 'x' });
+  card.onclick = event => heroNavigate(navigate, event.currentTarget, 'x', 'twitter', { snsMode: 'x', deferSeen: true, serviceSeen: 'x' });
+  paintXCard(card, { posts: [] });
   return card;
-}
-function storyViewed() {
-  const raw = readJson(STORY_VIEWED_KEY, {}), now = Date.now(), result = new Set();
-  Object.entries(raw || {}).forEach(([id, at]) => { if (id && now - Number(at || 0) < 48 * 60 * 60 * 1000) result.add(String(id)); });
-  return result;
-}
-function instagramStoryState(force = false) {
-  const snapshot = readJson(STORY_KEY, null), viewed = storyViewed(), cutoff = Date.now() - 30 * 60 * 60 * 1000;
-  const accounts = (snapshot?.accounts || []).map(account => {
-    const stories = Array.isArray(account.stories) ? account.stories : [];
-    const unread = stories.length
-      ? stories.filter(story => story?.id && !viewed.has(String(story.id)) && (!story.takenAt || Date.parse(story.takenAt) >= cutoff))
-      : (account.unread ? [{ id: `tray:${account.username || ''}` }] : []);
-    return { ...account, unread };
-  }).filter(account => account.unread.length);
-  if (accounts.length) return { account: accounts[0], count: accounts.reduce((sum, account) => sum + account.unread.length, 0) };
-  if (force && snapshot?.accounts?.length) return { account: snapshot.accounts[0], count: 0 };
-  return null;
-}
-function instagramCard(navigate, force = false) {
-  const state = instagramStoryState(force);
-  if (!state) return null;
-  const account = state.account || {};
-  const button = serviceCard({
-    key: 'instagram', eyebrow: state.count ? '未読 STORY' : 'STORY', title: `@${account.username || 'Instagram'}`, detail: state.count ? `${state.count}件の未読Story` : 'Storyを確認済み',
-    image: account.profilePicUrl || '', icon: cardIcon('instagram'), count: state.count, className: 'service-instagram',
-    onClick: event => {
-      if (account.username) sessionStorage.setItem('pdv2:openInstagramStory', account.username);
-      heroNavigate(navigate, event.currentTarget, 'instagram', 'twitter', { snsMode: 'instagram' });
-    }
-  });
-  button.querySelector('.home-service-visual')?.classList.add('story-ring');
-  return button;
-}
-function youtubeItems() {
-  const cache = readJson(YOUTUBE_KEY, null);
-  return (cache?.rows || []).flatMap(row => row?.items || []).filter(item => item?.publishedAt);
-}
-function youtubeNewCount() {
-  const seen = numberValue(SEEN_YOUTUBE);
-  return youtubeItems().filter(item => new Date(item.publishedAt).getTime() > seen).length;
-}
-function youtubeCard(navigate, force = false) {
-  const count = youtubeNewCount();
-  if (!count && !force) return null;
-  return serviceCard({
-    key: 'youtube', eyebrow: '▶ YouTube', title: count ? `新着 ${count}件` : 'YouTube', detail: count ? '前回確認後に公開' : '確認済み', icon: cardIcon('youtube'), count, className: 'service-youtube',
-    onClick: event => heroNavigate(navigate, event.currentTarget, 'youtube', 'media', { mediaMode: 'youtube', deferSeen: true, serviceSeen: 'youtube' })
-  });
 }
 function xPostTime(post) {
   const stamp = Date.parse(post?.createdAt || '');
   return Number.isFinite(stamp) ? stamp : 0;
 }
-function xCardFromCache(cache, navigate, force = false) {
+function paintXCard(card, cache) {
   const seen = numberValue(SEEN_X), posts = cache?.posts || [], fresh = posts.filter(post => xPostTime(post) > seen), count = fresh.length;
-  if (!count && !force) return null;
   const lead = fresh[0] || posts[0] || {};
-  const image = lead?.media?.find(media => media?.type === 'image')?.url || lead?.author?.avatar || '';
-  return serviceCard({
-    key: 'x', eyebrow: 'X', title: count ? `新着 ${count}件` : 'X', detail: count ? (lead.author?.name || lead.author?.handle || '新しいポストがあります') : '確認済み', image, icon: '𝕏', count, className: 'service-x',
-    onClick: event => heroNavigate(navigate, event.currentTarget, 'x', 'twitter', { snsMode: 'x', deferSeen: true, serviceSeen: 'x' })
-  });
+  const handle = String(lead?.author?.handle || '').trim();
+  const author = handle ? (handle.startsWith('@') ? handle : `@${handle}`) : (lead?.author?.name || 'X');
+  const imageUrl = lead?.media?.find(media => media?.type === 'image')?.url || lead?.author?.avatar || '';
+  const status = count ? statusBadge(`● NEW ${count}`, 'is-new') : null;
+  const header = sectionHeader('X', status);
+  const body = el('div', { class: 'home-social-body' });
+  const copy = el('div', { class: 'home-social-copy' }, [
+    el('strong', { text: author }),
+    el('p', { text: plainText(lead?.text || '', 260) || '最新の投稿を確認' })
+  ]);
+  body.append(copy);
+  const image = makeImage(imageUrl, '');
+  if (image) body.append(el('div', { class: 'home-social-media' }, [image]));
+  card.dataset.newCount = String(count);
+  card.replaceChildren(header, body, el('span', { class: 'home-card-open', text: 'Xを開く ›' }));
 }
+
+function makeInstagramCard(navigate) {
+  const card = el('button', { class: 'home-card home-instagram-card', type: 'button', 'data-home-hero-key': 'instagram', 'data-home-section': 'instagram' });
+  card.onclick = event => heroNavigate(navigate, event.currentTarget, 'instagram', 'twitter', { snsMode: 'instagram', serviceSeen: 'instagram' });
+  paintInstagramCard(card, { items: [], count: 0 });
+  return card;
+}
+function instagramItemTime(item) {
+  if (item?.timestampIso) {
+    const parsed = Date.parse(item.timestampIso);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const seconds = Number(item?.timestamp || 0);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+}
+function instagramImage(item) {
+  const media = Array.isArray(item?.media) ? item.media : [];
+  const entry = media.find(value => value?.highResUrl || value?.posterUrl || value?.url);
+  return entry?.highResUrl || entry?.posterUrl || entry?.url || '';
+}
+function paintInstagramCard(card, data) {
+  const items = data?.items || [], count = Number(data?.count || 0), lead = items[0] || {};
+  const username = String(lead?.account?.username || '').trim();
+  const status = count ? statusBadge(`新着投稿 ${count}件`, 'is-instagram') : null;
+  const header = sectionHeader('Instagram', status);
+  const copy = el('div', { class: 'home-instagram-copy' }, [
+    el('strong', { text: username ? `@${username}` : 'Instagram' }),
+    el('p', { text: plainText(lead?.text || '', 260) || '最近の投稿を確認' })
+  ]);
+  const body = el('div', { class: 'home-instagram-body' }, [copy]);
+  const urls = [];
+  for (const item of items) {
+    const url = instagramImage(item);
+    if (url && !urls.includes(url)) urls.push(url);
+    if (urls.length >= 3) break;
+  }
+  if (urls.length) {
+    const gallery = el('div', { class: `home-instagram-gallery count-${urls.length}` });
+    urls.forEach(url => {
+      const image = makeImage(url, '');
+      if (image) gallery.append(image);
+    });
+    body.append(gallery);
+  }
+  card.dataset.newCount = String(count);
+  card.replaceChildren(header, body, el('span', { class: 'home-card-open', text: 'Instagramを開く ›' }));
+}
+async function readInstagramHomeData() {
+  try {
+    const [{ instagramAccounts }, { readInstagramCaches }] = await Promise.all([
+      import('../twitter/instagram-accounts.js'),
+      import('../twitter/instagram-cache.js')
+    ]);
+    const accounts = instagramAccounts();
+    if (!accounts.length) return { items: [], count: 0 };
+    const caches = await readInstagramCaches(accounts);
+    const items = [...caches.values()].flatMap(record => record?.items || [])
+      .filter(Boolean)
+      .sort((a, b) => instagramItemTime(b) - instagramItemTime(a));
+    const seen = numberValue(SEEN_INSTAGRAM);
+    return { items, count: items.filter(item => instagramItemTime(item) > seen).length };
+  } catch {
+    return { items: [], count: 0 };
+  }
+}
+
+function youtubeItems() {
+  const cache = readJson(YOUTUBE_KEY, null);
+  return (cache?.rows || []).flatMap(row => row?.items || []).filter(item => item?.publishedAt)
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+}
+function youtubeNewCount(items = youtubeItems()) {
+  const seen = numberValue(SEEN_YOUTUBE);
+  return items.filter(item => new Date(item.publishedAt).getTime() > seen).length;
+}
+function makeMediaPair(navigate) {
+  const shell = el('section', { class: 'home-media-pair', 'data-home-section': 'media' });
+  const youtube = el('button', { class: 'home-card home-media-mini service-youtube', type: 'button', 'data-home-hero-key': 'youtube' });
+  youtube.onclick = event => heroNavigate(navigate, event.currentTarget, 'youtube', 'media', { mediaMode: 'youtube', deferSeen: true, serviceSeen: 'youtube' });
+  const twitch = el('button', { class: 'home-card home-media-mini service-twitch', type: 'button', 'data-home-hero-key': 'twitch' });
+  twitch.onclick = event => heroNavigate(navigate, event.currentTarget, 'twitch', 'media', { mediaMode: 'twitch' });
+  shell.append(youtube, twitch);
+  paintMediaPair(youtube, twitch);
+  return { shell, youtube, twitch };
+}
+function paintMediaPair(youtube, twitch) {
+  const items = youtubeItems(), count = youtubeNewCount(items), lead = items[0] || {};
+  const ytStatus = count ? statusBadge(`NEW ${count}`, 'is-youtube') : null;
+  const ytHeader = sectionHeader('YouTube', ytStatus);
+  const ytVisual = el('div', { class: 'home-media-mini-visual' });
+  const ytImage = makeImage(lead?.thumbnail || '', '');
+  if (ytImage) ytVisual.append(ytImage);
+  else ytVisual.innerHTML = cardIcon('youtube', 30);
+  const ytTitle = plainText(lead?.title || '', 85) || (count ? `${count}件の新着動画` : '動画を見る');
+  youtube.dataset.newCount = String(count);
+  youtube.replaceChildren(ytHeader, ytVisual, el('strong', { class: 'home-media-mini-title', text: ytTitle }));
+
+  const cache = readJson(TWITCH_KEY, null), rows = cache?.rows || [], liveRows = rows.filter(row => row?.live?.isLive);
+  const live = liveRows[0], broadcaster = live?.broadcaster || {}, stream = live?.live || {};
+  const twStatus = liveRows.length ? statusBadge(`● LIVE ${liveRows.length}`, 'is-live') : null;
+  const twHeader = sectionHeader('Twitch', twStatus);
+  const twVisual = el('div', { class: 'home-media-mini-visual' });
+  const twImage = makeImage(broadcaster.profileImageUrl || '', '');
+  if (twImage) twVisual.append(twImage);
+  else twVisual.innerHTML = cardIcon('twitch', 30);
+  const twTitle = liveRows.length ? (broadcaster.displayName || stream.title || 'LIVE配信中') : '配信を見る';
+  twitch.dataset.liveCount = String(liveRows.length);
+  twitch.replaceChildren(twHeader, twVisual, el('strong', { class: 'home-media-mini-title', text: plainText(twTitle, 85) }));
+}
+
 function readSet(key) {
   try { return new Set(JSON.parse(localStorage.getItem(key) || '[]').map(String)); }
   catch { return new Set(); }
@@ -240,69 +336,88 @@ function discoverPick(items, read, preferredId = '') {
   const unread = rows.filter(item => !read.has(String(item.id))).sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
   return unread[0] || rows.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0))[0] || null;
 }
-function discoverItem(item, label, readKey) {
-  const link = item?.link || item?.url || '';
-  const anchor = el('a', { class: 'home-discover-item', href: link, target: '_blank', rel: 'noopener noreferrer' });
-  anchor.addEventListener('click', () => { if (!item?.id || !readKey) return; const read = readSet(readKey); read.add(String(item.id)); try { localStorage.setItem(readKey, JSON.stringify([...read].slice(-1500))); } catch {} }, { passive: true });
-  const media = el('div', { class: 'home-discover-media' });
-  const image = makeImage(item?.image || '', '');
-  if (image) media.append(image);
-  else media.append(el('span', { text: label }));
-  const copy = el('div', { class: 'home-discover-copy' });
-  copy.append(el('strong', { text: item?.titleJa || item?.title || '記事' }), el('small', { text: item?.source || item?.feedName || label }));
-  anchor.append(media, copy);
-  return anchor;
+function makeDiscoverCard(label, kind) {
+  const shell = el('a', {
+    class: `home-card home-discover-card home-discover-${kind}`,
+    href: '#',
+    'data-home-section': kind,
+    'aria-label': `${label}の記事を開く`
+  });
+  paintDiscoverCard(shell, null, label, '');
+  return shell;
 }
-async function discoverCard() {
+function paintDiscoverCard(shell, item, label, readKey) {
+  const link = item?.link || item?.url || '';
+  if (link) {
+    shell.href = link;
+    shell.target = '_blank';
+    shell.rel = 'noopener noreferrer';
+  } else {
+    shell.removeAttribute('target');
+    shell.removeAttribute('rel');
+    shell.href = '#';
+  }
+  shell.onclick = event => {
+    if (!link) { event.preventDefault(); return; }
+    if (!item?.id || !readKey) return;
+    const read = readSet(readKey);
+    read.add(String(item.id));
+    try { localStorage.setItem(readKey, JSON.stringify([...read].slice(-1500))); } catch {}
+  };
+  const copy = el('div', { class: 'home-discover-copy' });
+  copy.append(
+    el('strong', { text: item?.titleJa || item?.title || `${label}の記事を確認` }),
+    el('p', { text: plainText(item?.description || '', 260) || (item ? (item?.source || item?.feedName || '') : '保存済みの記事を確認中') })
+  );
+  const meta = el('div', { class: 'home-discover-meta' });
+  const source = item?.source || item?.feedName || '';
+  if (source) meta.append(el('span', { text: source }));
+  const time = relativeTime(item?.pubDate);
+  if (time) meta.append(el('span', { text: time }));
+  if (meta.childElementCount) copy.append(meta);
+  const body = el('div', { class: 'home-discover-body' }, [copy]);
+  const image = makeImage(item?.image || '', '');
+  if (image) body.append(el('div', { class: 'home-discover-media' }, [image]));
+  shell.replaceChildren(sectionHeader(label), body, el('span', { class: 'home-card-open', text: '記事を開く ›' }));
+}
+async function readDiscoverItems() {
   try {
     const { readReaderCache } = await import('../reader/reader-data.js');
     const [knowledge, papers] = await Promise.all([readReaderCache('knowledge', 'core'), readReaderCache('papers', 'technology')]);
-    const stored = readJson(DISCOVER_KEY, {}), day = jstDay();
-    const sameDay = stored?.day === day;
+    const stored = readJson(DISCOVER_KEY, {}), day = jstDay(), sameDay = stored?.day === day;
     const knowledgeRead = readSet('pdv2:read:knowledge'), paperRead = readSet('pdv2:read:papers:technology');
     const k = discoverPick(knowledge?.items, knowledgeRead, sameDay ? stored.knowledgeId : '');
     const p = discoverPick(papers?.items, paperRead, sameDay ? stored.paperId : '');
-    if (!k && !p) return null;
     try { localStorage.setItem(DISCOVER_KEY, JSON.stringify({ day, knowledgeId: k?.id || '', paperId: p?.id || '' })); } catch {}
-    const shell = el('section', { class: 'home-discover-shell home-stack-card', 'data-stack-key': 'discover' });
-    if (k) shell.append(discoverItem(k, '知識', 'pdv2:read:knowledge'));
-    if (p) shell.append(discoverItem(p, '論文', 'pdv2:read:papers:technology'));
-    return shell;
-  } catch { return null; }
+    return { knowledge: k, paper: p };
+  } catch {
+    return { knowledge: null, paper: null };
+  }
 }
-function reindex(stack) {
-  [...stack.children].forEach((card, index) => {
-    card.style.setProperty('--stack-index', String(index));
-    card.style.zIndex = String(20 + index);
-  });
-}
-function placeCard(stack, cards, key, node) {
-  const old = cards.get(key);
-  if (old === node) return;
-  if (old?.isConnected) old.remove();
-  cards.delete(key);
-  if (!node) { reindex(stack); return; }
-  const index = STACK_ORDER.indexOf(key);
-  const next = [...stack.children].find(child => STACK_ORDER.indexOf(child.dataset.stackKey) > index);
-  stack.insertBefore(node, next || null);
-  cards.set(key, node);
-  reindex(stack);
-}
+
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
   body.pdv2-home-fullscreen #app-main{width:100%;max-width:none;margin:0;padding:0!important;background:transparent}
-  body.pdv2-home-fullscreen #bottom-nav{display:none!important}
-  .home-screen{--ha:var(--app-weather-accent,#8398aa);--hb:var(--app-weather-accent-2,#b1bcc5);--hd:var(--app-weather-deep,#22303a);min-height:100dvh!important;animation:none!important;padding:calc(env(safe-area-inset-top) + 8px) max(14px,env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 92px) max(14px,env(safe-area-inset-left));background:radial-gradient(105% 34% at 10% 0,color-mix(in srgb,var(--ha) 18%,transparent),transparent 76%);overflow:visible}
-  .home-stack{width:min(100%,620px);margin:0 auto;display:block;padding-bottom:18dvh}.home-stack-card{position:sticky;top:calc(env(safe-area-inset-top) + 8px + (var(--stack-index,0) * 14px));width:100%;margin:0 0 22px;isolation:isolate}.home-stack-card:last-child{margin-bottom:0}
-  .home-weather-card{min-height:250px;padding:19px 16px 13px;border-radius:30px;text-align:left;color:#fff;background:radial-gradient(80% 105% at 90% -10%,color-mix(in srgb,var(--hb) 48%,transparent),transparent 66%),linear-gradient(145deg,color-mix(in srgb,var(--ha) 68%,var(--hd)),var(--hd));border:1px solid color-mix(in srgb,var(--hb) 25%,var(--line));box-shadow:0 14px 36px rgba(0,0,0,.14);overflow:hidden}.home-weather-card:active,.home-service-card:active,.home-news-item:active{opacity:.92}.hw-top{display:flex;justify-content:space-between;gap:12px}.hw-top b{font-size:15px}.hw-top small,.hw-now small{display:block;margin-top:6px;color:rgba(255,255,255,.72);font-size:11px}.hw-now{text-align:right}.hw-now strong{font-size:48px;font-weight:300;line-height:.9}.hw-hint{height:18px;margin-top:10px;font-size:12px;font-weight:700}.home-weather-chart svg{display:block;width:100%;height:124px}.home-weather-chart polyline{fill:none;stroke:rgba(255,255,255,.78);stroke-width:2}.home-weather-chart circle{fill:#fff}.home-weather-chart text{text-anchor:middle;font-family:-apple-system,sans-serif;fill:rgba(255,255,255,.65)}.home-weather-chart .wx{fill:#fff;font-size:15px}.home-weather-chart .temp{fill:#fff;font-size:9px;font-weight:700}.home-weather-chart .time{font-size:8px}.home-weather-chart .rain{fill:#d9f3ff;font-size:7px}.hw-more{text-align:right;font-size:10px;color:rgba(255,255,255,.58)}.hw-empty{min-height:150px;display:grid;align-content:center;font-weight:700}.hw-empty small{display:block;margin-top:5px;color:rgba(255,255,255,.65)}
-  .home-news-shell{border-radius:30px;padding:10px;background:color-mix(in srgb,var(--ha) 7%,var(--surface-solid));border:1px solid color-mix(in srgb,var(--ha) 18%,var(--line));box-shadow:0 13px 34px rgba(0,0,0,.12)}.home-news-items{display:grid;gap:9px}.home-news-item{width:100%;padding:0;text-align:left;color:inherit;background:color-mix(in srgb,var(--ha) 4%,var(--surface));border:1px solid var(--line);overflow:hidden}.home-news-item.is-hero{border-radius:23px}.home-news-item.is-small{border-radius:18px;min-height:76px}.home-news-media{height:154px;position:relative;display:grid;place-items:center;background:color-mix(in srgb,var(--ha) 14%,var(--surface-2));overflow:hidden}.home-news-media img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.home-news-fallback{font-weight:800;color:color-mix(in srgb,var(--ha) 72%,var(--text))}.home-news-copy{padding:12px 13px}.home-news-copy h2,.home-news-copy h3{margin:0;line-height:1.3;text-wrap:pretty}.home-news-copy h2{font-size:20px}.home-news-copy h3{font-size:15px}.home-news-copy small{display:block;margin-top:5px;color:var(--muted);font-size:10px}.home-news-all{width:100%;min-height:42px;padding:0 5px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:space-between;font-size:11px}.home-news-empty{padding:18px 14px;border-radius:20px;background:var(--surface-2)}.home-news-empty b,.home-news-empty small{display:block}.home-news-empty small{margin-top:4px;color:var(--muted);font-size:10px}
-  .home-service-card{min-height:106px;padding:14px 15px;display:grid;grid-template-columns:58px minmax(0,1fr) 20px;align-items:center;gap:12px;border-radius:27px;text-align:left;color:var(--text);background:linear-gradient(135deg,color-mix(in srgb,var(--service-accent,var(--ha)) 12%,var(--surface-solid)),color-mix(in srgb,var(--service-accent,var(--ha)) 5%,var(--surface)));border:1px solid color-mix(in srgb,var(--service-accent,var(--ha)) 22%,var(--line));box-shadow:0 12px 30px rgba(0,0,0,.1)}.home-service-visual{width:58px;height:58px;border-radius:19px;display:grid;place-items:center;overflow:hidden;background:color-mix(in srgb,var(--service-accent,var(--ha)) 18%,var(--surface-2));font-size:27px;font-weight:800}.home-service-visual svg{width:27px;height:27px}.home-service-visual img{width:100%;height:100%;object-fit:cover}.home-service-visual.story-ring{border-radius:50%;padding:3px;background:linear-gradient(145deg,#743cff,#e73c85 58%,#ff9e45)}.home-service-visual.story-ring img{border-radius:50%;border:2px solid var(--surface)}.home-service-copy{min-width:0}.home-service-copy small,.home-service-copy strong,.home-service-copy span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.home-service-copy small{font-size:10px;color:color-mix(in srgb,var(--service-accent,var(--ha)) 76%,var(--muted));font-weight:800}.home-service-copy strong{margin-top:3px;font-size:19px}.home-service-copy span{margin-top:4px;color:var(--muted);font-size:11px}.home-service-arrow{font-size:25px;color:var(--muted);text-align:right}.service-twitch{--service-accent:#9147ff}.service-instagram{--service-accent:#d84f86}.service-youtube{--service-accent:#ff3b30}.service-x{--service-accent:#7c8b99}.home-service-dot{font-size:34px}
-  .home-discover-shell{padding:10px;border-radius:30px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;background:color-mix(in srgb,var(--ha) 6%,var(--surface-solid));border:1px solid color-mix(in srgb,var(--ha) 18%,var(--line));box-shadow:0 12px 30px rgba(0,0,0,.1)}.home-discover-item{min-width:0;text-decoration:none;color:inherit;border-radius:21px;overflow:hidden;background:var(--surface);border:1px solid var(--line)}.home-discover-media{height:110px;display:grid;place-items:center;position:relative;overflow:hidden;background:color-mix(in srgb,var(--ha) 12%,var(--surface-2));color:var(--muted);font-size:12px;font-weight:800}.home-discover-media img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.home-discover-copy{padding:10px}.home-discover-copy strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;font-size:13px;line-height:1.4}.home-discover-copy small{display:block;margin-top:6px;color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  @media(max-width:390px){.home-screen{padding-left:12px;padding-right:12px}.home-stack-card{top:calc(env(safe-area-inset-top) + 7px + (var(--stack-index,0) * 13px));margin-bottom:18px}.home-weather-card{min-height:244px;padding-inline:14px}.hw-now strong{font-size:45px}.home-news-media{height:146px}.home-service-card{min-height:101px}.home-discover-media{height:100px}}
-  @media(prefers-reduced-motion:reduce){.home-stack-card{scroll-behavior:auto}}
+  .home-screen{--ha:var(--app-weather-accent,#8398aa);--hb:var(--app-weather-accent-2,#b1bcc5);--hd:var(--app-weather-deep,#22303a);min-height:100dvh!important;animation:none!important;padding:calc(env(safe-area-inset-top) + 10px) max(14px,env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 116px) max(14px,env(safe-area-inset-left));background:radial-gradient(115% 38% at 12% -4%,color-mix(in srgb,var(--ha) 28%,transparent),transparent 72%),linear-gradient(180deg,color-mix(in srgb,var(--ha) 12%,transparent),transparent 42%);overflow:visible}
+  .home-stack{width:min(100%,620px);margin:0 auto;display:grid;gap:16px;padding-bottom:10px}
+  .home-card{width:100%;min-width:0;margin:0;border:1px solid color-mix(in srgb,var(--ha) 18%,var(--line));border-radius:28px;background:linear-gradient(145deg,color-mix(in srgb,var(--ha) 9%,var(--surface-solid)),color-mix(in srgb,var(--ha) 4%,var(--surface-solid)));box-shadow:0 10px 26px rgba(0,0,0,.09);color:var(--text);overflow:hidden;text-align:left;text-decoration:none;-webkit-tap-highlight-color:transparent}
+  button.home-card{font:inherit}.home-card:active,.home-news-item:active{opacity:.93}
+  .home-section-label{min-height:28px;padding:0 2px;display:flex;align-items:center;justify-content:space-between;gap:10px;color:color-mix(in srgb,var(--ha) 72%,var(--text));font-size:11px;font-weight:850;letter-spacing:.08em}.home-section-label-inverse{padding:0;color:rgba(255,255,255,.68)}
+  .home-status{max-width:58%;padding:4px 8px;border-radius:999px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;letter-spacing:0;font-weight:850;background:color-mix(in srgb,var(--ha) 13%,var(--surface-2));color:var(--text)}.home-status.is-new{color:#fff;background:#16181b}.home-status.is-instagram{color:#fff;background:linear-gradient(120deg,#aa3a8c,#df4c69)}.home-status.is-youtube{color:#fff;background:#e33b32}.home-status.is-live{color:#fff;background:#7b42d9}
+  .home-card-open{display:block;margin-top:12px;color:var(--muted);font-size:10px;text-align:right}
+  .home-weather-card{min-height:262px;padding:17px 16px 13px;border-radius:30px;text-align:left;color:#fff;background:radial-gradient(80% 105% at 90% -10%,color-mix(in srgb,var(--hb) 48%,transparent),transparent 66%),linear-gradient(145deg,color-mix(in srgb,var(--ha) 68%,var(--hd)),var(--hd));border:1px solid color-mix(in srgb,var(--hb) 25%,var(--line));box-shadow:0 14px 36px rgba(0,0,0,.14);overflow:hidden}
+  .hw-top{display:flex;justify-content:space-between;gap:12px;margin-top:2px}.hw-top b{font-size:16px}.hw-top small,.hw-now small{display:block;margin-top:6px;color:rgba(255,255,255,.72);font-size:11px}.hw-now{text-align:right}.hw-now strong{font-size:48px;font-weight:300;line-height:.9}.hw-hint{height:18px;margin-top:10px;font-size:12px;font-weight:750}.home-weather-chart svg{display:block;width:100%;height:124px}.home-weather-chart polyline{fill:none;stroke:rgba(255,255,255,.78);stroke-width:2}.home-weather-chart circle{fill:#fff}.home-weather-chart text{text-anchor:middle;font-family:-apple-system,sans-serif;fill:rgba(255,255,255,.65)}.home-weather-chart .wx{fill:#fff;font-size:15px}.home-weather-chart .temp{fill:#fff;font-size:9px;font-weight:700}.home-weather-chart .time{font-size:8px}.home-weather-chart .rain{fill:#d9f3ff;font-size:7px}.hw-more{text-align:right;font-size:10px;color:rgba(255,255,255,.58)}.hw-empty{min-height:150px;display:grid;align-content:center;font-weight:700}.hw-empty small{display:block;margin-top:5px;color:rgba(255,255,255,.65)}
+  .home-news-shell{padding:12px}.home-news-items{display:grid;gap:9px}.home-news-item{width:100%;padding:0;text-align:left;color:inherit;background:color-mix(in srgb,var(--ha) 4%,var(--surface));border:1px solid var(--line);overflow:hidden}.home-news-item.is-hero{border-radius:22px}.home-news-item.is-small{border-radius:17px;min-height:72px}.home-news-media{height:160px;position:relative;display:grid;place-items:center;background:color-mix(in srgb,var(--ha) 14%,var(--surface-2));overflow:hidden}.home-news-media img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.home-news-fallback{font-weight:800;color:color-mix(in srgb,var(--ha) 72%,var(--text))}.home-news-copy{padding:12px 13px}.home-news-meta{display:flex;gap:7px;align-items:center;overflow:hidden;color:var(--muted);font-size:9px;white-space:nowrap}.home-news-meta span{overflow:hidden;text-overflow:ellipsis}.home-news-meta span:last-child{margin-left:auto;flex:0 0 auto}.home-news-copy h2,.home-news-copy h3{margin:0;line-height:1.33;text-wrap:pretty}.home-news-copy h2{margin-top:6px;font-size:20px}.home-news-copy h3{font-size:15px}.home-news-summary{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;margin:8px 0 0;color:var(--text);font-size:12px;line-height:1.55}.home-news-copy small{display:block;margin-top:7px;color:var(--muted);font-size:10px}.home-card-footer{width:100%;min-height:42px;padding:4px 4px 0;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:space-between;font-size:11px}.home-empty-copy{padding:22px 14px;border-radius:20px;background:var(--surface-2)}.home-empty-copy b,.home-empty-copy small{display:block}.home-empty-copy small{margin-top:5px;color:var(--muted);font-size:10px}
+  .home-social-card,.home-instagram-card{min-height:154px;padding:15px 16px}.home-social-body{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:13px;align-items:start;margin-top:5px}.home-social-copy{min-width:0}.home-social-copy strong,.home-instagram-copy strong{display:block;font-size:16px;line-height:1.25}.home-social-copy p,.home-instagram-copy p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;margin:7px 0 0;color:var(--text);font-size:14px;line-height:1.5;overflow-wrap:anywhere}.home-social-media{width:76px;height:76px;border-radius:19px;overflow:hidden;background:var(--surface-2)}.home-social-media img{width:100%;height:100%;object-fit:cover}.home-x-card{--service-accent:#7c8b99}
+  .home-instagram-body{display:grid;gap:12px;margin-top:5px}.home-instagram-gallery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.home-instagram-gallery.count-1{grid-template-columns:1fr}.home-instagram-gallery.count-2{grid-template-columns:repeat(2,minmax(0,1fr))}.home-instagram-gallery img{width:100%;height:84px;border-radius:15px;object-fit:cover;background:var(--surface-2)}.home-instagram-gallery.count-1 img{height:126px}
+  .home-media-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}.home-media-mini{min-height:158px;padding:12px;display:flex;flex-direction:column}.home-media-mini .home-section-label{padding:0}.home-media-mini-visual{height:66px;margin-top:5px;border-radius:18px;display:grid;place-items:center;overflow:hidden;background:color-mix(in srgb,var(--service-accent,var(--ha)) 15%,var(--surface-2));color:var(--service-accent,var(--text))}.home-media-mini-visual img{width:100%;height:100%;object-fit:cover}.home-media-mini-visual svg{width:30px;height:30px}.home-media-mini-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;margin-top:10px;font-size:12px;line-height:1.38}.service-youtube{--service-accent:#ff3b30}.service-twitch{--service-accent:#9147ff}
+  .home-discover-card{min-height:162px;padding:15px 16px;display:block}.home-discover-body{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:start;margin-top:5px}.home-discover-copy{min-width:0}.home-discover-copy strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;font-size:18px;line-height:1.36;letter-spacing:-.01em}.home-discover-copy p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.55}.home-discover-meta{display:flex;gap:7px;margin-top:9px;color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden}.home-discover-meta span{overflow:hidden;text-overflow:ellipsis}.home-discover-media{width:100px;height:92px;border-radius:18px;overflow:hidden;background:color-mix(in srgb,var(--ha) 12%,var(--surface-2))}.home-discover-media img{width:100%;height:100%;object-fit:cover}
+  @media(max-width:390px){.home-screen{padding-left:12px;padding-right:12px}.home-stack{gap:14px}.home-card{border-radius:25px}.home-weather-card{min-height:252px;padding-inline:14px;border-radius:28px}.hw-now strong{font-size:45px}.home-news-shell{padding:10px}.home-news-media{height:150px}.home-social-card,.home-instagram-card{padding-inline:14px}.home-instagram-gallery img{height:78px}.home-media-pair{gap:9px}.home-media-mini{min-height:152px;padding:11px}.home-discover-card{padding-inline:14px}.home-discover-media{width:92px;height:88px}}
+  @media(max-width:340px){.home-media-pair{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.home-media-mini{padding:9px}.home-media-mini .home-section-label{font-size:10px}.home-media-mini-visual{height:58px}.home-discover-media{width:82px;height:80px}}
+  @media(prefers-reduced-motion:reduce){.home-card:active,.home-news-item:active{opacity:1}}
   `;
   document.head.append(style);
 }
@@ -313,38 +428,41 @@ function afterPaint(callback) {
   }));
 }
 
-export async function renderHome(root, { navigate, refresh = false, heroReturnKey = '' } = {}) {
+export async function renderHome(root, { navigate, refresh = false } = {}) {
   const started = performance.now();
-  cleanupHome(); ensureStyles();
-  let disposed = false, weatherUpdating = false, newsUpdating = false, hiddenAt = 0, forcedReturn = String(heroReturnKey || '');
+  cleanupHome();
+  ensureStyles();
+  let disposed = false, weatherUpdating = false, newsUpdating = false, hiddenAt = 0;
   const screen = el('section', { class: 'screen home-screen', 'data-wx': 'cloudy' });
   const stack = el('div', { class: 'home-stack' });
-  const cards = new Map(); screen.append(stack);
+  screen.append(stack);
 
   let { location, key: weatherKey } = weatherContext();
   let weatherCached = weatherKey ? readJson(weatherKey, null) : null;
-  const weatherCard = el('button', { class: 'home-weather-card home-stack-card', type: 'button', 'data-stack-key': 'weather', 'data-home-hero-key': 'weather' });
+  const weatherCard = el('button', { class: 'home-weather-card', type: 'button', 'data-home-hero-key': 'weather', 'data-home-section': 'weather' });
   weatherCard.onclick = event => heroNavigate(navigate, event.currentTarget, 'weather', 'weatherDetail');
   weatherCached?.model ? paintWeather(weatherCard, screen, location, weatherCached.model) : weatherPlaceholder(weatherCard, location);
   if (!weatherCached?.model) applyWeatherShellTheme('cloudy');
-  placeCard(stack, cards, 'weather', weatherCard);
 
-  const newsSnapshot = readJson(REC_KEY, null), newsCard = makeNewsCard(newsSnapshot, navigate);
-  placeCard(stack, cards, 'news', newsCard);
+  const newsSnapshot = readJson(REC_KEY, null);
+  const newsCard = makeNewsCard(newsSnapshot, navigate);
+  const xCard = makeXCard(navigate);
+  const instagramCard = makeInstagramCard(navigate);
+  const media = makeMediaPair(navigate);
+  const knowledgeCard = makeDiscoverCard('知識', 'knowledge');
+  const paperCard = makeDiscoverCard('論文', 'paper');
 
-  const syncServices = () => {
-    placeCard(stack, cards, 'twitch', twitchCard(navigate, forcedReturn === 'twitch'));
-    placeCard(stack, cards, 'instagram', instagramCard(navigate, forcedReturn === 'instagram'));
-    placeCard(stack, cards, 'youtube', youtubeCard(navigate, forcedReturn === 'youtube'));
-    if (forcedReturn === 'x' && !cards.get('x')) placeCard(stack, cards, 'x', xCardFromCache({ posts: [] }, navigate, true));
-  };
-  syncServices();
+  stack.append(weatherCard, newsCard, xCard, instagramCard, media.shell, knowledgeCard, paperCard);
   root.replaceChildren(screen);
   try { localStorage.setItem('pdv2:lastVisitMs', String(Date.now())); } catch {}
   window.__PDV2_HOME_METRIC = {
     domMs: Math.round((performance.now() - started) * 10) / 10,
-    weatherCacheHit: Boolean(weatherCached?.model), newsCacheHit: Boolean(newsSnapshot?.items?.length),
-    initialCards: stack.childElementCount, syncOnly: true, at: Date.now()
+    weatherCacheHit: Boolean(weatherCached?.model),
+    newsCacheHit: Boolean(newsSnapshot?.items?.length),
+    fixedOrder: ['weather', 'news', 'x', 'instagram', 'youtube+twitch', 'knowledge', 'paper'],
+    initialSections: stack.childElementCount,
+    syncOnly: true,
+    at: Date.now()
   };
 
   const syncWeatherContext = () => {
@@ -356,7 +474,6 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
     if (weatherCached?.model) paintWeather(weatherCard, screen, location, weatherCached.model);
     else weatherPlaceholder(weatherCard, location);
   };
-
   const updateWeather = async (force = false) => {
     if (disposed || weatherUpdating || !location || !weatherKey) return;
     const old = readJson(weatherKey, null);
@@ -369,8 +486,11 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
       try { localStorage.setItem(weatherKey, JSON.stringify(payload)); } catch {}
       window.dispatchEvent(new CustomEvent('pdv2:weather-cache-updated', { detail: { key: weatherKey, location, model, at: payload.at } }));
       if (!disposed && weatherCard.isConnected) paintWeather(weatherCard, screen, location, model);
-    } catch (error) { console.warn('[home-weather]', error?.message || error); }
-    finally { weatherUpdating = false; }
+    } catch (error) {
+      console.warn('[home-weather]', error?.message || error);
+    } finally {
+      weatherUpdating = false;
+    }
   };
   const updateNews = async (force = false) => {
     if (disposed || newsUpdating) return;
@@ -379,27 +499,43 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
       const { refreshRecommendationSnapshot } = await import('../reader/reader-recommendations.js');
       const snapshot = await refreshRecommendationSnapshot({ force });
       if (!disposed && newsCard.isConnected) updateNewsCard(newsCard, snapshot, navigate);
-    } catch (error) { console.warn('[home-news]', error?.message || error); }
-    finally { newsUpdating = false; }
+    } catch (error) {
+      console.warn('[home-news]', error?.message || error);
+    } finally {
+      newsUpdating = false;
+    }
   };
   const updateXFromCache = async () => {
     if (disposed) return;
     try {
       const { readXPostCache } = await import('../twitter/x-cache.js');
       const cache = await readXPostCache();
-      if (!disposed) placeCard(stack, cards, 'x', xCardFromCache(cache, navigate, forcedReturn === 'x'));
+      if (!disposed && xCard.isConnected) paintXCard(xCard, cache);
     } catch {}
+  };
+  const updateInstagramFromCache = async () => {
+    if (disposed) return;
+    const data = await readInstagramHomeData();
+    if (!disposed && instagramCard.isConnected) paintInstagramCard(instagramCard, data);
   };
   const updateDiscover = async () => {
     if (disposed) return;
-    const card = await discoverCard();
-    if (!disposed) placeCard(stack, cards, 'discover', card);
+    const result = await readDiscoverItems();
+    if (disposed) return;
+    paintDiscoverCard(knowledgeCard, result.knowledge, '知識', 'pdv2:read:knowledge');
+    paintDiscoverCard(paperCard, result.paper, '論文', 'pdv2:read:papers:technology');
+  };
+  const syncLocalCards = () => {
+    if (disposed) return;
+    paintMediaPair(media.youtube, media.twitch);
   };
 
   const navigationEntry = performance.getEntriesByType?.('navigation')?.[0];
   afterPaint(() => {
     updateXFromCache();
+    updateInstagramFromCache();
     updateDiscover();
+    syncLocalCards();
     updateWeather(Boolean(refresh || navigationEntry?.type === 'reload'));
     updateNews(Boolean(refresh || navigationEntry?.type === 'reload'));
   });
@@ -410,43 +546,50 @@ export async function renderHome(root, { navigate, refresh = false, heroReturnKe
     weatherCached = { at: Number(event.detail.at || Date.now()), model: event.detail.model };
     paintWeather(weatherCard, screen, location, event.detail.model);
   };
-  const onNews = event => { if (!disposed && event.detail && newsCard.isConnected) updateNewsCard(newsCard, event.detail, navigate); };
-  const onStory = () => { if (!disposed) placeCard(stack, cards, 'instagram', instagramCard(navigate, forcedReturn === 'instagram')); };
+  const onNews = event => {
+    if (!disposed && event.detail && newsCard.isConnected) updateNewsCard(newsCard, event.detail, navigate);
+  };
   const onSeen = event => {
     if (disposed) return;
     const service = event?.detail?.service || '';
-    if (service === 'youtube') placeCard(stack, cards, 'youtube', youtubeCard(navigate, forcedReturn === 'youtube'));
+    if (service === 'youtube') syncLocalCards();
     if (service === 'x') afterPaint(updateXFromCache);
+    if (service === 'instagram') afterPaint(updateInstagramFromCache);
   };
-  const onHeroReturn = () => {
-    if (disposed || !forcedReturn) return;
-    const previous = forcedReturn; forcedReturn = '';
-    if (previous === 'twitch') placeCard(stack, cards, 'twitch', twitchCard(navigate, false));
-    if (previous === 'instagram') placeCard(stack, cards, 'instagram', instagramCard(navigate, false));
-    if (previous === 'youtube') placeCard(stack, cards, 'youtube', youtubeCard(navigate, false));
-    if (previous === 'x') afterPaint(updateXFromCache);
-  };
+  const onInstagramAccounts = () => { if (!disposed) afterPaint(updateInstagramFromCache); };
   const onVisibility = () => {
-    if (document.hidden) { hiddenAt = Date.now(); return; }
-    if (hiddenAt && Date.now() - hiddenAt >= 60 * 1000) { hiddenAt = 0; afterPaint(() => { updateWeather(false); updateNews(false); updateXFromCache(); }); }
+    if (document.hidden) {
+      hiddenAt = Date.now();
+      return;
+    }
+    if (hiddenAt && Date.now() - hiddenAt >= 60 * 1000) {
+      hiddenAt = 0;
+      afterPaint(() => {
+        syncLocalCards();
+        updateWeather(false);
+        updateNews(false);
+        updateXFromCache();
+        updateInstagramFromCache();
+        updateDiscover();
+      });
+    }
   };
   const onNavigate = () => cleanupHome();
   window.addEventListener('pdv2:current-location-updated', onCurrentWeather);
   window.addEventListener('pdv2:weather-cache-updated', onWeatherCache);
   window.addEventListener('pdv2:recommendations-updated', onNews);
-  window.addEventListener('pdv2:instagram-story-cache-updated', onStory);
   window.addEventListener('pdv2:service-seen', onSeen);
-  window.addEventListener('pdv2:hero-return-finished', onHeroReturn);
+  window.addEventListener('pdv2:instagram-accounts-changed', onInstagramAccounts);
   document.addEventListener('visibilitychange', onVisibility, { passive: true });
   window.addEventListener('pdv2:before-navigate', onNavigate, { once: true });
   cleanupHome = () => {
-    if (disposed) return; disposed = true;
+    if (disposed) return;
+    disposed = true;
     window.removeEventListener('pdv2:current-location-updated', onCurrentWeather);
     window.removeEventListener('pdv2:weather-cache-updated', onWeatherCache);
     window.removeEventListener('pdv2:recommendations-updated', onNews);
-    window.removeEventListener('pdv2:instagram-story-cache-updated', onStory);
     window.removeEventListener('pdv2:service-seen', onSeen);
-    window.removeEventListener('pdv2:hero-return-finished', onHeroReturn);
+    window.removeEventListener('pdv2:instagram-accounts-changed', onInstagramAccounts);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pdv2:before-navigate', onNavigate);
   };
