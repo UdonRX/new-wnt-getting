@@ -23,7 +23,7 @@ const DIRECT_PUBLISHER_FETCH_TIMEOUT_MS = 2200;
 const RESOLVED_PUBLISHER_FETCH_TIMEOUT_MS = 1200;
 const MAX_REDIRECTS = 3;
 const SUMMARY_MIN_CHARS = 12;
-const SUMMARY_TARGET_MAX_CHARS = 55;
+const SUMMARY_TARGET_MAX_CHARS = 62;
 const SUMMARY_HARD_MAX_CHARS = 90;
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
@@ -474,7 +474,7 @@ function fastPrompt(body = {}, repairReason = '') {
     body.category ? `カテゴリ: ${clean(body.category, 160)}` : '',
     `記事冒頭（最大${FAST_INPUT_LIMIT}文字）:`, firstChars(body.description, FAST_INPUT_LIMIT), '',
     '上の文章だけを根拠に、日本語で要約してください。',
-    'hは16〜32文字。c/b/iは各20〜55文字を目標に1文で、必ず句点で完結させてください。',
+    'hは16〜32文字。c/b/iは各28〜62文字を目標に1文で、必ず句点で完結させてください。',
     'cは最重要の具体的事実、bは背景・方法・特徴、iは意味・影響・今後を記述してください。',
     '商品名・企業名・型番・規格名（例: Amazon、REDMI Watch、AMOLED、USB Type-C）は原表記の英字のままで構いません。',
     '本文にない推測、一般論、補完は禁止です。'
