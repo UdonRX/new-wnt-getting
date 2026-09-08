@@ -1,6 +1,7 @@
-import { state } from '../../app/store.js';
-import { el } from '../../shared/dom.js';
+import { state, update } from '../../app/store.js';
+import { el, openSheet, showToast } from '../../shared/dom.js';
 import { attachSwipe } from '../../shared/gestures.js';
+import { geocodeJapan } from './weather-api.js';
 import { fetchWeatherBundle } from './weather-sources.js';
 import {
   readCurrentWeatherLocation,
@@ -20,6 +21,62 @@ function dotsHtml(count, index) {
 
 function cacheIsFresh(cache) {
   return Boolean(cache?.model && Date.now() - Number(cache.at || 0) < WEATHER_TTL);
+}
+
+function openLocationAdd(onDone) {
+  const wrap = el('div');
+  let sheet;
+
+  const field = el('div', { class: 'field' });
+  field.append(el('label', { text: '都道府県・市区町村' }));
+  const input = el('input', { placeholder: '例：香川、高松、京都市' });
+  field.append(input);
+  wrap.append(field);
+
+  const results = el('div', { class: 'list' });
+  wrap.append(results);
+
+  const search = async () => {
+    results.innerHTML = '<div class="loading">検索中...</div>';
+    try {
+      const found = await geocodeJapan(input.value.trim());
+      results.replaceChildren();
+
+      found.forEach(place => {
+        const button = el('button', { class: 'list-item', type: 'button' });
+        button.append(
+          el('div', { class: 'list-item-title', text: place.displayName }),
+          el('div', { class: 'list-meta', text: `${place.lat.toFixed(3)}, ${place.lon.toFixed(3)}` })
+        );
+        button.onclick = () => {
+          const added = {
+            name: place.displayName.split(' / ')[0],
+            lat: place.lat,
+            lon: place.lon,
+            jmaCode: place.jmaCode
+          };
+          const next = [...(state.weatherLocations || []), added];
+          update('weatherLocations', next);
+          sheet?.close();
+          showToast('地域を追加しました');
+          onDone?.(added);
+        };
+        results.append(button);
+      });
+
+      if (!found.length) results.append(el('div', { class: 'empty', text: '地域が見つかりませんでした' }));
+    } catch (error) {
+      results.replaceChildren(el('div', { class: 'error-box', text: error?.message || '地域を検索できませんでした' }));
+    }
+  };
+
+  input.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    search();
+  });
+  wrap.append(el('button', { class: 'primary-button full-button', type: 'button', text: '検索', onclick: search }));
+  sheet = openSheet(wrap, { title: '地域を追加' });
 }
 
 export async function renderWeatherDetail(root, { navigate }) {
@@ -79,6 +136,16 @@ export async function renderWeatherDetail(root, { navigate }) {
     }
   };
 
+  const attachLocationSwipe = node => {
+    const list = pages();
+    if (list.length <= 1) return;
+    attachSwipe(node, {
+      left: () => setPage(pageIndex + 1),
+      right: () => setPage(pageIndex - 1),
+      threshold: 48
+    });
+  };
+
   const render = () => {
     if (disposed) return;
     const { list, location } = pageAt();
@@ -88,20 +155,18 @@ export async function renderWeatherDetail(root, { navigate }) {
     screen.replaceChildren();
 
     const tools = el('div', { class: 'wd-tools' });
-    const manage = el('button', { type: 'button', class: 'wd-tool-button', 'aria-label': '地域を管理', text: '＋' });
+    const manage = el('button', { type: 'button', class: 'wd-tool-button', 'aria-label': '地域を追加', text: '＋' });
     const refresh = el('button', { type: 'button', class: 'wd-tool-button', 'aria-label': '天気を更新', text: '↻' });
-    manage.onclick = () => navigate('weather', { source: 'weather-detail-manage' });
+    manage.onclick = () => openLocationAdd(() => {
+      pageIndex = Math.max(0, pages().length - 1);
+      try { localStorage.setItem(PAGE_KEY, String(pageIndex)); } catch {}
+      render();
+    });
     refresh.onclick = () => refreshLocation(location, true);
     tools.append(manage, refresh);
 
     const hero = el('section', { class: 'wd-hero', html: currentHeroHtml(location, model) });
-    if (list.length > 1) {
-      attachSwipe(hero, {
-        left: () => setPage(pageIndex + 1),
-        right: () => setPage(pageIndex - 1),
-        threshold: 48
-      });
-    }
+    attachLocationSwipe(hero);
 
     screen.append(tools, hero);
 
@@ -116,6 +181,7 @@ export async function renderWeatherDetail(root, { navigate }) {
 
     const hourly = el('section', { class: 'wd-flat-section wd-now-hours', html: currentHoursHtml(model) });
     const weekly = el('section', { class: 'wd-flat-section wd-week-forecast', html: weekHtml(model) });
+    attachLocationSwipe(weekly);
     const dots = el('div', { class: 'wd-dot-host', html: dotsHtml(list.length, pageIndex) });
     screen.append(hourly, weekly, dots);
     root.replaceChildren(screen);

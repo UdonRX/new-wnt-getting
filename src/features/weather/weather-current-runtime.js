@@ -4,30 +4,35 @@ import {
   refreshCurrentWeatherLocationName
 } from './weather-current-location.js';
 
+const LOCATION_REFRESH_AGE = 10 * 60 * 1000;
 let running = false;
+
+function locationIsStale(location) {
+  if (!location) return true;
+  const locatedAt = Number(location.locatedAt || 0);
+  return !locatedAt || Date.now() - locatedAt >= LOCATION_REFRESH_AGE;
+}
+
+async function runRefresh() {
+  if (running) return;
+  running = true;
+  try { await refreshCurrentWeatherLocation({ refreshWeather: true }); }
+  finally { running = false; }
+}
 
 function schedule() {
   if (running) return;
   const cached = readCurrentWeatherLocation();
 
-  // Once a valid position has been saved, do not ask Safari for location again
-  // automatically. Reuse it immediately and resolve its visible place name in
-  // the background. A fresh position can still be requested explicitly from
-  // the Weather screen's refresh action.
-  if (cached) {
-    if (!cached.name || cached.name === '現在地') {
-      refreshCurrentWeatherLocationName(cached).catch(() => {});
-    }
-    return;
+  // Keep cached current weather/location instant, but refresh stale coordinates
+  // in the background so the left-most Weather page and Home weather follow
+  // the device's actual current location after the user moves.
+  if (cached && (!cached.name || cached.name === '現在地')) {
+    refreshCurrentWeatherLocationName(cached).catch(() => {});
   }
+  if (!locationIsStale(cached)) return;
 
-  const run = async () => {
-    if (running || readCurrentWeatherLocation()) return;
-    running = true;
-    try { await refreshCurrentWeatherLocation({ refreshWeather: true }); }
-    finally { running = false; }
-  };
-
+  const run = () => runRefresh().catch(() => {});
   if ('requestIdleCallback' in window) requestIdleCallback(run, { timeout: 1200 });
   else setTimeout(run, 80);
 }
@@ -37,8 +42,5 @@ else window.addEventListener('pdv2:booted', schedule, { once: true });
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
-  const cached = readCurrentWeatherLocation();
-  if (cached && (!cached.name || cached.name === '現在地')) {
-    refreshCurrentWeatherLocationName(cached).catch(() => {});
-  }
+  schedule();
 }, { passive: true });

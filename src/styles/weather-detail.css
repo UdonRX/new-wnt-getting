@@ -21,10 +21,10 @@ body:has(.weather-detail-screen) {
   max-height: 100dvh !important;
   box-sizing: border-box;
   display: grid;
-  grid-template-rows: auto minmax(0,1fr) auto auto auto;
-  align-content: stretch;
-  gap: clamp(2px,.45dvh,5px);
-  padding: calc(env(safe-area-inset-top) + 6px) max(14px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 5px) max(14px, env(safe-area-inset-left));
+  grid-template-rows: auto auto auto auto minmax(12px,1fr);
+  align-content: start;
+  gap: clamp(2px,.4dvh,4px);
+  padding: calc(env(safe-area-inset-top) + 2px) max(14px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 5px) max(14px, env(safe-area-inset-left));
   overflow: hidden !important;
   overscroll-behavior: none;
   color: #fff;
@@ -39,25 +39,30 @@ body:has(.weather-detail-screen) {
 .weather-detail-screen[data-wx="snow"] { --wd-accent:#a9d5e6; --wd-accent2:#d8eef5; --wd-deep:#274454; }
 .weather-detail-screen[data-wx="night"] { --wd-accent:#5669bd; --wd-accent2:#7868bf; --wd-deep:#181c43; }
 
+body.pdv2-hero-detail:has(.weather-detail-screen) .pdv2-hero-close,
+body.pdv2-hero-detail:has(.news-today-screen) .pdv2-hero-close {
+  display: none !important;
+}
+
 .wd-tools {
-  min-height: 38px;
-  height: 38px;
+  min-height: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 7px;
-  padding-right: 52px;
+  padding-right: 0;
 }
 .wd-tool-button {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   color: rgba(255,255,255,.92);
   background: rgba(255,255,255,.10);
   border: 1px solid rgba(255,255,255,.12);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  font-size: 21px;
+  font-size: 20px;
 }
 
 .wd-hero {
@@ -65,8 +70,8 @@ body:has(.weather-detail-screen) {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 1px 3px 3px;
+  justify-content: flex-start;
+  padding: 0 3px 3px;
   touch-action: pan-y;
   user-select: none;
   -webkit-user-select: none;
@@ -127,7 +132,8 @@ body:has(.weather-detail-screen) {
 .wd-metrics-flat small { font-size: 8px; color: rgba(255,255,255,.58); }
 .wd-metrics-flat strong { margin-top: 2px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.wd-dot-host { min-height: 12px; height: 12px; display: grid; place-items: center; margin: 0; }
+.wd-dot-host { min-height: 12px; height: 12px; display: grid; place-items: center; align-self: end; margin: 0; }
+.weather-detail-screen:has(.wd-loading-flat) .wd-dot-host { grid-row: 5; }
 .wd-dots { display: flex; gap: 6px; align-items: center; justify-content: center; }
 .wd-dots span { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.28); transition: transform .18s ease, background .18s ease; }
 .wd-dots span.active { background: #fff; transform: scale(1.35); }
@@ -151,6 +157,9 @@ body:has(.weather-detail-screen) {
 .wd-week-forecast {
   margin: 0;
   padding: 0;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .wd-week-card {
   margin: 0;
@@ -265,8 +274,8 @@ body.pdv2-hero-detail .pdv2-hero-close {
 
 @media (max-width:390px), (max-height:760px) {
   .weather-detail-screen { padding-left: 12px; padding-right: 12px; gap: 1px; }
-  .wd-tools { min-height:34px; height:34px; }
-  .wd-tool-button { width:34px; height:34px; font-size:19px; }
+  .wd-tools { min-height:32px; height:32px; }
+  .wd-tool-button { width:32px; height:32px; font-size:18px; }
   .wd-current-icon { flex-basis: 62px; width: 62px; min-height:58px; }
   .wd-current-icon .weather-glyph { width: 60px; height: 60px; }
   .wd-temp-block strong { font-size: clamp(46px,14vw,60px); }
