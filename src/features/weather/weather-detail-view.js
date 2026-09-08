@@ -61,13 +61,13 @@ function metricsHtml(model) {
 
 function weatherGlyph(code) {
   const c = Number(code);
-  if (c <= 2) return '☀︎';
-  if (c === 3) return '☁︎';
+  if (c <= 2) return '☀';
+  if (c === 3) return '☁';
   if ([45, 48].includes(c)) return '≋';
-  if ((c >= 71 && c <= 77) || (c >= 85 && c <= 86)) return '❄︎';
-  if (c >= 95) return '⚡︎';
-  if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return '☂︎';
-  return '☁︎';
+  if ((c >= 71 && c <= 77) || (c >= 85 && c <= 86)) return '❄';
+  if (c >= 95) return '⚡';
+  if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) return '☂';
+  return '☁';
 }
 
 function threeDayRows(model) {
@@ -100,7 +100,7 @@ function graphHtml(rows) {
     const date = new Date(point.time);
     const hour = date.getHours();
     const timeLabel = hour === 0 || index === 0 ? `${date.getMonth() + 1}/${date.getDate()} ${hour}時` : `${hour}時`;
-    return `<text class="wd-glyph" x="${point.x}" y="${point.y - 14}">${weatherGlyph(point.code)}</text><circle cx="${point.x}" cy="${point.y}" r="2.4"/><text class="wd-temp-label" x="${point.x}" y="${point.y + 17}">${Math.round(point.temp)}°</text><text class="wd-time-label" x="${point.x}" y="148">${timeLabel}</text>${point.rain >= .1 ? `<text class="wd-rain-label" x="${point.x}" y="164">${point.rain.toFixed(1)}mm</text>` : ''}`;
+    return `<text class="wd-glyph" x="${point.x}" y="${point.y - 18}">${weatherGlyph(point.code)}</text><circle cx="${point.x}" cy="${point.y}" r="2.4"/><text class="wd-temp-label" x="${point.x}" y="${point.y + 17}">${Math.round(point.temp)}°</text><text class="wd-time-label" x="${point.x}" y="148">${timeLabel}</text>${point.rain >= .1 ? `<text class="wd-rain-label" x="${point.x}" y="164">${point.rain.toFixed(1)}mm</text>` : ''}`;
   }).join('');
   return `<div class="wd-graph wd-graph-scroll" aria-label="今日から明後日までの時間別の気温・天気・降水量"><svg viewBox="0 0 ${width} 170" width="${width}" height="170" preserveAspectRatio="xMinYMid meet"><polyline points="${line}"/>${labels}</svg></div>`;
 }
