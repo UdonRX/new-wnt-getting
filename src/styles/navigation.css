@@ -9,6 +9,18 @@
   padding-bottom: calc(var(--nav-total) + 16px);
 }
 
+/* X / Instagram share the twitter screen, and Wikipedia no longer use the legacy bottom tabs. */
+body.pdv2-navless {
+  --nav-height: 0px;
+  --nav-total: env(safe-area-inset-bottom);
+}
+body.pdv2-navless #app-main {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+body.pdv2-navless .bottom-nav {
+  display: none !important;
+}
+
 .bottom-nav {
   position: fixed !important;
   z-index: 300 !important;

@@ -5,13 +5,28 @@
   margin: 0;
   padding: 0 !important;
 }
+html:has(.weather-detail-screen),
+body:has(.weather-detail-screen) {
+  height: 100%;
+  overflow: hidden !important;
+}
 
 .weather-detail-screen {
   --wd-accent: #8398aa;
   --wd-accent2: #b1bcc5;
   --wd-deep: #22303a;
+  width: 100%;
+  height: 100dvh !important;
   min-height: 100dvh !important;
-  padding: calc(env(safe-area-inset-top) + 10px) max(16px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 18px) max(16px, env(safe-area-inset-left));
+  max-height: 100dvh !important;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto minmax(0,1fr) auto auto auto;
+  align-content: stretch;
+  gap: clamp(2px,.45dvh,5px);
+  padding: calc(env(safe-area-inset-top) + 6px) max(14px, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 5px) max(14px, env(safe-area-inset-left));
+  overflow: hidden !important;
+  overscroll-behavior: none;
   color: #fff;
   background:
     radial-gradient(110% 58% at 82% 0, color-mix(in srgb, var(--wd-accent2) 36%, transparent), transparent 70%),
@@ -25,91 +40,94 @@
 .weather-detail-screen[data-wx="night"] { --wd-accent:#5669bd; --wd-accent2:#7868bf; --wd-deep:#181c43; }
 
 .wd-tools {
-  min-height: 44px;
+  min-height: 38px;
+  height: 38px;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding-right: 54px;
+  gap: 7px;
+  padding-right: 52px;
 }
 .wd-tool-button {
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
   color: rgba(255,255,255,.92);
   background: rgba(255,255,255,.10);
   border: 1px solid rgba(255,255,255,.12);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  font-size: 23px;
+  font-size: 21px;
 }
 
 .wd-hero {
-  min-height: min(42dvh, 360px);
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 8px 4px 12px;
+  padding: 1px 3px 3px;
   touch-action: pan-y;
   user-select: none;
   -webkit-user-select: none;
 }
 .wd-place {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 760;
   letter-spacing: .02em;
   color: rgba(255,255,255,.78);
-  margin-bottom: 12px;
+  margin-bottom: 5px;
 }
-.wd-current-row { display: flex; align-items: center; gap: 14px; }
+.wd-current-row { display: flex; align-items: center; gap: 10px; }
 .wd-current-icon {
-  flex: 0 0 96px;
-  width: 96px;
-  min-height: 92px;
+  flex: 0 0 74px;
+  width: 74px;
+  min-height: 68px;
   display: grid;
   place-items: center;
   color: rgba(255,255,255,.98);
-  filter: drop-shadow(0 10px 22px rgba(0,0,0,.12));
+  filter: drop-shadow(0 8px 18px rgba(0,0,0,.12));
 }
-.wd-current-icon .weather-glyph { width: 88px; height: 88px; stroke-width: 1.55; }
+.wd-current-icon .weather-glyph { width: 70px; height: 70px; stroke-width: 1.55; }
 .wd-current-placeholder { opacity: .56; }
 .wd-temp-block { min-width: 0; }
 .wd-temp-block strong {
   display: block;
-  font-size: clamp(58px, 18vw, 82px);
+  font-size: clamp(50px, 15vw, 67px);
   line-height: .88;
   font-weight: 250;
   letter-spacing: -.07em;
 }
 .wd-temp-block small {
   display: block;
-  margin-top: 9px;
-  font-size: 13px;
+  margin-top: 5px;
+  font-size: 12px;
   font-weight: 650;
   color: rgba(255,255,255,.72);
 }
 .wd-summary {
   max-width: 36em;
-  margin: 18px 0 0;
-  font-size: 15px;
-  line-height: 1.55;
+  margin: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.34;
   font-weight: 680;
   color: rgba(255,255,255,.94);
 }
 .wd-metrics-flat {
   display: grid;
   grid-template-columns: repeat(4,minmax(0,1fr));
-  gap: 8px;
-  margin-top: 18px;
-  padding-top: 14px;
+  gap: 6px;
+  margin-top: 7px;
+  padding-top: 7px;
   border-top: 1px solid rgba(255,255,255,.12);
 }
 .wd-metrics-flat > div { min-width: 0; }
 .wd-metrics-flat small,
 .wd-metrics-flat strong { display: block; }
-.wd-metrics-flat small { font-size: 9px; color: rgba(255,255,255,.58); }
-.wd-metrics-flat strong { margin-top: 4px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wd-metrics-flat small { font-size: 8px; color: rgba(255,255,255,.58); }
+.wd-metrics-flat strong { margin-top: 2px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.wd-dot-host { min-height: 18px; display: grid; place-items: center; margin: -4px 0 8px; }
+.wd-dot-host { min-height: 12px; height: 12px; display: grid; place-items: center; margin: 0; }
 .wd-dots { display: flex; gap: 6px; align-items: center; justify-content: center; }
 .wd-dots span { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.28); transition: transform .18s ease, background .18s ease; }
 .wd-dots span.active { background: #fff; transform: scale(1.35); }
@@ -126,27 +144,28 @@
   box-shadow: none;
 }
 .wd-now-hours {
-  margin: 4px 0 18px;
+  margin: 0;
   padding: 0;
   overflow: visible;
 }
 .wd-week-forecast {
   margin: 0;
-  padding: 0 0 6px;
+  padding: 0;
 }
 .wd-week-card {
   margin: 0;
-  padding: 0 1px 8px;
+  padding: 0 1px;
   overflow: visible;
 }
 
 .wd-graph {
-  min-height: 178px;
+  min-height: 132px;
+  height: 132px;
 }
 .wd-graph-scroll {
   width: calc(100% + 2px);
   margin-inline: -1px;
-  padding: 2px 0 3px;
+  padding: 0;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
@@ -158,8 +177,10 @@
 .wd-graph svg {
   display: block;
   max-width: none;
-  height: 178px;
+  height: 132px;
   overflow: visible;
+  transform: translateY(-10px);
+  transform-origin: top left;
 }
 .wd-graph polyline {
   fill: none;
@@ -177,23 +198,24 @@
 .wd-temp-label { fill: rgba(255,255,255,.96); font-size: 9px; font-weight: 760; }
 .wd-time-label { fill: rgba(255,255,255,.55); font-size: 8px; }
 .wd-rain-label { fill: #8ed7ff; font-size: 7px; font-weight: 760; }
-.wd-graph-empty { padding: 42px 12px; text-align: center; color: rgba(255,255,255,.56); font-size: 11px; }
+.wd-graph-empty { padding: 24px 12px; text-align: center; color: rgba(255,255,255,.56); font-size: 11px; }
 
 .wd-week-grid {
   display: grid;
   grid-template-columns: repeat(7,minmax(39px,1fr));
   gap: 3px;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
-  padding: 6px 0 0;
+  padding: 1px 0 0;
 }
 .wd-week-grid::-webkit-scrollbar { display: none; }
 .wd-week-day {
   min-width: 39px;
   text-align: center;
   display: grid;
-  grid-template-rows: auto auto 104px auto;
-  gap: 4px;
+  grid-template-rows: auto auto 68px auto;
+  gap: 2px;
 }
 .wd-week-date { font-size: 8px; color: rgba(255,255,255,.52); }
 .wd-week-high,
@@ -213,8 +235,8 @@
   content: '';
   position: absolute;
   left: 50%;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   transform: translate(-50%,-50%);
   border-radius: 50%;
   background: rgba(255,255,255,.94);
@@ -230,10 +252,10 @@
   border-radius: 50%;
   color: #fff;
   background: color-mix(in srgb, var(--wd-deep) 74%, transparent);
-  font-size: 15px;
+  font-size: 14px;
 }
 
-.wd-loading-flat { padding: 28px 0; text-align: center; color: rgba(255,255,255,.55); font-size: 11px; }
+.wd-loading-flat { min-height: 0; padding: 18px 0; text-align: center; color: rgba(255,255,255,.55); font-size: 11px; }
 body.pdv2-hero-detail .weather-detail-screen { min-height: 100dvh !important; }
 body.pdv2-hero-detail .pdv2-hero-close {
   background: rgba(20,28,35,.44);
@@ -241,12 +263,17 @@ body.pdv2-hero-detail .pdv2-hero-close {
   color: #fff;
 }
 
-@media (max-width:390px) {
-  .weather-detail-screen { padding-left: 14px; padding-right: 14px; }
-  .wd-hero { min-height: min(41dvh, 330px); }
-  .wd-current-icon { flex-basis: 86px; width: 86px; }
-  .wd-current-icon .weather-glyph { width: 78px; height: 78px; }
-  .wd-summary { font-size: 14px; }
-  .wd-metrics-flat { gap: 5px; }
+@media (max-width:390px), (max-height:760px) {
+  .weather-detail-screen { padding-left: 12px; padding-right: 12px; gap: 1px; }
+  .wd-tools { min-height:34px; height:34px; }
+  .wd-tool-button { width:34px; height:34px; font-size:19px; }
+  .wd-current-icon { flex-basis: 62px; width: 62px; min-height:58px; }
+  .wd-current-icon .weather-glyph { width: 60px; height: 60px; }
+  .wd-temp-block strong { font-size: clamp(46px,14vw,60px); }
+  .wd-summary { font-size: 12px; line-height:1.28; margin-top:5px; }
+  .wd-metrics-flat { gap: 4px; margin-top:5px; padding-top:5px; }
+  .wd-graph,.wd-graph svg { height: 116px; min-height:116px; }
+  .wd-graph svg { transform:translateY(-15px); }
   .wd-week-grid { gap: 1px; }
+  .wd-week-day { grid-template-rows:auto auto 56px auto; gap:1px; }
 }

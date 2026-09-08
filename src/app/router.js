@@ -18,6 +18,7 @@ const WEATHER_META = {
   night: '#20254f'
 };
 const WEATHER_KINDS = new Set(Object.keys(WEATHER_META));
+const NAVLESS_SCREENS = new Set(['twitter', 'wikipedia']);
 
 const featureColorKey = screen => {
   if (screen === 'media') return state.mediaMode;
@@ -46,10 +47,12 @@ export function renderNav(onNavigate) {
   const nav = document.getElementById('bottom-nav');
   if (!nav) return;
   clear(nav);
-  const hidden = state.screen === 'home' || document.body.classList.contains('pdv2-hero-detail');
+  const featureNavless = NAVLESS_SCREENS.has(state.screen);
+  const hidden = state.screen === 'home' || featureNavless || document.body.classList.contains('pdv2-hero-detail');
   nav.hidden = hidden;
   nav.setAttribute('aria-hidden', hidden ? 'true' : 'false');
   document.body.classList.toggle('pdv2-home-fullscreen', state.screen === 'home');
+  document.body.classList.toggle('pdv2-navless', featureNavless);
   if (hidden) return;
   NAV.forEach(([key, label, icon]) => {
     const button = el('button', {

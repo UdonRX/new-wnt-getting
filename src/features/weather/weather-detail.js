@@ -103,12 +103,12 @@ export async function renderWeatherDetail(root, { navigate }) {
       });
     }
 
-    const dots = el('div', { class: 'wd-dot-host', html: dotsHtml(list.length, pageIndex) });
-    screen.append(tools, hero, dots);
+    screen.append(tools, hero);
 
     if (!model) {
       const wait = el('div', { class: 'wd-loading-flat', text: location?.pending ? '現在地を取得中…' : '保存済み予報を確認中…' });
-      screen.append(wait);
+      const dots = el('div', { class: 'wd-dot-host', html: dotsHtml(list.length, pageIndex) });
+      screen.append(wait, dots);
       root.replaceChildren(screen);
       requestAnimationFrame(() => refreshLocation(location, false));
       return;
@@ -116,7 +116,8 @@ export async function renderWeatherDetail(root, { navigate }) {
 
     const hourly = el('section', { class: 'wd-flat-section wd-now-hours', html: currentHoursHtml(model) });
     const weekly = el('section', { class: 'wd-flat-section wd-week-forecast', html: weekHtml(model) });
-    screen.append(hourly, weekly);
+    const dots = el('div', { class: 'wd-dot-host', html: dotsHtml(list.length, pageIndex) });
+    screen.append(hourly, weekly, dots);
     root.replaceChildren(screen);
 
     if (!cacheIsFresh(cache)) requestAnimationFrame(() => refreshLocation(location, false));
