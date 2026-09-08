@@ -13,7 +13,7 @@ const { JSDOM } = jsdomPackage;
 const PRIMARY_MODEL = String(process.env.GEMINI_SUMMARY_MODEL || 'gemini-3.5-flash-lite').trim();
 const FAST_MODEL_TIMEOUT_MS = 2800;
 const FAST_INPUT_LIMIT = 380;
-const FAST_OUTPUT_TOKEN_LIMIT = 220;
+const FAST_OUTPUT_TOKEN_LIMIT = 280;
 const RSS_MIN_CHARS = 160;
 const RSS_MIN_SENTENCES = 2;
 const ARTICLE_MIN_CHARS = 180;
@@ -22,9 +22,9 @@ const GOOGLE_RESOLVE_STAGE_TIMEOUT_MS = 550;
 const DIRECT_PUBLISHER_FETCH_TIMEOUT_MS = 2200;
 const RESOLVED_PUBLISHER_FETCH_TIMEOUT_MS = 1200;
 const MAX_REDIRECTS = 3;
-const SUMMARY_MIN_CHARS = 12;
-const SUMMARY_TARGET_MAX_CHARS = 62;
-const SUMMARY_HARD_MAX_CHARS = 90;
+const SUMMARY_MIN_CHARS = 45;
+const SUMMARY_TARGET_MAX_CHARS = 82;
+const SUMMARY_HARD_MAX_CHARS = 96;
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const RSS_BOILERPLATE_RE = /(?:続きを読む(?:…|\.{3})?|続き(?:はこちら|を読む)|詳細(?:はこちら|を見る)|全文(?:はこちら|を読む)|記事(?:はこちら|を読む)|元記事(?:はこちら|を読む|で確認)|Read\s*more|More\s*details?)/gi;
@@ -474,7 +474,7 @@ function fastPrompt(body = {}, repairReason = '') {
     body.category ? `カテゴリ: ${clean(body.category, 160)}` : '',
     `記事冒頭（最大${FAST_INPUT_LIMIT}文字）:`, firstChars(body.description, FAST_INPUT_LIMIT), '',
     '上の文章だけを根拠に、日本語で要約してください。',
-    'hは16〜32文字。c/b/iは各28〜62文字を目標に1文で、必ず句点で完結させてください。',
+    'hは16〜32文字。c/b/iは各58〜82文字を目標に1文で、iPhone表示で約3行になる情報量にし、必ず句点で完結させてください。',
     'cは最重要の具体的事実、bは背景・方法・特徴、iは意味・影響・今後を記述してください。',
     '商品名・企業名・型番・規格名（例: Amazon、REDMI Watch、AMOLED、USB Type-C）は原表記の英字のままで構いません。',
     '本文にない推測、一般論、補完は禁止です。'
