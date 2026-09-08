@@ -23,6 +23,68 @@
   <style>
     /* Align the weather screen's first content row with the other top-level screens. */
     .weather-screen { margin-top: -8px; }
+
+    /* Reader AI summary: compact article-info hero only. Display-layer override; data/AI logic is untouched. */
+    .reader-story-card {
+      grid-template-rows: clamp(118px, 17dvh, 148px) auto auto !important;
+      align-content: start !important;
+      gap: clamp(6px, .8dvh, 9px) !important;
+    }
+    .reader-story-hero {
+      justify-content: flex-start !important;
+      padding: 11px 12px 12px !important;
+      border-radius: 18px !important;
+      background: #11161d !important;
+    }
+    .reader-story-hero-image,
+    .reader-story-hero-mesh,
+    .reader-story-hero-bottom,
+    .reader-story-category-badge,
+    .reader-story-source-mark {
+      display: none !important;
+    }
+    .reader-story-hero-top {
+      grid-template-columns: minmax(0, 1fr) 36px !important;
+      align-items: start !important;
+      gap: 10px !important;
+    }
+    .reader-story-source {
+      display: block !important;
+      min-width: 0 !important;
+    }
+    .reader-story-source-copy { gap: 2px !important; }
+    .reader-story-source-name { font-size: 12px !important; line-height: 1.2 !important; }
+    .reader-story-time { font-size: 9.5px !important; line-height: 1.2 !important; }
+    .reader-story-grid.reader-grid-fab {
+      width: 36px !important;
+      min-width: 36px !important;
+      height: 36px !important;
+      border-radius: 12px !important;
+    }
+    .reader-story-content {
+      gap: clamp(6px, .8dvh, 9px) !important;
+      overflow: visible !important;
+    }
+    .reader-story-title.reader-swipe-title {
+      position: absolute !important;
+      z-index: 3 !important;
+      top: calc(max(12px, calc(env(safe-area-inset-top) + 8px)) + 61px) !important;
+      left: max(30px, calc(env(safe-area-inset-left) + 26px)) !important;
+      right: max(30px, calc(env(safe-area-inset-right) + 26px)) !important;
+      margin: 0 !important;
+      font-size: clamp(17px, 4.8vw, 20px) !important;
+      line-height: 1.18 !important;
+      -webkit-line-clamp: 2 !important;
+      line-clamp: 2 !important;
+      pointer-events: none;
+    }
+    @media (max-height: 700px) {
+      .reader-story-card { grid-template-rows: 118px auto auto !important; }
+      .reader-story-title.reader-swipe-title {
+        top: calc(max(12px, calc(env(safe-area-inset-top) + 8px)) + 57px) !important;
+        font-size: 17px !important;
+      }
+    }
   </style>
 </head>
 <body>
