@@ -66,9 +66,35 @@ function compactText(value = '', max = 320) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+const IMAGE_TITLE_PLACEHOLDER_RE = /^(?:記事の要点を整理中…?|日本語タイトルを生成中…?|記事|—)$/;
+
+function originalArticleTitleFromTrace(articleId = '') {
+  const target = compactText(articleId, 700);
+  if (!target) return '';
+  const rows = traceBuffer();
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const entry = rows[index] || {};
+    const entryId = compactText(entry.articleId || entry.currentArticleId || '', 700);
+    if (entryId !== target) continue;
+    const candidate = compactText(entry.title || entry.currentTitle || '', 260);
+    if (candidate && !IMAGE_TITLE_PLACEHOLDER_RE.test(candidate)) return candidate;
+  }
+  return '';
+}
+
+function articleTitleOf(card) {
+  const articleId = compactText(card?.dataset?.articleId || card?.dataset?.key || '', 700);
+  const stored = compactText(card?.dataset?.readerOriginalTitle || '', 260);
+  if (stored && !IMAGE_TITLE_PLACEHOLDER_RE.test(stored)) return stored;
+  const traced = originalArticleTitleFromTrace(articleId);
+  if (traced) return traced;
+  const visible = compactText(card?.querySelector?.('[data-reader-title]')?.textContent || '', 260);
+  return IMAGE_TITLE_PLACEHOLDER_RE.test(visible) ? '' : visible;
+}
+
 function imageDiagnosticPayload(card, phase, imageUrl = '') {
   const articleId = compactText(card?.dataset?.articleId || card?.dataset?.key || '', 700);
-  const title = compactText(card?.querySelector?.('[data-reader-title]')?.textContent || '', 260);
+  const title = articleTitleOf(card);
   const source = compactText(card?.querySelector?.('.reader-story-source-name')?.textContent || '', 120);
   let imageHost = '';
   try { imageHost = new URL(String(imageUrl || '')).hostname; } catch {}
@@ -135,7 +161,7 @@ function resolveMissingHeroImage(card) {
   if (!link) return;
 
   const articleId = compactText(card.dataset.articleId || card.dataset.key || '', 700);
-  const title = compactText(card.querySelector('[data-reader-title]')?.textContent || '', 260);
+  const title = articleTitleOf(card);
   const source = compactText(card.querySelector('.reader-story-source-name')?.textContent || '', 120);
   card.dataset.readerImageResolve = 'pending';
 
