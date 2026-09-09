@@ -1,8 +1,10 @@
 const TRACE_LIMIT = 1200;
 const IMAGE_DIAGNOSTIC_ENDPOINT = '/api/reader-image-diagnostic';
 const IMAGE_RESOLVE_ENDPOINT = '/api/reader-image-resolve';
+const IMAGE_LAYOUT_STYLE_ID = 'pdv2-reader-image-layout-only';
 const imageDiagnosticSeen = new Set();
 const imageResolveInflight = new Map();
+const imageResolveCache = new Map();
 let imageDiagnosticsInstalled = false;
 let imageIntersectionObserver = null;
 let imageMutationObserver = null;
@@ -92,6 +94,46 @@ function articleTitleOf(card) {
   return IMAGE_TITLE_PLACEHOLDER_RE.test(visible) ? '' : visible;
 }
 
+function installReaderImageLayoutOnly() {
+  if (typeof document === 'undefined' || document.getElementById(IMAGE_LAYOUT_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = IMAGE_LAYOUT_STYLE_ID;
+  style.textContent = `
+    /* Reader image-only layout adjustment. Title/summary/action layout is intentionally untouched. */
+    .reader-screen.reader-focus-open .reader-story-hero {
+      overflow: visible !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-hero-image {
+      bottom: -22px !important;
+      z-index: 1 !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--contain {
+      object-fit: contain !important;
+      object-position: center center !important;
+      background: #0d1117 !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--cover {
+      object-fit: cover !important;
+      object-position: center center !important;
+    }
+    @media (max-height: 700px) {
+      .reader-screen.reader-focus-open .reader-story-hero-image {
+        bottom: -12px !important;
+      }
+    }
+  `;
+  (document.head || document.documentElement).append(style);
+}
+
+function setResolvedImageFit(image, imageKind = '') {
+  if (!image?.matches?.('img.reader-story-hero-image')) return;
+  const kind = compactText(imageKind || image.dataset.readerImageKind || '', 40);
+  if (kind) image.dataset.readerImageKind = kind;
+  const contain = kind === 'site-brand';
+  image.classList.toggle('reader-story-hero-image--contain', contain);
+  image.classList.toggle('reader-story-hero-image--cover', !contain);
+}
+
 function imageDiagnosticPayload(card, phase, imageUrl = '') {
   const articleId = compactText(card?.dataset?.articleId || card?.dataset?.key || '', 700);
   const title = articleTitleOf(card);
@@ -133,7 +175,7 @@ function articleLinkOf(card) {
   return /^https?:\/\//i.test(raw) ? raw : '';
 }
 
-function appendResolvedHeroImage(card, imageUrl) {
+function appendResolvedHeroImage(card, imageUrl, imageKind = '') {
   if (!card?.isConnected || !imageUrl || card.querySelector('img.reader-story-hero-image')) return false;
   const hero = card.querySelector('.reader-story-hero');
   if (!hero) return false;
@@ -144,6 +186,7 @@ function appendResolvedHeroImage(card, imageUrl) {
   image.loading = 'eager';
   image.decoding = 'async';
   image.referrerPolicy = 'no-referrer';
+  setResolvedImageFit(image, imageKind);
   image.addEventListener('load', () => {
     card.dataset.readerImageResolved = '1';
     card.dataset.readerImageFailed = '0';
@@ -163,12 +206,19 @@ function resolveMissingHeroImage(card) {
   const articleId = compactText(card.dataset.articleId || card.dataset.key || '', 700);
   const title = articleTitleOf(card);
   const source = compactText(card.querySelector('.reader-story-source-name')?.textContent || '', 120);
+  if (!title) return;
   card.dataset.readerImageResolve = 'pending';
+
+  const cached = imageResolveCache.get(link);
+  if (cached?.image) {
+    if (appendResolvedHeroImage(card, cached.image, cached.imageKind || '')) card.dataset.readerImageResolve = 'done';
+    return;
+  }
 
   let request = imageResolveInflight.get(link);
   if (!request) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 7000);
+    const timer = setTimeout(() => controller.abort(), 4500);
     request = fetch(IMAGE_RESOLVE_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -178,6 +228,15 @@ function resolveMissingHeroImage(card) {
     }).then(async response => {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      if (data?.image) {
+        imageResolveCache.set(link, {
+          image: compactText(data.image, 2200),
+          imageKind: compactText(data.imageKind || '', 40),
+          method: compactText(data.method || '', 120),
+          publisherUrl: compactText(data.publisherUrl || '', 700)
+        });
+        while (imageResolveCache.size > 80) imageResolveCache.delete(imageResolveCache.keys().next().value);
+      }
       return data;
     }).finally(() => {
       clearTimeout(timer);
@@ -189,7 +248,8 @@ function resolveMissingHeroImage(card) {
   request.then(data => {
     if (!card.isConnected) return;
     const imageUrl = compactText(data?.image || '', 2200);
-    if (imageUrl && appendResolvedHeroImage(card, imageUrl)) {
+    const imageKind = compactText(data?.imageKind || '', 40);
+    if (imageUrl && appendResolvedHeroImage(card, imageUrl, imageKind)) {
       card.dataset.readerImageResolve = 'done';
       readerTrace('hero-image-resolve-success', {
         articleId,
@@ -213,12 +273,16 @@ function resolveMissingHeroImage(card) {
 function observeImageCard(card) {
   if (!card?.matches?.('.reader-story-card') || card.dataset.readerImageObserved === '1') return;
   card.dataset.readerImageObserved = '1';
+  const existing = card.querySelector('img.reader-story-hero-image');
+  if (existing) setResolvedImageFit(existing, existing.dataset.readerImageKind || '');
   if (imageIntersectionObserver) {
     imageIntersectionObserver.observe(card);
     return;
   }
-  const image = card.querySelector('img.reader-story-hero-image');
-  if (!image && card.dataset.readerImageFailed !== '1') sendImageDiagnostic(card, 'missing-item-image');
+  if (!existing && card.dataset.readerImageFailed !== '1') {
+    sendImageDiagnostic(card, 'missing-item-image');
+    resolveMissingHeroImage(card);
+  }
 }
 
 function scanImageCards(root = document) {
@@ -229,20 +293,22 @@ function scanImageCards(root = document) {
 export function installReaderImageDiagnostics() {
   if (imageDiagnosticsInstalled || typeof document === 'undefined' || typeof window === 'undefined') return;
   imageDiagnosticsInstalled = true;
+  installReaderImageLayoutOnly();
 
   if (typeof IntersectionObserver !== 'undefined') {
     imageIntersectionObserver = new IntersectionObserver(entries => {
       for (const entry of entries) {
-        if (!entry.isIntersecting || entry.intersectionRatio < .45) continue;
+        if (!entry.isIntersecting) continue;
         const card = entry.target;
         const image = card.querySelector('img.reader-story-hero-image');
+        if (image) setResolvedImageFit(image, image.dataset.readerImageKind || '');
         if (!image && card.dataset.readerImageFailed !== '1') {
           sendImageDiagnostic(card, 'missing-item-image');
           resolveMissingHeroImage(card);
         }
         imageIntersectionObserver.unobserve(card);
       }
-    }, { threshold: [.45] });
+    }, { threshold: [0], rootMargin: '110% 0px 110% 0px' });
   }
 
   document.addEventListener('error', event => {
