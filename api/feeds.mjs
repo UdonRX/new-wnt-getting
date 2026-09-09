@@ -12,7 +12,9 @@ import xHistory, { isXHistoryRequest } from '../server/x-history.mjs';
 import { resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
 
 const READER_IMAGE_RESOLVE_TTL_MS = 30 * 60 * 1000;
+const READER_IMAGE_NEGATIVE_TTL_MS = 90 * 1000;
 const READER_IMAGE_RESOLVE_MAX = 180;
+const READER_IMAGE_GDELT_TIMEOUT_MS = 1700;
 const readerImageResolveCache = new Map();
 
 function first(value) {
@@ -53,7 +55,8 @@ function readerImageDiagnostic(req, res) {
 function imageResolveCacheGet(link) {
   const entry = readerImageResolveCache.get(link);
   if (!entry) return null;
-  if (Date.now() - Number(entry.at || 0) > READER_IMAGE_RESOLVE_TTL_MS) {
+  const ttl = entry.value?.image ? READER_IMAGE_RESOLVE_TTL_MS : READER_IMAGE_NEGATIVE_TTL_MS;
+  if (Date.now() - Number(entry.at || 0) > ttl) {
     readerImageResolveCache.delete(link);
     return null;
   }
@@ -71,6 +74,113 @@ function imageResolveCacheSet(link, value) {
 function hostOf(rawUrl = '') {
   try { return new URL(String(rawUrl || '')).hostname.toLowerCase(); }
   catch { return ''; }
+}
+
+function bareHost(rawHost = '') {
+  return String(rawHost || '').toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
+}
+
+function sameSiteHost(a = '', b = '') {
+  const aa = bareHost(a);
+  const bb = bareHost(b);
+  if (!aa || !bb) return false;
+  return aa === bb || aa.endsWith(`.${bb}`) || bb.endsWith(`.${aa}`);
+}
+
+function normalizeHeadline(value = '') {
+  return String(value || '').normalize('NFKC').toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function titleSimilarity(a = '', b = '') {
+  const aa = normalizeHeadline(a);
+  const bb = normalizeHeadline(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+  if (aa.length >= 12 && (aa.includes(bb) || bb.includes(aa))) {
+    return Math.min(0.96, Math.min(aa.length, bb.length) / Math.max(aa.length, bb.length) + 0.22);
+  }
+  const grams = value => {
+    const set = new Set();
+    for (let i = 0; i < value.length - 1; i += 1) set.add(value.slice(i, i + 2));
+    return set;
+  };
+  const ga = grams(aa);
+  const gb = grams(bb);
+  if (!ga.size || !gb.size) return 0;
+  let same = 0;
+  for (const token of ga) if (gb.has(token)) same += 1;
+  return (2 * same) / (ga.size + gb.size);
+}
+
+function gdeltQueryFromTitle(title = '') {
+  return String(title || '').normalize('NFKC')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[【】「」『』（）()〈〉《》“”"'’‘,:：;；!?！？。・／/|｜―—]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 180);
+}
+
+function safeHttpUrl(rawUrl = '') {
+  try {
+    const url = new URL(String(rawUrl || '').trim());
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch { return ''; }
+}
+
+async function resolveImageFromGdelt(title, publisherUrl = '') {
+  const query = gdeltQueryFromTitle(title);
+  if (query.length < 8) return { image: '', error: 'gdelt-query-too-short' };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), READER_IMAGE_GDELT_TIMEOUT_MS);
+  try {
+    const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=20&format=json&sort=HybridRel&timespan=72h`;
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json,text/plain,*/*',
+        'User-Agent': 'new-wnt-getting/1.0 (+reader-image-fallback)'
+      }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const json = await response.json();
+    const rows = Array.isArray(json?.articles) ? json.articles : [];
+    const publisherHost = hostOf(publisherUrl);
+    let best = null;
+
+    for (const row of rows) {
+      const image = safeHttpUrl(row?.socialimage || row?.image || row?.thumbnail || '');
+      if (!image) continue;
+      const candidateHost = bareHost(row?.domain || hostOf(row?.url));
+      const domainMatch = sameSiteHost(publisherHost, candidateHost);
+      const similarity = titleSimilarity(title, row?.title || '');
+      if (!domainMatch && similarity < 0.5) continue;
+      if (domainMatch && similarity < 0.18) continue;
+      const score = similarity + (domainMatch ? 0.45 : 0);
+      if (!best || score > best.score) {
+        best = {
+          image,
+          method: 'gdelt:socialimage',
+          score,
+          similarity,
+          candidateHost,
+          articleUrl: safeHttpUrl(row?.url || '')
+        };
+      }
+    }
+
+    return best || { image: '', error: rows.length ? 'gdelt-no-matching-image' : 'gdelt-no-results' };
+  } catch (error) {
+    return {
+      image: '',
+      error: error?.name === 'AbortError' ? 'gdelt-timeout' : (error?.message || String(error))
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function readerImageResolve(req, res) {
@@ -93,7 +203,8 @@ async function readerImageResolve(req, res) {
     console.info('[reader-image-resolve]', {
       ok: Boolean(cached.image), cached: true, articleId, source,
       imageHost: hostOf(cached.image), publisherHost: hostOf(cached.publisherUrl),
-      method: cached.method || ''
+      method: cached.method || '', fallback: cached.fallback || '',
+      fallbackError: cached.fallbackError || ''
     });
     res.setHeader('Cache-Control', 'private, max-age=300');
     return res.status(200).json({ ...cached, cached: true });
@@ -105,15 +216,50 @@ async function readerImageResolve(req, res) {
     image: compactLogValue(result?.sourceImage, 2200),
     method: compactLogValue(result?.sourceImageMethod, 120),
     publisherUrl: compactLogValue(result?.publisherUrl, 2200),
-    error: compactLogValue(result?.error, 240)
+    error: compactLogValue(result?.error, 240),
+    fallback: '',
+    fallbackError: ''
   };
+
+  if (!payload.image) {
+    const fallback = await resolveImageFromGdelt(title, payload.publisherUrl || link);
+    if (fallback.image) {
+      payload.image = compactLogValue(fallback.image, 2200);
+      payload.method = compactLogValue(fallback.method, 120);
+      payload.fallback = 'gdelt';
+      console.info('[reader-image-resolve:fallback]', {
+        ok: true,
+        articleId,
+        source,
+        publisherHost: hostOf(payload.publisherUrl),
+        imageHost: hostOf(payload.image),
+        method: payload.method,
+        candidateHost: fallback.candidateHost || '',
+        similarity: Number(Number(fallback.similarity || 0).toFixed(3)),
+        elapsedMs: Date.now() - started
+      });
+    } else {
+      payload.fallbackError = compactLogValue(fallback.error, 240);
+      console.warn('[reader-image-resolve:fallback]', {
+        ok: false,
+        articleId,
+        source,
+        publisherHost: hostOf(payload.publisherUrl),
+        reason: payload.fallbackError,
+        elapsedMs: Date.now() - started
+      });
+    }
+  }
+
   imageResolveCacheSet(link, payload);
   const log = {
     ok: Boolean(payload.image), cached: false, articleId, title, source,
     imageHost: hostOf(payload.image), publisherHost: hostOf(payload.publisherUrl),
     method: payload.method,
+    fallback: payload.fallback,
     elapsedMs: Date.now() - started,
-    error: payload.error
+    error: payload.error,
+    fallbackError: payload.fallbackError
   };
   if (payload.image) console.info('[reader-image-resolve]', log);
   else console.warn('[reader-image-resolve]', log);
