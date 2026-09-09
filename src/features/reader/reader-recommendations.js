@@ -1,6 +1,7 @@
 const RECOMMENDATION_TIMEOUT_MS = 7000;
 const RECOMMENDATION_API_VERSION = '4';
 export const RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v2';
+const HOME_RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v1';
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
 let recommendationInflight = null;
@@ -14,6 +15,9 @@ function itemTimestamp(item = {}) {
   }
   const parsed = new Date(item.pubDate || 0).getTime();
   return Number.isFinite(parsed) ? parsed : 0;
+}
+function sortLatest(items = []) {
+  return [...(Array.isArray(items) ? items : [])].sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
 }
 function compactItem(item = {}) {
   return {
@@ -98,19 +102,40 @@ export function clusterRecommendationItems(items = []) {
   }).sort((a, b) => b.score - a.score || b.latestAt - a.latestAt);
 }
 
+function homeTopicsFromItems(items = []) {
+  return sortLatest(items).map((item, index) => ({
+    id: `latest-${index}-${String(item?.id || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 24)}`,
+    title: item?.title || 'ニュース',
+    image: item?.image || '',
+    mediaCount: Math.max(1, Number(item?.gdeltIndependentSources || 0)),
+    leadId: item?.id || '',
+    category: item?.importance || item?._recommendationLabel || 'ニュース',
+    latestAt: itemTimestamp(item),
+    articleIds: item?.id ? [item.id] : [],
+    score: Number(item?.totalScore || 0)
+  }));
+}
+function syncHomeRecommendationSnapshot(snapshot) {
+  try { localStorage.setItem(HOME_RECOMMENDATION_SNAPSHOT_KEY, JSON.stringify(snapshot)); } catch {}
+}
+
 export function readRecommendationSnapshot() {
-  const snapshot = safeParse(localStorage.getItem(RECOMMENDATION_SNAPSHOT_KEY));
+  const snapshot = safeParse(localStorage.getItem(RECOMMENDATION_SNAPSHOT_KEY))
+    || safeParse(localStorage.getItem(HOME_RECOMMENDATION_SNAPSHOT_KEY));
   if (!snapshot?.items?.length) return null;
-  const cutoff = Date.now() - NEWS_WINDOW_MS, items = snapshot.items.filter(item => itemTimestamp(item) >= cutoff);
+  const cutoff = Date.now() - NEWS_WINDOW_MS;
+  const items = sortLatest(snapshot.items.filter(item => itemTimestamp(item) >= cutoff));
   if (!items.length) return null;
-  const topics = items.length === snapshot.items.length && Array.isArray(snapshot.topics) ? snapshot.topics : clusterRecommendationItems(items);
-  return { ...snapshot, items, topics, stale: Date.now() - Number(snapshot.at || 0) > SNAPSHOT_TTL_MS };
+  const normalized = { ...snapshot, items, topics: homeTopicsFromItems(items) };
+  syncHomeRecommendationSnapshot(normalized);
+  return { ...normalized, stale: Date.now() - Number(snapshot.at || 0) > SNAPSHOT_TTL_MS };
 }
 function writeRecommendationSnapshot(items) {
   const cutoff = Date.now() - NEWS_WINDOW_MS;
-  const compact = (Array.isArray(items) ? items : []).filter(item => itemTimestamp(item) >= cutoff).map(compactItem);
-  const snapshot = { at: Date.now(), items: compact, topics: clusterRecommendationItems(compact) };
+  const compact = sortLatest((Array.isArray(items) ? items : []).filter(item => itemTimestamp(item) >= cutoff).map(compactItem));
+  const snapshot = { at: Date.now(), items: compact, topics: homeTopicsFromItems(compact) };
   try { localStorage.setItem(RECOMMENDATION_SNAPSHOT_KEY, JSON.stringify(snapshot)); } catch {}
+  syncHomeRecommendationSnapshot(snapshot);
   window.dispatchEvent(new CustomEvent('pdv2:recommendations-updated', { detail: snapshot }));
   return snapshot;
 }
