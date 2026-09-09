@@ -11,4 +11,5 @@ import './features/reader/reader-list-ux.js?v=2210structure1';
 import './features/media/media-landscape-ui.js?v=2210structure1';
 import './shared/sheet-close-global.js?v=2210structure1';
 import './features/weather/weather-current-runtime.js?v=2210structure1';
+import './shared/reader-image-performance.js?v=2210imageperf1';
 import './main.js?v=2210structure1';
