@@ -2,6 +2,7 @@ const DIAGNOSTIC_ENDPOINT = '/api/reader-image-diagnostic';
 const observedCards = new WeakSet();
 const observedImages = new WeakSet();
 const reportedLoaded = new WeakSet();
+const activeCards = new WeakSet();
 const imageObservedAt = new WeakMap();
 const cardObservedAt = new WeakMap();
 let observer = null;
@@ -329,11 +330,11 @@ function scan(root = document) {
 
   if (root?.matches?.('img.reader-story-hero-image')) {
     const card = root.closest('.reader-story-card');
-    if (card) instrumentImage(root, card);
+    if (card && (!observer || activeCards.has(card))) instrumentImage(root, card);
   }
   root?.querySelectorAll?.('.reader-screen.reader-focus-open img.reader-story-hero-image').forEach(image => {
     const card = image.closest('.reader-story-card');
-    if (card) instrumentImage(image, card);
+    if (card && (!observer || activeCards.has(card))) instrumentImage(image, card);
   });
 }
 
@@ -354,6 +355,7 @@ export function installReaderImagePerformanceDiagnostics() {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         const card = entry.target;
+        activeCards.add(card);
         const image = card.querySelector('img.reader-story-hero-image');
         if (image) instrumentImage(image, card);
         else {
@@ -379,11 +381,11 @@ export function installReaderImagePerformanceDiagnostics() {
         needsScan = true;
         if (node.matches?.('img.reader-story-hero-image')) {
           const card = node.closest('.reader-story-card');
-          if (card) instrumentImage(node, card);
+          if (card && (!observer || activeCards.has(card))) instrumentImage(node, card);
         } else {
           node.querySelectorAll?.('img.reader-story-hero-image').forEach(image => {
             const card = image.closest('.reader-story-card');
-            if (card) instrumentImage(image, card);
+            if (card && (!observer || activeCards.has(card))) instrumentImage(image, card);
           });
         }
       }
