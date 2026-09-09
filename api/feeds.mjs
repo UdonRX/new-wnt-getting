@@ -9,6 +9,11 @@ import twitchFeed from '../server/twitch-feed.mjs';
 import twitchOauth from '../server/twitch-oauth.mjs';
 import weatherRain from '../server/weather-rain.mjs';
 import xHistory, { isXHistoryRequest } from '../server/x-history.mjs';
+import { resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
+
+const READER_IMAGE_RESOLVE_TTL_MS = 30 * 60 * 1000;
+const READER_IMAGE_RESOLVE_MAX = 180;
+const readerImageResolveCache = new Map();
 
 function first(value) {
   return Array.isArray(value) ? value[0] : value;
@@ -45,6 +50,77 @@ function readerImageDiagnostic(req, res) {
   return res.status(204).end();
 }
 
+function imageResolveCacheGet(link) {
+  const entry = readerImageResolveCache.get(link);
+  if (!entry) return null;
+  if (Date.now() - Number(entry.at || 0) > READER_IMAGE_RESOLVE_TTL_MS) {
+    readerImageResolveCache.delete(link);
+    return null;
+  }
+  return entry.value || null;
+}
+
+function imageResolveCacheSet(link, value) {
+  if (!link || !value) return;
+  readerImageResolveCache.set(link, { at: Date.now(), value });
+  while (readerImageResolveCache.size > READER_IMAGE_RESOLVE_MAX) {
+    readerImageResolveCache.delete(readerImageResolveCache.keys().next().value);
+  }
+}
+
+function hostOf(rawUrl = '') {
+  try { return new URL(String(rawUrl || '')).hostname.toLowerCase(); }
+  catch { return ''; }
+}
+
+async function readerImageResolve(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+  const body = requestBody(req);
+  const articleId = compactLogValue(body.articleId, 700);
+  const title = compactLogValue(body.title, 260);
+  const source = compactLogValue(body.source, 120);
+  const link = compactLogValue(body.link, 2200);
+  if (!/^https?:\/\//i.test(link)) {
+    console.warn('[reader-image-resolve]', { ok: false, articleId, source, reason: 'invalid-link' });
+    return res.status(400).json({ error: 'Invalid article link' });
+  }
+
+  const cached = imageResolveCacheGet(link);
+  if (cached) {
+    console.info('[reader-image-resolve]', {
+      ok: Boolean(cached.image), cached: true, articleId, source,
+      imageHost: hostOf(cached.image), publisherHost: hostOf(cached.publisherUrl),
+      method: cached.method || ''
+    });
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return res.status(200).json({ ...cached, cached: true });
+  }
+
+  const started = Date.now();
+  const result = await resolveSourcePublishedTime(link, { stageTimeoutMs: 2200 });
+  const payload = {
+    image: compactLogValue(result?.sourceImage, 2200),
+    method: compactLogValue(result?.sourceImageMethod, 120),
+    publisherUrl: compactLogValue(result?.publisherUrl, 2200),
+    error: compactLogValue(result?.error, 240)
+  };
+  imageResolveCacheSet(link, payload);
+  const log = {
+    ok: Boolean(payload.image), cached: false, articleId, title, source,
+    imageHost: hostOf(payload.image), publisherHost: hostOf(payload.publisherUrl),
+    method: payload.method,
+    elapsedMs: Date.now() - started,
+    error: payload.error
+  };
+  if (payload.image) console.info('[reader-image-resolve]', log);
+  else console.warn('[reader-image-resolve]', log);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  return res.status(200).json(payload);
+}
+
 const handlers = new Map([
   ['news-feed', newsFeed],
   ['instagram-profile', instagramProfile],
@@ -53,6 +129,7 @@ const handlers = new Map([
   ['instagram-stories', instagramStories],
   ['recommendations', recommendations],
   ['reader-image-diagnostic', readerImageDiagnostic],
+  ['reader-image-resolve', readerImageResolve],
   ['rss', rss],
   ['twitch-eventsub', twitchEventsub],
   ['twitch-feed', twitchFeed],

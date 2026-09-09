@@ -1,6 +1,8 @@
 const TRACE_LIMIT = 1200;
 const IMAGE_DIAGNOSTIC_ENDPOINT = '/api/reader-image-diagnostic';
+const IMAGE_RESOLVE_ENDPOINT = '/api/reader-image-resolve';
 const imageDiagnosticSeen = new Set();
+const imageResolveInflight = new Map();
 let imageDiagnosticsInstalled = false;
 let imageIntersectionObserver = null;
 let imageMutationObserver = null;
@@ -100,6 +102,88 @@ function sendImageDiagnostic(card, phase, imageUrl = '') {
   }).catch(() => {});
 }
 
+function articleLinkOf(card) {
+  const raw = card?.querySelector?.('a.reader-story-open[href]')?.href || '';
+  return /^https?:\/\//i.test(raw) ? raw : '';
+}
+
+function appendResolvedHeroImage(card, imageUrl) {
+  if (!card?.isConnected || !imageUrl || card.querySelector('img.reader-story-hero-image')) return false;
+  const hero = card.querySelector('.reader-story-hero');
+  if (!hero) return false;
+  const image = document.createElement('img');
+  image.className = 'reader-story-hero-image';
+  image.src = imageUrl;
+  image.alt = '';
+  image.loading = 'eager';
+  image.decoding = 'async';
+  image.referrerPolicy = 'no-referrer';
+  image.addEventListener('load', () => {
+    card.dataset.readerImageResolved = '1';
+    card.dataset.readerImageFailed = '0';
+    sendImageDiagnostic(card, 'resolved-on-demand', image.currentSrc || image.src || imageUrl);
+  }, { once: true });
+  hero.prepend(image);
+  return true;
+}
+
+function resolveMissingHeroImage(card) {
+  if (!card?.isConnected || typeof fetch !== 'function') return;
+  if (card.querySelector('img.reader-story-hero-image')) return;
+  if (card.dataset.readerImageResolve === 'pending' || card.dataset.readerImageResolve === 'done') return;
+  const link = articleLinkOf(card);
+  if (!link) return;
+
+  const articleId = compactText(card.dataset.articleId || card.dataset.key || '', 700);
+  const title = compactText(card.querySelector('[data-reader-title]')?.textContent || '', 260);
+  const source = compactText(card.querySelector('.reader-story-source-name')?.textContent || '', 120);
+  card.dataset.readerImageResolve = 'pending';
+
+  let request = imageResolveInflight.get(link);
+  if (!request) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 7000);
+    request = fetch(IMAGE_RESOLVE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ articleId, title, source, link }),
+      signal: controller.signal,
+      cache: 'no-store'
+    }).then(async response => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      return data;
+    }).finally(() => {
+      clearTimeout(timer);
+      if (imageResolveInflight.get(link) === request) imageResolveInflight.delete(link);
+    });
+    imageResolveInflight.set(link, request);
+  }
+
+  request.then(data => {
+    if (!card.isConnected) return;
+    const imageUrl = compactText(data?.image || '', 2200);
+    if (imageUrl && appendResolvedHeroImage(card, imageUrl)) {
+      card.dataset.readerImageResolve = 'done';
+      readerTrace('hero-image-resolve-success', {
+        articleId,
+        source,
+        method: compactText(data?.method || '', 120),
+        publisherUrl: compactText(data?.publisherUrl || '', 700),
+        imageUrl
+      });
+      return;
+    }
+    card.dataset.readerImageResolve = 'none';
+    sendImageDiagnostic(card, 'resolve-no-image');
+  }).catch(error => {
+    if (!card.isConnected) return;
+    card.dataset.readerImageResolve = 'error';
+    readerTrace('hero-image-resolve-error', { articleId, source, error: String(error?.name || 'Error') + ':' + String(error?.message || error) });
+    sendImageDiagnostic(card, 'resolve-request-error');
+  });
+}
+
 function observeImageCard(card) {
   if (!card?.matches?.('.reader-story-card') || card.dataset.readerImageObserved === '1') return;
   card.dataset.readerImageObserved = '1';
@@ -126,7 +210,10 @@ export function installReaderImageDiagnostics() {
         if (!entry.isIntersecting || entry.intersectionRatio < .45) continue;
         const card = entry.target;
         const image = card.querySelector('img.reader-story-hero-image');
-        if (!image && card.dataset.readerImageFailed !== '1') sendImageDiagnostic(card, 'missing-item-image');
+        if (!image && card.dataset.readerImageFailed !== '1') {
+          sendImageDiagnostic(card, 'missing-item-image');
+          resolveMissingHeroImage(card);
+        }
         imageIntersectionObserver.unobserve(card);
       }
     }, { threshold: [.45] });
