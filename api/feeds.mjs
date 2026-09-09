@@ -14,14 +14,17 @@ import { extractArticleImageFromHtml, resolveSourcePublishedTime } from '../lib/
 const READER_IMAGE_RESOLVE_TTL_MS = 30 * 60 * 1000;
 const READER_IMAGE_NEGATIVE_TTL_MS = 90 * 1000;
 const READER_IMAGE_RESOLVE_MAX = 180;
-const READER_IMAGE_GDELT_TIMEOUT_MS = 2600;
+const READER_IMAGE_GDELT_TIMEOUT_MS = 1400;
 const READER_IMAGE_DISCOVERY_RSS_TIMEOUT_MS = 1200;
 const READER_IMAGE_DISCOVERY_HOME_TIMEOUT_MS = 1400;
 const READER_IMAGE_DISCOVERY_INDEX_TIMEOUT_MS = 1100;
 const READER_IMAGE_DISCOVERY_ARTICLE_TIMEOUT_MS = 1600;
-const READER_IMAGE_DISCOVERY_INDEX_MAX = 5;
+const READER_IMAGE_DISCOVERY_INDEX_MAX = 8;
+const READER_IMAGE_DISCOVERY_PAGINATION_MAX = 4;
 const READER_IMAGE_DISCOVERY_MAX_BYTES = 512 * 1024;
+const READER_PUBLISHER_HOME_TTL_MS = 6 * 60 * 60 * 1000;
 const readerImageResolveCache = new Map();
+const readerPublisherHomepageCache = new Map();
 
 function first(value) {
   return Array.isArray(value) ? value[0] : value;
@@ -218,8 +221,49 @@ function sourceNameSimilarity(a = '', b = '') {
   return titleSimilarity(aa, bb);
 }
 
+function sourceAllowsAggregator(source = '') {
+  const key = normalizeHeadline(source);
+  return /(?:yahooニュース|yahoonews|googlenews|googleニュース|smartnews|スマートニュース|gunosy|グノシー)/i.test(key);
+}
+
+function isAggregatorHomepage(rawUrl = '') {
+  const host = bareHost(hostOf(rawUrl));
+  return host === 'news.yahoo.co.jp'
+    || host === 'news.google.com'
+    || host === 'smartnews.com'
+    || host === 'gunosy.com';
+}
+
+function publisherHomepageCacheKey(source = '') {
+  return normalizeHeadline(source).slice(0, 120);
+}
+
+function getCachedPublisherHomepage(source = '') {
+  const key = publisherHomepageCacheKey(source);
+  if (!key) return '';
+  const entry = readerPublisherHomepageCache.get(key);
+  if (!entry) return '';
+  if (Date.now() - Number(entry.at || 0) > READER_PUBLISHER_HOME_TTL_MS) {
+    readerPublisherHomepageCache.delete(key);
+    return '';
+  }
+  return safeHttpUrl(entry.homepage || '');
+}
+
+function setCachedPublisherHomepage(source = '', homepage = '') {
+  const key = publisherHomepageCacheKey(source);
+  const url = safeHttpUrl(homepage);
+  if (!key || !url) return;
+  readerPublisherHomepageCache.set(key, { at: Date.now(), homepage: url });
+  while (readerPublisherHomepageCache.size > 120) {
+    readerPublisherHomepageCache.delete(readerPublisherHomepageCache.keys().next().value);
+  }
+}
+
 function parseGoogleNewsSourceHomepage(xml = '', title = '', source = '') {
   const blocks = String(xml || '').match(/<item\b[\s\S]*?<\/item>/gi) || [];
+  const sourceKey = normalizeHeadline(source);
+  const requireSourceMatch = Boolean(sourceKey) && !sourceAllowsAggregator(source);
   let best = null;
   for (const block of blocks) {
     const titleMatch = block.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title>/i);
@@ -232,13 +276,20 @@ function parseGoogleNewsSourceHomepage(xml = '', title = '', source = '') {
     const titleScore = titleSimilarity(title, rowTitle);
     const sourceScore = sourceNameSimilarity(source, rowSource);
     if (titleScore < 0.46) continue;
-    const score = titleScore + sourceScore * 0.2;
+    if (requireSourceMatch && sourceScore < 0.34) continue;
+    if (requireSourceMatch && isAggregatorHomepage(homepage)) continue;
+    const score = titleScore + sourceScore * 0.8 + (sourceScore >= 0.8 ? 0.25 : 0) - (isAggregatorHomepage(homepage) ? 0.2 : 0);
     if (!best || score > best.score) best = { homepage, rowTitle, rowSource, score, titleScore, sourceScore };
   }
   return best;
 }
 
 async function discoverSourceHomepage(title, source) {
+  const cachedHomepage = getCachedPublisherHomepage(source);
+  if (cachedHomepage) {
+    return { homepage: cachedHomepage, cached: true, titleScore: 1, sourceScore: 1 };
+  }
+
   const query = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 180);
   if (query.length < 6) return { homepage: '', error: 'publisher-discovery-title-too-short' };
   const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`;
@@ -249,6 +300,7 @@ async function discoverSourceHomepage(title, source) {
       accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2'
     });
     const match = parseGoogleNewsSourceHomepage(page.text, title, source);
+    if (match?.homepage) setCachedPublisherHomepage(source, match.homepage);
     return match || { homepage: '', error: 'publisher-homepage-not-found' };
   } catch (error) {
     return { homepage: '', error: `publisher-rss-${error?.message || String(error)}` };
@@ -280,6 +332,16 @@ function discoverArticleLinkFromHomepage(html = '', homepageUrl = '', title = ''
   return best;
 }
 
+function isLikelyArticleDetailPath(rawPath = '') {
+  const path = String(rawPath || '').replace(/\/+$/, '') || '/';
+  const segments = path.split('/').filter(Boolean);
+  const last = segments.at(-1) || '';
+  if (/^\/(?:article|post)\/[^/]+/i.test(path)) return true;
+  if (/^\/news\/(?:info|detail|article|entry)\/[^/]+/i.test(path)) return true;
+  if (segments.length >= 3 && /^(?:\d{3,}|[a-f0-9]{8,}|[a-f0-9-]{16,})$/i.test(last)) return true;
+  return false;
+}
+
 function discoverPublisherIndexLinks(html = '', homepageUrl = '') {
   const homepageHost = hostOf(homepageUrl);
   if (!homepageHost) return [];
@@ -298,47 +360,129 @@ function discoverPublisherIndexLinks(html = '', homepageUrl = '') {
     if (seen.has(normalized)) continue;
     const label = stripMarkup(match[2]) || htmlAttr(match[1], 'aria-label') || htmlAttr(match[1], 'title');
     const path = url.pathname || '/';
-    const pathHint = /\/(?:news|topics?|articles?|posts?|press|latest|info|information|blog|column)(?:\/|$)/i.test(path);
-    const labelHint = /ニュース|トピックス|新着|最新|記事|お知らせ|プレス|news|topics?|latest|articles?|press/i.test(label);
-    if (!pathHint && !labelHint) continue;
+    if (isLikelyArticleDetailPath(path)) continue;
     const segments = path.split('/').filter(Boolean).length;
-    if (segments > 5) continue;
-    const score = (labelHint ? 3 : 0) + (pathHint ? 2 : 0) + (/tournament|sports?|category|topics?/i.test(path) ? 0.5 : 0) - segments * 0.08;
+    const shallowIndexPath = segments <= 2 && /\/(?:news|topics?|articles?|posts?|press|latest|info|information|blog|column|category)(?:\/|$)/i.test(path);
+    const labelHint = /^(?:ニュース|トピックス|新着|最新記事|記事一覧|お知らせ|プレス|news|topics?|latest|articles?|press)(?:\s|$)/i.test(label);
+    if (!shallowIndexPath && !labelHint) continue;
+    if (segments > 4) continue;
+    const score = (labelHint ? 7 : 0) + (shallowIndexPath ? 5 : 0) + (/tournament|sports?|category|topics?/i.test(path) ? 0.5 : 0) - segments * 0.08;
     seen.add(normalized);
-    rows.push({ url: normalized, label: compactLogValue(label, 120), score });
+    rows.push({ url: normalized, label: compactLogValue(label, 120), score, conventional: false });
   }
 
   try {
     const origin = new URL(homepageUrl).origin;
-    for (const path of ['/news/', '/news/tournament/', '/topics/', '/articles/', '/latest/']) {
+    const conventional = [
+      ['/news/', 9.8, true],
+      ['/news/tournament/', 9.6, true],
+      ['/articles/', 9.3, true],
+      ['/news/news_and_topics/', 8.9, false],
+      ['/topics/', 8.7, false],
+      ['/latest/', 8.5, false],
+      ['/category/news/', 8.3, false]
+    ];
+    for (const [path, score, guaranteed] of conventional) {
       const url = new URL(path, origin).href;
       if (seen.has(url)) continue;
       seen.add(url);
-      rows.push({ url, label: 'conventional-index', score: path === '/news/' ? 1.7 : path === '/news/tournament/' ? 1.6 : 1.1 });
+      rows.push({ url, label: 'conventional-index', score, conventional: guaranteed });
     }
   } catch {}
 
-  return rows.sort((a, b) => b.score - a.score).slice(0, READER_IMAGE_DISCOVERY_INDEX_MAX);
+  const guaranteed = rows.filter(row => row.conventional).sort((a, b) => b.score - a.score).slice(0, 3);
+  const guaranteedUrls = new Set(guaranteed.map(row => row.url));
+  const others = rows
+    .filter(row => !guaranteedUrls.has(row.url))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(0, READER_IMAGE_DISCOVERY_INDEX_MAX - guaranteed.length));
+  return [...guaranteed, ...others];
+}
+
+function discoverPaginationLinks(html = '', baseUrl = '') {
+  const baseHost = hostOf(baseUrl);
+  if (!baseHost) return [];
+  const rows = [];
+  const seen = new Set();
+  const anchorRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = anchorRe.exec(String(html || '')))) {
+    const href = htmlAttr(match[1], 'href');
+    if (!href || /^(?:#|javascript:|mailto:|tel:)/i.test(href)) continue;
+    let url;
+    try { url = new URL(decodeMarkup(href), baseUrl); } catch { continue; }
+    if (!['http:', 'https:'].includes(url.protocol) || !sameSiteHost(baseHost, url.hostname)) continue;
+    url.hash = '';
+    if (url.href === baseUrl || seen.has(url.href)) continue;
+    const label = stripMarkup(match[2]) || htmlAttr(match[1], 'aria-label') || htmlAttr(match[1], 'title');
+    const rel = htmlAttr(match[1], 'rel').toLowerCase();
+    const isNext = rel.split(/\s+/).includes('next') || /^(?:next|次へ|次のページ|›|»|→)$/i.test(label);
+    const isEarlyPage = /^[2-4]$/.test(label);
+    const urlLooksPaged = /(?:[?&](?:page|p)=\d+|\/page\/\d+\/?$|\/\d+\/?$)/i.test(`${url.pathname}${url.search}`);
+    if (!isNext && !isEarlyPage && !urlLooksPaged) continue;
+    const score = (isNext ? 6 : 0) + (isEarlyPage ? 4 : 0) + (urlLooksPaged ? 2 : 0);
+    seen.add(url.href);
+    rows.push({ url: url.href, label: compactLogValue(label, 80), score });
+  }
+  return rows.sort((a, b) => b.score - a.score).slice(0, READER_IMAGE_DISCOVERY_PAGINATION_MAX);
 }
 
 async function discoverArticleViaPublisherIndexes(homePage, homepage, title) {
   const indexes = discoverPublisherIndexLinks(homePage?.text || '', homePage?.finalUrl || homepage);
-  if (!indexes.length) return { article: null, checked: 0, error: 'publisher-index-not-found' };
-  const results = await Promise.all(indexes.map(async index => {
+  if (!indexes.length) return { article: null, checked: 0, paginationChecked: 0, error: 'publisher-index-not-found' };
+
+  const indexPages = await Promise.all(indexes.map(async index => {
     try {
       const page = await fetchTextPrefix(index.url, {
         timeoutMs: READER_IMAGE_DISCOVERY_INDEX_TIMEOUT_MS,
         maxBytes: READER_IMAGE_DISCOVERY_MAX_BYTES
       });
-      if (!sameSiteHost(hostOf(homepage), hostOf(page.finalUrl))) return null;
+      if (!sameSiteHost(hostOf(homepage), hostOf(page.finalUrl))) return { index, page: null, article: null };
       const article = discoverArticleLinkFromHomepage(page.text, page.finalUrl || index.url, title);
-      return article ? { ...article, indexUrl: page.finalUrl || index.url, indexLabel: index.label || '' } : null;
+      return { index, page, article };
+    } catch { return { index, page: null, article: null }; }
+  }));
+
+  const matches = indexPages
+    .filter(row => row.article)
+    .map(row => ({ ...row.article, indexUrl: row.page?.finalUrl || row.index.url, indexLabel: row.index.label || '' }))
+    .sort((a, b) => b.score - a.score);
+  if (matches[0]) return { article: matches[0], checked: indexes.length, paginationChecked: 0, error: '' };
+
+  const paginationCandidates = [];
+  const paginationSeen = new Set();
+  const addPagination = (html, baseUrl) => {
+    for (const row of discoverPaginationLinks(html, baseUrl)) {
+      if (paginationSeen.has(row.url)) continue;
+      paginationSeen.add(row.url);
+      paginationCandidates.push(row);
+    }
+  };
+  addPagination(homePage?.text || '', homePage?.finalUrl || homepage);
+  for (const row of indexPages) {
+    if (row.page?.text) addPagination(row.page.text, row.page.finalUrl || row.index.url);
+  }
+  paginationCandidates.sort((a, b) => b.score - a.score);
+  const pagination = paginationCandidates.slice(0, READER_IMAGE_DISCOVERY_PAGINATION_MAX);
+  if (!pagination.length) {
+    return { article: null, checked: indexes.length, paginationChecked: 0, error: 'publisher-index-article-not-found' };
+  }
+
+  const paginationResults = await Promise.all(pagination.map(async candidate => {
+    try {
+      const page = await fetchTextPrefix(candidate.url, {
+        timeoutMs: READER_IMAGE_DISCOVERY_INDEX_TIMEOUT_MS,
+        maxBytes: READER_IMAGE_DISCOVERY_MAX_BYTES
+      });
+      if (!sameSiteHost(hostOf(homepage), hostOf(page.finalUrl))) return null;
+      const article = discoverArticleLinkFromHomepage(page.text, page.finalUrl || candidate.url, title);
+      return article ? { ...article, indexUrl: page.finalUrl || candidate.url, indexLabel: candidate.label || '' } : null;
     } catch { return null; }
   }));
-  const matches = results.filter(Boolean).sort((a, b) => b.score - a.score);
-  return matches[0]
-    ? { article: matches[0], checked: indexes.length, error: '' }
-    : { article: null, checked: indexes.length, error: 'publisher-index-article-not-found' };
+  const pagedMatches = paginationResults.filter(Boolean).sort((a, b) => b.score - a.score);
+  return pagedMatches[0]
+    ? { article: pagedMatches[0], checked: indexes.length, paginationChecked: pagination.length, error: '' }
+    : { article: null, checked: indexes.length, paginationChecked: pagination.length, error: 'publisher-index-pagination-article-not-found' };
 }
 
 async function resolveImageFromPublisherDiscovery(title, source) {
@@ -354,20 +498,23 @@ async function resolveImageFromPublisherDiscovery(title, source) {
       return { image: '', homepage, error: 'publisher-homepage-cross-site-redirect' };
     }
 
+    setCachedPublisherHomepage(source, homePage.finalUrl || homepage);
     let article = discoverArticleLinkFromHomepage(homePage.text, homePage.finalUrl || homepage, title);
     let discoveryMethod = 'publisher-homepage';
     let indexUrl = '';
     let indexChecked = 0;
+    let paginationChecked = 0;
     if (!article?.articleUrl) {
       const indexResult = await discoverArticleViaPublisherIndexes(homePage, homepage, title);
       article = indexResult.article;
       indexChecked = Number(indexResult.checked || 0);
+      paginationChecked = Number(indexResult.paginationChecked || 0);
       if (article?.articleUrl) {
-        discoveryMethod = 'publisher-index';
+        discoveryMethod = paginationChecked ? 'publisher-pagination' : 'publisher-index';
         indexUrl = article.indexUrl || '';
       } else {
         return {
-          image: '', homepage, indexChecked,
+          image: '', homepage, indexChecked, paginationChecked,
           error: indexResult.error || 'publisher-article-link-not-found'
         };
       }
@@ -378,13 +525,13 @@ async function resolveImageFromPublisherDiscovery(title, source) {
       maxBytes: READER_IMAGE_DISCOVERY_MAX_BYTES
     });
     if (!sameSiteHost(hostOf(homepage), hostOf(articlePage.finalUrl))) {
-      return { image: '', homepage, articleUrl: article.articleUrl, indexUrl, indexChecked, error: 'publisher-article-cross-site-redirect' };
+      return { image: '', homepage, articleUrl: article.articleUrl, indexUrl, indexChecked, paginationChecked, error: 'publisher-article-cross-site-redirect' };
     }
     const image = extractArticleImageFromHtml(articlePage.text, { baseUrl: articlePage.finalUrl || article.articleUrl });
     if (!image?.url) {
       return {
         image: '', homepage, articleUrl: articlePage.finalUrl || article.articleUrl,
-        indexUrl, indexChecked, similarity: article.similarity, error: 'publisher-article-no-image'
+        indexUrl, indexChecked, paginationChecked, similarity: article.similarity, error: 'publisher-article-no-image'
       };
     }
     return {
@@ -394,6 +541,7 @@ async function resolveImageFromPublisherDiscovery(title, source) {
       articleUrl: articlePage.finalUrl || article.articleUrl,
       indexUrl,
       indexChecked,
+      paginationChecked,
       similarity: article.similarity,
       sourceTitleScore: Number(sourceResult.titleScore || 0)
     };
@@ -494,16 +642,14 @@ async function readerImageResolve(req, res) {
   };
 
   if (!payload.image) {
-    const [publisherFallback, gdeltFallback] = await Promise.all([
-      resolveImageFromPublisherDiscovery(title, source),
-      resolveImageFromGdelt(title, payload.publisherUrl || link)
-    ]);
-
+    const publisherFallback = await resolveImageFromPublisherDiscovery(title, source);
     if (publisherFallback.image) {
       payload.image = compactLogValue(publisherFallback.image, 2200);
       payload.method = compactLogValue(publisherFallback.method, 120);
       payload.publisherUrl = compactLogValue(publisherFallback.articleUrl || payload.publisherUrl, 2200);
-      payload.fallback = publisherFallback.indexUrl ? 'publisher-index' : 'publisher-homepage';
+      payload.fallback = publisherFallback.paginationChecked
+        ? 'publisher-pagination'
+        : publisherFallback.indexUrl ? 'publisher-index' : 'publisher-homepage';
       console.info('[reader-image-resolve:publisher-discovery]', {
         ok: true,
         articleId,
@@ -513,30 +659,13 @@ async function readerImageResolve(req, res) {
         method: payload.method,
         indexHost: hostOf(publisherFallback.indexUrl),
         indexChecked: Number(publisherFallback.indexChecked || 0),
+        paginationChecked: Number(publisherFallback.paginationChecked || 0),
         similarity: Number(Number(publisherFallback.similarity || 0).toFixed(3)),
         sourceTitleScore: Number(Number(publisherFallback.sourceTitleScore || 0).toFixed(3)),
         elapsedMs: Date.now() - started
       });
-    } else if (gdeltFallback.image) {
-      payload.image = compactLogValue(gdeltFallback.image, 2200);
-      payload.method = compactLogValue(gdeltFallback.method, 120);
-      payload.publisherUrl = compactLogValue(gdeltFallback.articleUrl || payload.publisherUrl, 2200);
-      payload.fallback = 'gdelt';
-      console.info('[reader-image-resolve:fallback]', {
-        ok: true,
-        articleId,
-        source,
-        publisherHost: hostOf(payload.publisherUrl),
-        imageHost: hostOf(payload.image),
-        method: payload.method,
-        candidateHost: gdeltFallback.candidateHost || '',
-        similarity: Number(Number(gdeltFallback.similarity || 0).toFixed(3)),
-        elapsedMs: Date.now() - started
-      });
     } else {
       const publisherError = compactLogValue(publisherFallback.error, 180);
-      const gdeltError = compactLogValue(gdeltFallback.error, 180);
-      payload.fallbackError = compactLogValue(`publisher:${publisherError || 'unknown'};gdelt:${gdeltError || 'unknown'}`, 240);
       console.warn('[reader-image-resolve:publisher-discovery]', {
         ok: false,
         articleId,
@@ -544,17 +673,40 @@ async function readerImageResolve(req, res) {
         homepageHost: hostOf(publisherFallback.homepage),
         indexHost: hostOf(publisherFallback.indexUrl),
         indexChecked: Number(publisherFallback.indexChecked || 0),
+        paginationChecked: Number(publisherFallback.paginationChecked || 0),
         reason: publisherError || 'unknown',
         elapsedMs: Date.now() - started
       });
-      console.warn('[reader-image-resolve:fallback]', {
-        ok: false,
-        articleId,
-        source,
-        publisherHost: hostOf(payload.publisherUrl),
-        reason: gdeltError || 'unknown',
-        elapsedMs: Date.now() - started
-      });
+
+      const gdeltFallback = await resolveImageFromGdelt(title, payload.publisherUrl || link);
+      if (gdeltFallback.image) {
+        payload.image = compactLogValue(gdeltFallback.image, 2200);
+        payload.method = compactLogValue(gdeltFallback.method, 120);
+        payload.publisherUrl = compactLogValue(gdeltFallback.articleUrl || payload.publisherUrl, 2200);
+        payload.fallback = 'gdelt';
+        console.info('[reader-image-resolve:fallback]', {
+          ok: true,
+          articleId,
+          source,
+          publisherHost: hostOf(payload.publisherUrl),
+          imageHost: hostOf(payload.image),
+          method: payload.method,
+          candidateHost: gdeltFallback.candidateHost || '',
+          similarity: Number(Number(gdeltFallback.similarity || 0).toFixed(3)),
+          elapsedMs: Date.now() - started
+        });
+      } else {
+        const gdeltError = compactLogValue(gdeltFallback.error, 180);
+        payload.fallbackError = compactLogValue(`publisher:${publisherError || 'unknown'};gdelt:${gdeltError || 'unknown'}`, 240);
+        console.warn('[reader-image-resolve:fallback]', {
+          ok: false,
+          articleId,
+          source,
+          publisherHost: hostOf(payload.publisherUrl),
+          reason: gdeltError || 'unknown',
+          elapsedMs: Date.now() - started
+        });
+      }
     }
   }
 
