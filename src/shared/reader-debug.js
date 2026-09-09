@@ -99,12 +99,12 @@ function installReaderImageLayoutOnly() {
   const style = document.createElement('style');
   style.id = IMAGE_LAYOUT_STYLE_ID;
   style.textContent = `
-    /* Reader focus: source -> title -> media are normal-flow siblings. */
+    /* Reader focus layout only: source -> title -> image -> 3 summary cards -> article button -> dots. */
     .reader-screen.reader-focus-open .reader-story-card.reader-story-card {
       --reader-card-gap: clamp(8px, 1.05dvh, 10px);
-      --reader-action-reserve: clamp(32px, 4.2dvh, 42px);
+      --reader-footer-height: clamp(76px, 8.8dvh, 86px);
       box-sizing: border-box !important;
-      grid-template-rows: clamp(304px, 38.5dvh, 334px) minmax(0, 1fr) auto !important;
+      grid-template-rows: clamp(322px, 39.5dvh, 346px) minmax(0, 1fr) var(--reader-footer-height) !important;
       gap: var(--reader-card-gap) !important;
       align-content: stretch !important;
     }
@@ -115,7 +115,7 @@ function installReaderImageLayoutOnly() {
       box-sizing: border-box !important;
       overflow: hidden !important;
       display: grid !important;
-      grid-template-rows: auto auto minmax(0, 1fr) !important;
+      grid-template-rows: auto minmax(72px, auto) minmax(0, 1fr) !important;
       align-content: stretch !important;
       gap: clamp(8px, 1.05dvh, 11px) !important;
       padding: 14px 16px !important;
@@ -128,12 +128,24 @@ function installReaderImageLayoutOnly() {
     .reader-screen.reader-focus-open .reader-story-hero-bottom {
       display: none !important;
     }
+    .reader-screen.reader-focus-open .reader-story-title-slot {
+      position: relative !important;
+      z-index: 3 !important;
+      min-width: 0 !important;
+      min-height: 72px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      align-items: center !important;
+      overflow: hidden !important;
+      padding: 8px 2px 10px !important;
+    }
     .reader-screen.reader-focus-open .reader-story-title.reader-swipe-title {
       position: relative !important;
       z-index: 3 !important;
+      width: 100% !important;
       display: -webkit-box !important;
       margin: 0 !important;
-      padding: 0 2px !important;
+      padding: 0 !important;
       -webkit-box-orient: vertical !important;
       -webkit-line-clamp: 2 !important;
       line-clamp: 2 !important;
@@ -190,13 +202,16 @@ function installReaderImageLayoutOnly() {
       padding: 0 !important;
     }
     .reader-screen.reader-focus-open .reader-story-content.reader-story-content {
-      display: block !important;
+      display: flex !important;
+      flex-direction: column !important;
       min-height: 0 !important;
+      gap: 6px !important;
       padding: 0 2px !important;
       overflow: hidden !important;
     }
     .reader-screen.reader-focus-open .reader-story-summary.reader-ai-summary {
-      height: 100% !important;
+      flex: 1 1 auto !important;
+      height: auto !important;
       min-height: 0 !important;
       display: grid !important;
       grid-template-rows: repeat(3, minmax(0, 1fr)) !important;
@@ -209,28 +224,42 @@ function installReaderImageLayoutOnly() {
       box-sizing: border-box !important;
       overflow: hidden !important;
     }
+    .reader-screen.reader-focus-open .reader-story-content > [data-reader-progress] {
+      flex: 0 0 auto !important;
+    }
     .reader-screen.reader-focus-open .reader-story-actions {
       position: relative !important;
       z-index: 7 !important;
-      align-self: end !important;
-      margin: 0 0 var(--reader-action-reserve) !important;
-      padding: 0 2px !important;
+      align-self: stretch !important;
+      height: 100% !important;
+      min-height: 0 !important;
+      box-sizing: border-box !important;
+      margin: 0 !important;
+      padding: 10px 2px 24px !important;
+      display: flex !important;
+      align-items: flex-start !important;
     }
     .reader-screen.reader-focus-open .reader-story-open {
       position: relative !important;
       z-index: 1 !important;
+      width: 100% !important;
       min-height: 42px !important;
     }
     @media (max-height: 760px) {
       .reader-screen.reader-focus-open .reader-story-card.reader-story-card {
         --reader-card-gap: 7px;
-        --reader-action-reserve: 30px;
-        grid-template-rows: 270px minmax(0, 1fr) auto !important;
+        --reader-footer-height: 66px;
+        grid-template-rows: 282px minmax(0, 1fr) var(--reader-footer-height) !important;
       }
       .reader-screen.reader-focus-open .reader-story-hero.reader-story-hero {
+        grid-template-rows: auto minmax(58px, auto) minmax(0, 1fr) !important;
         gap: 7px !important;
         padding: 11px 12px !important;
         border-radius: 18px !important;
+      }
+      .reader-screen.reader-focus-open .reader-story-title-slot {
+        min-height: 58px !important;
+        padding: 5px 2px 7px !important;
       }
       .reader-screen.reader-focus-open .reader-story-title.reader-swipe-title {
         font-size: 18px !important;
@@ -240,6 +269,9 @@ function installReaderImageLayoutOnly() {
       }
       .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--contain {
         padding: 12px !important;
+      }
+      .reader-screen.reader-focus-open .reader-story-actions {
+        padding: 8px 2px 16px !important;
       }
       .reader-screen.reader-focus-open .reader-story-open {
         min-height: 40px !important;
@@ -256,10 +288,16 @@ function ensureHeroStructure(card) {
   const top = hero?.querySelector('.reader-story-hero-top');
   if (!hero || !title) return null;
 
-  if (title.parentElement !== hero) {
-    if (top) top.after(title);
-    else hero.append(title);
+  let titleSlot = hero.querySelector('.reader-story-title-slot');
+  if (!titleSlot) {
+    titleSlot = document.createElement('div');
+    titleSlot.className = 'reader-story-title-slot';
   }
+  if (titleSlot.parentElement !== hero || (top && top.nextElementSibling !== titleSlot)) {
+    if (top) top.after(titleSlot);
+    else hero.append(titleSlot);
+  }
+  if (title.parentElement !== titleSlot) titleSlot.append(title);
 
   let frame = hero.querySelector('.reader-story-media-frame');
   if (!frame) {
@@ -267,7 +305,7 @@ function ensureHeroStructure(card) {
     frame.className = 'reader-story-media-frame';
     frame.setAttribute('aria-hidden', 'true');
   }
-  if (frame.parentElement !== hero || title.nextElementSibling !== frame) title.after(frame);
+  if (frame.parentElement !== hero || titleSlot.nextElementSibling !== frame) titleSlot.after(frame);
 
   const image = hero.querySelector('img.reader-story-hero-image');
   if (image && image.parentElement !== frame) frame.append(image);
