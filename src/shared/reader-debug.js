@@ -99,15 +99,33 @@ function installReaderImageLayoutOnly() {
   const style = document.createElement('style');
   style.id = IMAGE_LAYOUT_STYLE_ID;
   style.textContent = `
-    /* Reader image-only layout adjustment. Title/summary/action layout is intentionally untouched. */
+    /*
+     * Keep the exact c11dad37 image geometry, and extend only the hero card skin
+     * to the same bottom edge. No title/summary/action layout dimensions change.
+     */
     .reader-screen.reader-focus-open .reader-story-hero {
-      height: calc(100% + 22px) !important;
-      min-height: calc(100% + 22px) !important;
-      box-sizing: border-box !important;
-      overflow: hidden !important;
+      overflow: visible !important;
+      border-bottom-color: transparent !important;
+      border-bottom-left-radius: 0 !important;
+      border-bottom-right-radius: 0 !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-hero::after {
+      content: '';
+      position: absolute;
+      z-index: 0;
+      left: -1px;
+      right: -1px;
+      bottom: -22px;
+      height: 23px;
+      box-sizing: border-box;
+      pointer-events: none;
+      background: #11161d;
+      border: 1px solid rgba(255,255,255,.075);
+      border-top: 0;
+      border-radius: 0 0 18px 18px;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image {
-      bottom: 12px !important;
+      bottom: -22px !important;
       z-index: 1 !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--contain {
@@ -120,12 +138,12 @@ function installReaderImageLayoutOnly() {
       object-position: center center !important;
     }
     @media (max-height: 700px) {
-      .reader-screen.reader-focus-open .reader-story-hero {
-        height: calc(100% + 12px) !important;
-        min-height: calc(100% + 12px) !important;
+      .reader-screen.reader-focus-open .reader-story-hero::after {
+        bottom: -12px;
+        height: 13px;
       }
       .reader-screen.reader-focus-open .reader-story-hero-image {
-        bottom: 12px !important;
+        bottom: -12px !important;
       }
     }
   `;
