@@ -10,6 +10,41 @@ import twitchOauth from '../server/twitch-oauth.mjs';
 import weatherRain from '../server/weather-rain.mjs';
 import xHistory, { isXHistoryRequest } from '../server/x-history.mjs';
 
+function first(value) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function compactLogValue(value, max = 500) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function requestBody(req) {
+  if (req?.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  if (typeof req?.body !== 'string') return {};
+  try { return JSON.parse(req.body); } catch { return {}; }
+}
+
+function readerImageDiagnostic(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+  const body = requestBody(req);
+  const log = {
+    phase: compactLogValue(body.phase, 80) || 'unknown',
+    articleId: compactLogValue(body.articleId, 700),
+    title: compactLogValue(body.title, 260),
+    source: compactLogValue(body.source, 120),
+    imageUrl: compactLogValue(body.imageUrl, 1100),
+    imageHost: compactLogValue(body.imageHost, 180),
+    summaryProvider: compactLogValue(body.summaryProvider, 80),
+    viewport: compactLogValue(body.viewport, 80),
+    online: body.online !== false
+  };
+  console.warn('[reader-image]', log);
+  return res.status(204).end();
+}
+
 const handlers = new Map([
   ['news-feed', newsFeed],
   ['instagram-profile', instagramProfile],
@@ -17,6 +52,7 @@ const handlers = new Map([
   ['instagram-video', instagramVideo],
   ['instagram-stories', instagramStories],
   ['recommendations', recommendations],
+  ['reader-image-diagnostic', readerImageDiagnostic],
   ['rss', rss],
   ['twitch-eventsub', twitchEventsub],
   ['twitch-feed', twitchFeed],
@@ -24,10 +60,6 @@ const handlers = new Map([
   ['weather-rain', weatherRain],
   ['x-history', xHistory]
 ]);
-
-function first(value) {
-  return Array.isArray(value) ? value[0] : value;
-}
 
 function rssItemCount(body) {
   const text = Buffer.isBuffer(body) ? body.toString('utf8') : typeof body === 'string' ? body : '';
