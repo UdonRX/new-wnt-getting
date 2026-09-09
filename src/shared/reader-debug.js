@@ -101,10 +101,13 @@ function installReaderImageLayoutOnly() {
   style.textContent = `
     /* Reader image-only layout adjustment. Title/summary/action layout is intentionally untouched. */
     .reader-screen.reader-focus-open .reader-story-hero {
-      overflow: visible !important;
+      height: calc(100% + 22px) !important;
+      min-height: calc(100% + 22px) !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image {
-      bottom: -22px !important;
+      bottom: 12px !important;
       z-index: 1 !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--contain {
@@ -117,8 +120,12 @@ function installReaderImageLayoutOnly() {
       object-position: center center !important;
     }
     @media (max-height: 700px) {
+      .reader-screen.reader-focus-open .reader-story-hero {
+        height: calc(100% + 12px) !important;
+        min-height: calc(100% + 12px) !important;
+      }
       .reader-screen.reader-focus-open .reader-story-hero-image {
-        bottom: -12px !important;
+        bottom: 12px !important;
       }
     }
   `;
