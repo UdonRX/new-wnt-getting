@@ -244,13 +244,6 @@
     (()=>{
       const BUILD='2210fix2';
       const RECOVERY_KEY='pdv2:startup-recovery:2210fix2';
-      const READER_SUMMARY_LAYOUT_KEY='pdv2:reader-summary-layout-v3';
-      try {
-        if (localStorage.getItem(READER_SUMMARY_LAYOUT_KEY) !== '1') {
-          localStorage.removeItem('reader-summary-cache-v2180');
-          localStorage.setItem(READER_SUMMARY_LAYOUT_KEY, '1');
-        }
-      } catch {}
       let capturedError='';
       const remember=value=>{if(!capturedError&&value)capturedError=String(value).slice(0,500);};
       window.addEventListener('error',event=>remember(event?.message||event?.error?.message||'JavaScript error'),true);

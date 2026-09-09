@@ -605,6 +605,42 @@ function setDiagHeaders(res, summary = {}) {
 
 export default async function handler(req, res) {
   const incoming = rawBody(req);
+  const prepareOnly = String(req.query?.prepare || '') === '1';
+  if (prepareOnly) {
+    if (req.method !== 'POST' || incoming?.readerGoogleNewsPrepare !== true || !isFastReaderRequest(incoming)) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(400).json({ error: 'Invalid Reader prepare request' });
+    }
+    const started = Date.now();
+    const prepared = await prepareFastBody(incoming);
+    const articlePrepareMs = Date.now() - started;
+    const description = firstChars(prepared.description, 500);
+    const payload = {
+      ok: chars(description) >= 40 && prepared.preparedSource !== 'non-article',
+      title: clean(prepared.title || incoming.title, 1000),
+      description,
+      resolvedPublisherUrl: clean(prepared.resolvedPublisherUrl || '', 1800),
+      preparedSource: prepared.preparedSource || 'missing',
+      prepareReason: prepared.prepareReason || '',
+      prepareError: prepared.prepareError || '',
+      pageType: prepared.pageType || '',
+      rejectionReason: prepared.rejectionReason || '',
+      articlePrepareMs
+    };
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Summary-Route', 'reader-google-news-prepare');
+    console.info('[SUMMARY PREPARE]', {
+      ok: payload.ok,
+      articlePrepareMs,
+      preparedSource: payload.preparedSource,
+      preparedChars: chars(description),
+      resolvedPublisherUrl: payload.resolvedPublisherUrl,
+      prepareReason: payload.prepareReason,
+      prepareError: payload.prepareError
+    });
+    return res.status(200).json(payload);
+  }
+
   const specialQuery = String(req.query?.technologyResearch || '') === '1' || String(req.query?.paperTitles || '') === '1' || String(req.query?.diagnostic || '') || String(req.query?.batch || '') === '1' || String(req.query?.stream || '') === '1';
   const technologyResearch = /技術リサーチ:\s*Web調査済み/.test(String(incoming.description || ''));
   if (req.method !== 'POST' || specialQuery || technologyResearch || !isFastReaderRequest(incoming)) return legacySummary(req, res);

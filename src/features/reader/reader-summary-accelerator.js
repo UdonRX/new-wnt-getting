@@ -6,6 +6,17 @@ const SUMMARY_STORAGE_KEY = 'reader-summary-cache-v2180';
 const SOURCE_RECOVERY_MIGRATION_KEY = 'reader-summary-source-recovery-v2';
 const RSS_ONLY_PRODUCTION_CACHE_RESET_KEY = 'reader-summary-rss-only-production-v1';
 const LEGACY_RESEARCH_SUMMARY_MIGRATION_KEY = 'reader-summary-legacy-research-cards-v1';
+const RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v2';
+const GOOGLE_NEWS_PREPARED_KEY = 'pdv2:reader-google-news-prepared-v1';
+const GOOGLE_NEWS_PREPARED_TTL_MS = 15 * 60 * 1000;
+const GOOGLE_NEWS_PREPARED_LIMIT = 12;
+const GOOGLE_NEWS_PREPARE_COUNT = 6;
+const GOOGLE_NEWS_PREPARE_CONCURRENCY = 2;
+const GOOGLE_NEWS_PREPARE_TIMEOUT_MS = 5000;
+const PREFETCH_READY_TIMEOUT_MS = 22000;
+const PREFETCH_READY_POLL_MS = 90;
+const FAILURE_PROVIDERS = new Set(['', 'pending', 'instant', 'insufficient', 'unavailable']);
+const googleNewsPrepareInflight = new Set();
 const LABELS = ['結論/事実', '背景/特徴', '影響/展望'];
 const MISSING = [
   'RSSには結論として要約できる追加情報が記載されていません。',
@@ -161,7 +172,7 @@ function parseSummaryPost(input, init = {}) {
   let url;
   try { url = new URL(typeof input === 'string' ? input : input?.url || '', location.href); }
   catch { return null; }
-  if (url.pathname !== SUMMARY_PATH || url.searchParams.has('batch') || url.searchParams.has('stream')) return null;
+  if (url.pathname !== SUMMARY_PATH || url.searchParams.has('batch') || url.searchParams.has('stream') || url.searchParams.has('prepare')) return null;
   let body;
   try { body = JSON.parse(init.body); }
   catch { return null; }
@@ -169,14 +180,44 @@ function parseSummaryPost(input, init = {}) {
   return articleId ? { body, articleId } : null;
 }
 
-function activeArticleId() {
-  return String(document.querySelector('.reader-swipe-card.is-active[data-article-id]')?.dataset?.articleId || '');
+function readerPosition(articleId = '') {
+  if (typeof document === 'undefined') return { requestType: 'background', activeArticleId: '', nextArticleId: '', activeCard: null, cardExists: false };
+  const cards = Array.from(document.querySelectorAll('.reader-swipe-card[data-article-id]'));
+  const activeIndex = cards.findIndex(card => card.classList.contains('is-active'));
+  const activeCard = activeIndex >= 0 ? cards[activeIndex] : null;
+  const activeArticleId = String(activeCard?.dataset?.articleId || '');
+  const nextArticleId = String(cards[activeIndex + 1]?.dataset?.articleId || '');
+  const cardExists = cards.some(card => String(card?.dataset?.articleId || '') === String(articleId || ''));
+  let requestType = 'background';
+  if (articleId && articleId === activeArticleId) requestType = 'display';
+  else if (articleId && articleId === nextArticleId) requestType = 'prefetch';
+  return { requestType, activeArticleId, nextArticleId, activeCard, cardExists };
 }
 
 function readerCardExists(articleId = '') {
-  if (!articleId || typeof document === 'undefined') return false;
-  return Array.from(document.querySelectorAll('.reader-swipe-card[data-article-id]'))
-    .some(card => String(card?.dataset?.articleId || '') === articleId);
+  return readerPosition(articleId).cardExists;
+}
+
+function providerUsable(card) {
+  const provider = String(card?.dataset?.summaryProvider || '');
+  return Boolean(provider) && !FAILURE_PROVIDERS.has(provider);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForPrefetchReady(articleId) {
+  const started = Date.now();
+  while (Date.now() - started < PREFETCH_READY_TIMEOUT_MS) {
+    const position = readerPosition(articleId);
+    if (!position.cardExists) return { run: false, reason: 'prefetch-card-gone' };
+    if (position.requestType === 'display') return { run: true, promoted: true, waitedMs: Date.now() - started };
+    if (position.requestType !== 'prefetch') return { run: false, reason: 'prefetch-no-longer-next' };
+    if (providerUsable(position.activeCard)) return { run: true, promoted: false, waitedMs: Date.now() - started };
+    await sleep(PREFETCH_READY_POLL_MS);
+  }
+  return { run: false, reason: 'prefetch-active-summary-timeout' };
 }
 
 function jsonResponse(payload, route) {
@@ -186,15 +227,15 @@ function jsonResponse(payload, route) {
   });
 }
 
-function disabledPrefetch(parsed) {
+function disabledPrefetch(parsed, reason = 'reader-prefetch-disabled-rss-only') {
   return jsonResponse({
     articleId: parsed.articleId,
     requestType: 'prefetch',
     provider: 'unavailable',
     cacheable: false,
     validated: false,
-    fallbackReason: 'reader-prefetch-disabled-rss-only'
-  }, 'reader-prefetch-disabled-rss-only');
+    fallbackReason: reason
+  }, reason);
 }
 
 function shortResponse(parsed) {
@@ -233,7 +274,144 @@ function rssOnlyAi(input, init, parsed) {
   return upstreamFetch(input, { ...init, body: JSON.stringify(body) });
 }
 
+function readPreparedGoogleNewsCache() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(GOOGLE_NEWS_PREPARED_KEY) || '{}');
+    const now = Date.now();
+    let changed = false;
+    for (const [key, entry] of Object.entries(raw || {})) {
+      if (!entry?.description || !entry?.at || now - Number(entry.at) > GOOGLE_NEWS_PREPARED_TTL_MS) {
+        delete raw[key];
+        changed = true;
+      }
+    }
+    if (changed) localStorage.setItem(GOOGLE_NEWS_PREPARED_KEY, JSON.stringify(raw));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+function getPreparedGoogleNews(articleId = '') {
+  const key = String(articleId || '').trim();
+  if (!key) return null;
+  const entry = readPreparedGoogleNewsCache()[key];
+  return entry?.description ? entry : null;
+}
+
+function storePreparedGoogleNews(articleId, value = {}) {
+  const key = String(articleId || '').trim();
+  const description = clean(value?.description || '', 500);
+  if (!key || description.length < 40) return;
+  try {
+    const raw = readPreparedGoogleNewsCache();
+    raw[key] = {
+      at: Date.now(),
+      description,
+      resolvedPublisherUrl: clean(value?.resolvedPublisherUrl || '', 1800),
+      preparedSource: clean(value?.preparedSource || '', 80),
+      prepareReason: clean(value?.prepareReason || '', 120)
+    };
+    const entries = Object.entries(raw)
+      .sort((a, b) => Number(b[1]?.at || 0) - Number(a[1]?.at || 0))
+      .slice(0, GOOGLE_NEWS_PREPARED_LIMIT);
+    localStorage.setItem(GOOGLE_NEWS_PREPARED_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {}
+}
+
+async function prepareGoogleNewsItem(item = {}) {
+  const articleId = String(item?.id || item?.link || item?.title || '').trim();
+  const link = String(item?.link || '').trim();
+  if (!articleId || !link || getPreparedGoogleNews(articleId) || googleNewsPrepareInflight.has(articleId)) return;
+  googleNewsPrepareInflight.add(articleId);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GOOGLE_NEWS_PREPARE_TIMEOUT_MS);
+  const started = performance.now();
+  try {
+    const response = await fetch(`${SUMMARY_PATH}?prepare=1`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      signal: controller.signal,
+      body: JSON.stringify({
+        title: item?.title || '',
+        description: item?.description || '',
+        url: link,
+        source: item?.source || item?.feedName || 'Google News',
+        category: 'ニュース:Google News',
+        mode: 'news',
+        fast: true,
+        readerGoogleNewsPrepare: true
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data?.ok && clean(data?.description || '', 500).length >= 40) {
+      storePreparedGoogleNews(articleId, data);
+      readerTrace('summary-google-news-prepared', {
+        articleId,
+        elapsedMs: Math.round(performance.now() - started),
+        preparedSource: String(data?.preparedSource || ''),
+        preparedChars: clean(data?.description || '', 500).length
+      });
+    }
+  } catch (error) {
+    readerTrace('summary-google-news-prepare-error', {
+      articleId,
+      elapsedMs: Math.round(performance.now() - started),
+      error: String(error?.name || 'Error') + ':' + String(error?.message || error)
+    });
+  } finally {
+    clearTimeout(timer);
+    googleNewsPrepareInflight.delete(articleId);
+  }
+}
+
+function queueGoogleNewsPreparation(items = []) {
+  const rows = (Array.isArray(items) ? items : [])
+    .filter(item => item?.id || item?.link)
+    .slice(0, GOOGLE_NEWS_PREPARE_COUNT);
+  if (!rows.length) return;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < rows.length) {
+      const item = rows[cursor++];
+      await prepareGoogleNewsItem(item);
+    }
+  };
+  for (let index = 0; index < Math.min(GOOGLE_NEWS_PREPARE_CONCURRENCY, rows.length); index += 1) {
+    Promise.resolve().then(worker).catch(() => {});
+  }
+}
+
+function queueStoredRecommendationPreparation() {
+  try {
+    const snapshot = JSON.parse(localStorage.getItem(RECOMMENDATION_SNAPSHOT_KEY) || 'null');
+    if (Array.isArray(snapshot?.items)) queueGoogleNewsPreparation(snapshot.items);
+  } catch {}
+}
+
 function sourceRecoveryAi(input, init, parsed, kind) {
+  const prepared = kind === 'google-news' ? getPreparedGoogleNews(parsed.articleId) : null;
+  if (prepared) {
+    const body = {
+      ...parsed.body,
+      description: Array.from(prepared.description).slice(0, 500).join(''),
+      url: '',
+      link: '',
+      preferFullText: false,
+      rssOnly: true,
+      fast: true,
+      resolvedPublisherUrl: prepared.resolvedPublisherUrl || '',
+      readerSourceRecovery: 'google-news-prepared'
+    };
+    readerTrace('summary-google-news-prepare-hit', {
+      articleId: parsed.articleId,
+      preparedSource: prepared.preparedSource || '',
+      preparedChars: body.description.length
+    });
+    return upstreamFetch(input, { ...init, body: JSON.stringify(body) });
+  }
+
   const evidence = rssEvidence(parsed.body);
   const body = {
     ...parsed.body,
@@ -253,6 +431,19 @@ function sourceRecoveryAi(input, init, parsed, kind) {
     rssDescriptionChars: evidence.chars
   });
   return upstreamFetch(input, { ...init, body: JSON.stringify(body) });
+}
+
+function routeReaderSummary(input, init, parsed) {
+  // Google NewsのRSSリンクは出版社URLではなくnews.google.comの中間URL。
+  // 通常RSSと同じ「URLを消してRSS本文だけ」の経路へ入れると、短い見出ししか残らず
+  // 全件 unavailable になる。Google Newsだけ既存のURL解決→本文抽出経路へ戻す。
+  // 事前準備済みなら、その500文字を使ってReader表示時のURL解決・本文抽出を省略する。
+  const recoveryKind = sourceRecoveryKind(parsed.body);
+  if (recoveryKind === 'google-news') {
+    readerTrace('summary-google-news-recovery', { articleId: parsed.articleId });
+    return sourceRecoveryAi(input, init, parsed, recoveryKind);
+  }
+  return rssOnlyAi(input, init, parsed);
 }
 
 export function isLegacyResearchSummary(summary = {}) {
@@ -314,6 +505,10 @@ if (typeof window !== 'undefined') {
   purgeBadSummaryCacheOnce();
   purgeSummaryCacheForRssOnlyProductionOnce();
   purgeLegacyResearchSummaryCacheOnce();
+  setTimeout(queueStoredRecommendationPreparation, 0);
+  window.addEventListener('pdv2:recommendations-updated', event => {
+    queueGoogleNewsPreparation(event?.detail?.items || []);
+  });
 }
 
 if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_ONLY_SUMMARY_INSTALLED) {
@@ -329,22 +524,34 @@ if (upstreamFetch && typeof window !== 'undefined' && !window.__PDV2_READER_RSS_
       return upstreamFetch(input, init);
     }
 
-    if (activeArticleId() !== parsed.articleId) {
-      readerTrace('summary-prefetch-disabled', { articleId: parsed.articleId, activeArticleId: activeArticleId() });
-      return Promise.resolve(disabledPrefetch(parsed));
+    const position = readerPosition(parsed.articleId);
+    if (position.requestType === 'display') return routeReaderSummary(input, init, parsed);
+
+    // Reader本体が作る「直後の1記事」だけを保持し、表示中記事の正式要約が
+    // 成功したらネットワークへ流す。これで旧実装の全面prefetch停止を解除しつつ、
+    // 複数記事の先読みや表示中Geminiとの競合は起こさない。
+    if (position.requestType === 'prefetch') {
+      readerTrace('summary-prefetch-wait', {
+        articleId: parsed.articleId,
+        activeArticleId: position.activeArticleId,
+        nextArticleId: position.nextArticleId
+      });
+      return waitForPrefetchReady(parsed.articleId).then(gate => {
+        if (!gate.run) {
+          readerTrace('summary-prefetch-dropped', { articleId: parsed.articleId, reason: gate.reason || '' });
+          return disabledPrefetch(parsed, gate.reason || 'reader-prefetch-disabled-rss-only');
+        }
+        readerTrace('summary-prefetch-resumed', {
+          articleId: parsed.articleId,
+          promoted: Boolean(gate.promoted),
+          waitedMs: Number(gate.waitedMs || 0)
+        });
+        return routeReaderSummary(input, init, parsed);
+      });
     }
 
-    // Google NewsのRSSリンクは出版社URLではなくnews.google.comの中間URL。
-    // 通常RSSと同じ「URLを消してRSS本文だけ」の経路へ入れると、短い見出ししか残らず
-    // 全件 unavailable になる。Google Newsだけ既存のURL解決→本文抽出経路へ戻す。
-    // それ以外のRSSは従来の高速経路を維持するため、表示速度には干渉しない。
-    const recoveryKind = sourceRecoveryKind(parsed.body);
-    if (recoveryKind === 'google-news') {
-      readerTrace('summary-google-news-recovery', { articleId: parsed.articleId });
-      return sourceRecoveryAi(input, init, parsed, recoveryKind);
-    }
-
-    return rssOnlyAi(input, init, parsed);
+    readerTrace('summary-prefetch-dropped', { articleId: parsed.articleId, reason: 'prefetch-outside-immediate-next' });
+    return Promise.resolve(disabledPrefetch(parsed, 'prefetch-outside-immediate-next'));
   };
 
   window.__PDV2_READER_RSS_ONLY_SUMMARY = {
