@@ -11,7 +11,7 @@ const { Readability } = readabilityPackage;
 const { JSDOM } = jsdomPackage;
 
 const PRIMARY_MODEL = String(process.env.GEMINI_SUMMARY_MODEL || 'gemini-3.5-flash-lite').trim();
-const FAST_MODEL_TIMEOUT_MS = 5200;
+const FAST_MODEL_TIMEOUT_MS = 15000;
 const FAST_INPUT_LIMIT = 380;
 const FAST_OUTPUT_TOKEN_LIMIT = 280;
 const RSS_MIN_CHARS = 160;
