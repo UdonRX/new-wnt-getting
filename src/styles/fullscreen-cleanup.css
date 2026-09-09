@@ -27,3 +27,190 @@ body.pdv2-home-fullscreen .home-stack {
   animation-duration: 420ms !important;
   animation-timing-function: cubic-bezier(.18,.82,.22,1) !important;
 }
+
+/* Reader focus layout correction only.
+ * Keep source/title/image/summary data and all Reader behavior untouched.
+ * The #app-main specificity intentionally wins over the later runtime layout shim.
+ */
+html body #app-main .reader-screen.reader-focus-open .reader-story-card.reader-story-card {
+  --reader-card-gap: 8px;
+  --reader-summary-row-height: clamp(88px, 10.8dvh, 96px);
+  --reader-footer-height: 70px;
+  box-sizing: border-box !important;
+  grid-template-rows: clamp(286px, 34.5dvh, 300px) auto var(--reader-footer-height) !important;
+  gap: var(--reader-card-gap) !important;
+  align-content: start !important;
+  padding-bottom: 12px !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-hero.reader-story-hero {
+  grid-template-rows: auto minmax(62px, auto) minmax(0, 1fr) !important;
+  gap: 8px !important;
+  padding: 14px 16px !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-title-slot {
+  position: relative !important;
+  z-index: 3 !important;
+  min-width: 0 !important;
+  min-height: 62px !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  overflow: hidden !important;
+  padding: 6px 2px 8px !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-title.reader-swipe-title {
+  position: relative !important;
+  z-index: 3 !important;
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  max-height: calc(2 * 1.22em) !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  line-clamp: 2 !important;
+  overflow: hidden !important;
+  font-size: 20px !important;
+  line-height: 1.22 !important;
+  pointer-events: none !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-media-frame {
+  min-height: 0 !important;
+  height: 100% !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-content.reader-story-content {
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  padding: 0 2px !important;
+  overflow: visible !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-summary.reader-ai-summary {
+  flex: 0 0 auto !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  display: grid !important;
+  grid-template-rows: repeat(3, var(--reader-summary-row-height)) !important;
+  gap: var(--reader-card-gap) !important;
+  align-content: start !important;
+  transform: none !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-summary-row {
+  width: 100% !important;
+  height: var(--reader-summary-row-height) !important;
+  min-height: var(--reader-summary-row-height) !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  padding: 8px 12px !important;
+  overflow: hidden !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-summary-copy {
+  width: 100% !important;
+  min-width: 0 !important;
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  row-gap: 4px !important;
+  align-items: start !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-summary-text {
+  width: min(100%, 330px) !important;
+  max-width: 330px !important;
+  min-width: 0 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 3 !important;
+  line-clamp: 3 !important;
+  overflow: hidden !important;
+  font-size: clamp(11.8px, 3.15vw, 12.5px) !important;
+  line-height: 1.45 !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-actions {
+  position: relative !important;
+  z-index: 7 !important;
+  align-self: stretch !important;
+  width: 100% !important;
+  height: var(--reader-footer-height) !important;
+  min-height: var(--reader-footer-height) !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  padding: 8px 2px 18px !important;
+  display: flex !important;
+  align-items: flex-start !important;
+}
+
+html body #app-main .reader-screen.reader-focus-open .reader-story-open {
+  position: relative !important;
+  z-index: 1 !important;
+  width: 100% !important;
+  min-height: 44px !important;
+  margin: 0 !important;
+}
+
+@media (max-height: 760px) {
+  html body #app-main .reader-screen.reader-focus-open .reader-story-card.reader-story-card {
+    --reader-card-gap: 7px;
+    --reader-summary-row-height: 82px;
+    --reader-footer-height: 60px;
+    grid-template-rows: 250px auto var(--reader-footer-height) !important;
+    padding-bottom: 10px !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-hero.reader-story-hero {
+    grid-template-rows: auto minmax(52px, auto) minmax(0, 1fr) !important;
+    gap: 7px !important;
+    padding: 11px 12px !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-title-slot {
+    min-height: 52px !important;
+    padding: 4px 2px 6px !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-title.reader-swipe-title {
+    font-size: 17px !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-summary-row {
+    padding: 5px 10px !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-summary-copy {
+    row-gap: 2px !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-summary-text {
+    max-width: 320px !important;
+    font-size: 11.1px !important;
+    line-height: 1.38 !important;
+    -webkit-line-clamp: 3 !important;
+    line-clamp: 3 !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-actions {
+    padding: 6px 2px 10px !important;
+  }
+
+  html body #app-main .reader-screen.reader-focus-open .reader-story-open {
+    min-height: 44px !important;
+  }
+}
