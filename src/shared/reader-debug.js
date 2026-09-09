@@ -99,51 +99,73 @@ function installReaderImageLayoutOnly() {
   const style = document.createElement('style');
   style.id = IMAGE_LAYOUT_STYLE_ID;
   style.textContent = `
-    /*
-     * Keep the exact c11dad37 image geometry, and extend only the hero card skin
-     * to the same bottom edge. No title/summary/action layout dimensions change.
-     */
-    .reader-screen.reader-focus-open .reader-story-hero {
-      overflow: visible !important;
-      border-bottom-color: transparent !important;
-      border-bottom-left-radius: 0 !important;
-      border-bottom-right-radius: 0 !important;
+    /* Reader hero only: one real card containing source, two-line title and bounded media. */
+    .reader-screen.reader-focus-open .reader-story-card.reader-story-card {
+      --reader-card-gap: clamp(9px, 1.1dvh, 11px);
+      grid-template-rows: clamp(258px, 32dvh, 278px) minmax(0, 1fr) auto !important;
+      gap: var(--reader-card-gap) !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-hero.reader-story-hero {
+      height: 100% !important;
+      min-height: 0 !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      border-radius: 18px !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero::after {
-      content: '';
-      position: absolute;
-      z-index: 0;
-      left: -1px;
-      right: -1px;
-      bottom: -22px;
-      height: 23px;
-      box-sizing: border-box;
-      pointer-events: none;
-      background: #11161d;
-      border: 1px solid rgba(255,255,255,.075);
-      border-top: 0;
-      border-radius: 0 0 18px 18px;
+      content: none !important;
+      display: none !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-title.reader-swipe-title {
+      display: -webkit-box !important;
+      -webkit-box-orient: vertical !important;
+      -webkit-line-clamp: 2 !important;
+      line-clamp: 2 !important;
+      overflow: hidden !important;
+      max-height: calc(2 * 1.18em) !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image {
-      bottom: -22px !important;
+      top: 128px !important;
+      left: 12px !important;
+      right: 12px !important;
+      bottom: 14px !important;
+      width: calc(100% - 24px) !important;
+      height: auto !important;
+      max-width: none !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+      border-radius: 14px !important;
+      border: 1px solid rgba(255,255,255,.06) !important;
       z-index: 1 !important;
+      background: #0d1117 !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--contain {
       object-fit: contain !important;
       object-position: center center !important;
-      background: #0d1117 !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--cover {
       object-fit: cover !important;
       object-position: center center !important;
     }
+    .reader-screen.reader-focus-open .reader-story-content.reader-story-content {
+      justify-content: flex-start !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-summary.reader-ai-summary {
+      gap: var(--reader-card-gap) !important;
+      align-content: start !important;
+    }
     @media (max-height: 700px) {
-      .reader-screen.reader-focus-open .reader-story-hero::after {
-        bottom: -12px;
-        height: 13px;
+      .reader-screen.reader-focus-open .reader-story-card.reader-story-card {
+        --reader-card-gap: 7px;
+        grid-template-rows: 226px minmax(0, 1fr) auto !important;
+        gap: var(--reader-card-gap) !important;
       }
       .reader-screen.reader-focus-open .reader-story-hero-image {
-        bottom: -12px !important;
+        top: 112px !important;
+        bottom: 12px !important;
+      }
+      .reader-screen.reader-focus-open .reader-story-summary.reader-ai-summary {
+        gap: var(--reader-card-gap) !important;
       }
     }
   `;
@@ -295,6 +317,29 @@ function resolveMissingHeroImage(card) {
   });
 }
 
+function cardIsActuallyVisible(card) {
+  if (!card?.isConnected || typeof window === 'undefined') return false;
+  const rect = card.getBoundingClientRect();
+  const height = window.innerHeight || document.documentElement?.clientHeight || 0;
+  return rect.bottom > 0 && rect.top < height;
+}
+
+function scheduleMissingHeroImage(card, { immediate = false } = {}) {
+  if (!card?.isConnected || card.dataset.readerImagePrefetchScheduled === '1') return;
+  if (immediate) {
+    resolveMissingHeroImage(card);
+    return;
+  }
+  card.dataset.readerImagePrefetchScheduled = '1';
+  const run = () => {
+    if (!card?.isConnected) return;
+    card.dataset.readerImagePrefetchScheduled = '0';
+    resolveMissingHeroImage(card);
+  };
+  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 650 });
+  else setTimeout(run, 140);
+}
+
 function observeImageCard(card) {
   if (!card?.matches?.('.reader-story-card') || card.dataset.readerImageObserved === '1') return;
   card.dataset.readerImageObserved = '1';
@@ -306,7 +351,7 @@ function observeImageCard(card) {
   }
   if (!existing && card.dataset.readerImageFailed !== '1') {
     sendImageDiagnostic(card, 'missing-item-image');
-    resolveMissingHeroImage(card);
+    scheduleMissingHeroImage(card, { immediate: true });
   }
 }
 
@@ -329,11 +374,11 @@ export function installReaderImageDiagnostics() {
         if (image) setResolvedImageFit(image, image.dataset.readerImageKind || '');
         if (!image && card.dataset.readerImageFailed !== '1') {
           sendImageDiagnostic(card, 'missing-item-image');
-          resolveMissingHeroImage(card);
+          scheduleMissingHeroImage(card, { immediate: cardIsActuallyVisible(card) });
         }
         imageIntersectionObserver.unobserve(card);
       }
-    }, { threshold: [0], rootMargin: '110% 0px 110% 0px' });
+    }, { threshold: [0], rootMargin: '65% 0px 65% 0px' });
   }
 
   document.addEventListener('error', event => {
