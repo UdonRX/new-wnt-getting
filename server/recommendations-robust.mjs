@@ -9,7 +9,7 @@ import { resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
 
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
-const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-unbounded-v8';
+const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-image-v9';
 const RECOMMENDATION_TTL_MS = 10 * 60 * 1000;
 const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
@@ -45,6 +45,10 @@ function isRecentTimestamp(timestamp, { now = nowMs(), windowMs = RECENT_NEWS_WI
 function publisherPathHint(rawUrl = '') {
   try { return NON_ARTICLE_PATH_HINT_RE.test(new URL(String(rawUrl)).pathname || ''); }
   catch { return false; }
+}
+function hostOfUrl(rawUrl = '') {
+  try { return new URL(String(rawUrl || '')).hostname.toLowerCase(); }
+  catch { return ''; }
 }
 
 export function classifyRecommendationCandidate(item = {}, publisherUrl = '') {
@@ -234,6 +238,8 @@ function mergeSourceResult(row, result = {}) {
   const sourceDateMethod = String(result.sourceDateMethod || '');
   return {
     ...row,
+    image: row.image || result.sourceImage || '',
+    sourceImageMethod: result.sourceImageMethod || '',
     sourcePublishedTimestamp: Number(result.sourcePublishedTimestamp || 0),
     sourceDateMethod,
     publisherUrl: result.publisherUrl || '',
@@ -318,6 +324,7 @@ function finalizeSelection(rows = []) {
         description: row.description,
         source: row.source,
         feedName: row.feedName,
+        image: row.image || '',
         pubDate: new Date(effectiveTimestamp).toISOString(),
         publishedTimestamp: effectiveTimestamp,
         sourcePublishedTimestamp: Number(row.sourcePublishedTimestamp || 0),
@@ -392,6 +399,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   stage.sourceDateReplenishChecked = 0;
   stage.sourceDateSucceeded = [...sourceById.values()].filter(row => row?.sourcePublishedTimestamp).length;
   stage.sourceDateUnknown = stage.sourceDateChecked - stage.sourceDateSucceeded;
+  stage.sourceImageFound = [...sourceById.values()].filter(row => row?.sourceImage).length;
 
   let checkedRows = ranked
     .filter(row => sourceById.has(row.id))
@@ -443,6 +451,8 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   stage.verifiedCount = verifiedRecent.length;
   stage.supplementedCount = items.filter(item => item.recommendationDateSource === 'google-news').length;
   stage.itemsReturned = items.length;
+  stage.imageCount = items.filter(item => item.image).length;
+  stage.imageMissingCount = items.length - stage.imageCount;
   stage.outputCountUnbounded = true;
 
   // 1件だけを成功扱いにはしない。最低5件に届かない場合は既存RSS fallbackへ渡す。
@@ -455,6 +465,16 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   if (stage.gdeltDegraded) degradedSignals.push('gdelt');
   if (stage.sourceDateUnknown > 0) degradedSignals.push('source-published-time-partial');
   if (stage.supplementedCount > 0) degradedSignals.push('google-news-date-supplement');
+  if (stage.imageMissingCount > 0) degradedSignals.push('article-image-partial');
+
+  if (stage.imageMissingCount > 0) {
+    console.warn('[recommendations:image-missing]', {
+      requestId: id,
+      missing: stage.imageMissingCount,
+      total: items.length,
+      articles: items.filter(item => !item.image).slice(0, 12).map(item => ({ id: item.id, title: item.title, source: item.source }))
+    });
+  }
 
   const diagnostics = {
     requestId: id, strategy: RECOMMENDATION_STRATEGY, totalMs: Date.now() - started,
@@ -474,6 +494,9 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
         pageType: checked.pageType || 'article-candidate',
         nonArticle: Boolean(checked.nonArticle),
         nonArticleReason: checked.nonArticleReason || '',
+        hasImage: Boolean(checked.image),
+        imageHost: hostOfUrl(checked.image),
+        sourceImageMethod: checked.sourceImageMethod || '',
         trendMatch: row.trendMatch,
         trendScore: row.trendScore,
         importance: row.importanceCategory,
@@ -519,6 +542,9 @@ export default async function handler(req, res) {
       itemsReturned: payload.diagnostics.itemsReturned,
       verifiedCount: payload.diagnostics.verifiedCount,
       supplementedCount: payload.diagnostics.supplementedCount,
+      imageCount: payload.diagnostics.imageCount,
+      imageMissingCount: payload.diagnostics.imageMissingCount,
+      sourceImageFound: payload.diagnostics.sourceImageFound,
       candidates: payload.diagnostics.candidates,
       nonArticleTitleCandidates: payload.diagnostics.nonArticleTitleCandidates,
       nonArticlePublisherCandidates: payload.diagnostics.nonArticlePublisherCandidates,

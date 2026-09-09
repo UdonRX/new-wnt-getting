@@ -1,6 +1,6 @@
 const RECOMMENDATION_TIMEOUT_MS = 7000;
-const RECOMMENDATION_API_VERSION = '3';
-export const RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v1';
+const RECOMMENDATION_API_VERSION = '4';
+export const RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v2';
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
 const NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
 let recommendationInflight = null;
@@ -148,7 +148,7 @@ async function fetchNetwork(onProgress) {
       if (!items.length) { const error = new Error('新方式のおすすめ候補が空です'); error.stage = 'empty-response'; error.hardFallback = true; throw error; }
       items = items.map(item => ({ ...item, _readerMode: 'news', _recommendationLabel: item?._recommendationLabel || '重要・話題ニュース' }));
       items = await mergeKnownImages(items);
-      globalThis.__PDV2_LAST_RECOMMENDATION_META = { strategy: data?.strategy || 'google-news-trends-gdelt-v4', cached: Boolean(data?.cached), degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [], at: Date.now() };
+      globalThis.__PDV2_LAST_RECOMMENDATION_META = { strategy: data?.strategy || 'google-news-trends-gdelt-source-date-article-image-v9', cached: Boolean(data?.cached), degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [], at: Date.now() };
       onProgress?.(88, data?.degradedSignals?.length ? 'Google Newsを重要度中心で評価済み' : '重要度・話題性・複数媒体を評価済み');
       writeRecommendationSnapshot(items);
       return items;
