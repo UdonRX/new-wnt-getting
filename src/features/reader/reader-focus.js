@@ -442,6 +442,7 @@ function buildFeedCard(item, index, { label, onList, summaryMode, sharedKey }) {
   const mode = summaryModeOf(item, summaryMode);
   const articleId = focusItemKey(item) || String(index);
   const card = el('section', { class: 'reader-swipe-card reader-story-card', 'data-index': String(index), 'data-key': articleId, 'data-article-id': articleId });
+  card.dataset.readerSourceUrl = String(item?.sourceUrl || item?.publisherUrl || '').trim();
   if (sharedKey && sharedKey === focusItemKey(item)) card.style.viewTransitionName = 'reader-shared-card';
   const cached = cachedSummary(item, mode);
   const initial = cached || pendingSummary(item);
