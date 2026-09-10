@@ -1,5 +1,5 @@
 const RECOMMENDATION_TIMEOUT_MS = 7000;
-const RECOMMENDATION_API_VERSION = '4';
+const RECOMMENDATION_API_VERSION = '5';
 export const RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v2';
 const HOME_RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v1';
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
