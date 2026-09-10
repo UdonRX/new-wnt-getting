@@ -21,7 +21,7 @@ function sortLatest(items = []) {
 }
 function compactItem(item = {}) {
   return {
-    id: item.id || '', title: item.title || '', link: item.link || '', publisherUrl: item.publisherUrl || '', description: String(item.description || '').slice(0, 900),
+    id: item.id || '', title: item.title || '', link: item.link || '', publisherUrl: item.publisherUrl || '', sourceUrl: item.sourceUrl || '', description: String(item.description || '').slice(0, 900),
     source: item.source || '', feedName: item.feedName || '', image: item.image || '', pubDate: item.pubDate || '', recommendationDateSource: item.recommendationDateSource || '',
     publishedTimestamp: Number(item.publishedTimestamp || 0), sourcePublishedTimestamp: Number(item.sourcePublishedTimestamp || 0),
     effectivePublishedTimestamp: Number(item.effectivePublishedTimestamp || 0), trendMatch: item.trendMatch || '', trendScore: Number(item.trendScore || 0),
