@@ -1,0 +1,72 @@
+name: verify-knowledge-papers
+on:
+  push:
+    branches: [work/knowledge-papers-reader]
+permissions:
+  contents: write
+jobs:
+  verify:
+    if: github.event.head_commit.message != 'chore: finalize unified paper home'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/knowledge-papers-reader
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply final targeted home and paper metadata cleanup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          home = Path('src/features/home/home.js')
+          s = home.read_text()
+          replacements = [
+            ("""    heroNavigate(navigate, shell, `${kind}:${item.id}`, 'reader', {\n      readerMode: paper ? 'papers' : 'knowledge',\n      openId: String(item.id),\n      ...(paper ? { technologyTab: 'papers' } : {})\n    });""",
+             """    heroNavigate(navigate, shell, `${kind}:${item.id}`, 'reader', {\n      readerMode: paper ? 'papers' : 'knowledge',\n      openId: String(item.id)\n    });"""),
+            ("""    const [{ readReaderCache }, { pickHomeKnowledge, pickHomePaper }] = await Promise.all([\n      import('../reader/reader-data.js'),\n      import('../reader/reader-attention.js')\n    ]);\n    const [knowledge, papers] = await Promise.all([readReaderCache('knowledge', 'core'), readReaderCache('papers', 'technology')]);\n    const stored = readJson(DISCOVER_KEY, {}), day = jstDay(), sameDay = stored?.day === day;\n    const knowledgeRead = readSet('pdv2:read:knowledge'), paperRead = readSet('pdv2:read:papers:technology');\n    const knowledgeItems = knowledge?.items || [], paperItems = papers?.items || [];""",
+             """    const [{ readReaderCache }, { dedupePaperItems, pickHomeKnowledge, pickHomePaper }] = await Promise.all([\n      import('../reader/reader-data.js'),\n      import('../reader/reader-attention.js')\n    ]);\n    const [knowledge, papers, creativePapers] = await Promise.all([\n      readReaderCache('knowledge', 'core'),\n      readReaderCache('papers', 'technology'),\n      readReaderCache('papers', 'creative')\n    ]);\n    const stored = readJson(DISCOVER_KEY, {}), day = jstDay(), sameDay = stored?.day === day;\n    const knowledgeRead = readSet('pdv2:read:knowledge'), paperRead = readSet('pdv2:read:papers:technology');\n    const knowledgeItems = knowledge?.items || [];\n    const paperItems = dedupePaperItems([...(papers?.items || []), ...(creativePapers?.items || [])]);"""),
+            ("""      knowledge: k, paper: p, knowledgeItems, paperItems,\n      knowledgeFresh: Boolean(knowledge?.fresh), paperFresh: Boolean(papers?.fresh)""",
+             """      knowledge: k, paper: p, knowledgeItems, paperItems,\n      knowledgeFresh: Boolean(knowledge?.fresh), paperFresh: Boolean(papers?.fresh && creativePapers?.fresh)"""),
+            ("""      if (force || !result.paperFresh) {\n        sourceJobs.push(loadReader('papers', { force, paperTrack: 'core', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null));\n      }""",
+             """      if (force || !result.paperFresh) {\n        sourceJobs.push(\n          loadReader('papers', { force, paperTrack: 'core', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null),\n          loadReader('papers', { force, paperTrack: 'creative', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null)\n        );\n      }""")
+          ]
+          for old, new in replacements:
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one home replacement, found {count}: {old[:80]!r}')
+              s = s.replace(old, new)
+          home.write_text(s)
+
+          tech = Path('lib/technology-research.mjs')
+          t = tech.read_text()
+          for old, new in [
+              ("const VERSION = '生産技術8タブ-v13';", "const VERSION = '生産技術統合-v14';"),
+              ("res.setHeader('X-Technology-Research-Version','13')", "res.setHeader('X-Technology-Research-Version','14')")
+          ]:
+              count = t.count(old)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one technology replacement, found {count}: {old!r}')
+              t = t.replace(old, new)
+          tech.write_text(t)
+          PY
+      - run: npm ci
+      - run: npm run check
+      - run: git diff --check
+      - name: Assert scope and removed paper tab machinery
+        shell: bash
+        run: |
+          test "$(find api -maxdepth 1 -type f -name '*.mjs' | wc -l)" -eq 4
+          ! grep -R "TECHNOLOGY_TABS\|TECHNOLOGY_TAB_KEY\|technologyTab: 'papers'\|pdv2:technologyResearchTab" src/features/home src/features/reader --include='*.js'
+          git diff --name-only HEAD | grep -Ev '^(src/features/home/home.js|lib/technology-research.mjs)$' && exit 1 || true
+      - name: Commit verified targeted cleanup
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/features/home/home.js lib/technology-research.mjs
+          git commit -m 'chore: finalize unified paper home'
+          git push origin HEAD:work/knowledge-papers-reader
