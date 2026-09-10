@@ -7,7 +7,8 @@ const NEGATIVE_TTL_MS = 90 * 1000;
 const HOME_TTL_MS = 6 * 60 * 60 * 1000;
 const PAGE_BYTES = 1500 * 1024;
 const RSS_BYTES = 512 * 1024;
-const RESOLVER_POLICY = 'reader-image-fast-v1';
+const PUBLISHER_FALLBACK_DEADLINE_MS = 1600;
+const RESOLVER_POLICY = 'reader-image-fast-v2';
 const imageCache = new Map();
 const homeCache = new Map();
 
@@ -326,6 +327,17 @@ function cacheKeyType(key = '') {
   return 'link';
 }
 
+export function readerImageCacheLookup(body = {}) {
+  const keys = cacheKeys(compact(body?.link, 2200), compact(body?.articleId, 700), compact(body?.title, 320));
+  const cached = cacheGet(keys);
+  return cached ? { payload: { ...cached.value, cached: true }, cacheKey: cacheKeyType(cached.key) } : null;
+}
+
+export function readerImageCacheRemember(body = {}, payload = {}) {
+  const keys = cacheKeys(compact(body?.link, 2200), compact(body?.articleId, 700), compact(body?.title, 320));
+  cacheSet(keys, payload);
+}
+
 function homeGet(key) {
   const normalized = norm(key).slice(0, 100);
   const row = homeCache.get(normalized);
@@ -601,14 +613,32 @@ function fallbackType(row, source, hint) {
     : 'same-story';
 }
 
-async function publisherFallback(title, source) {
+function reusableGoogleRows(seedRows = []) {
+  return (Array.isArray(seedRows) ? seedRows : [seedRows])
+    .map(row => ({
+      title: compact(row?.title, 320),
+      source: compact(row?.source, 120),
+      home: safeUrl(row?.home),
+      sim: Number(row?.sim || 0)
+    }))
+    .filter(row => row.title && row.home && row.sim >= 0.58)
+    .slice(0, 3);
+}
+
+async function publisherFallback(title, source, seedRows = []) {
   const query = baseTitle(title);
   const hint = publisherHint(title);
   const profile = profileFor(hint) || profileFor(source);
   const key = hint || source;
-  const home = homeGet(key) || profile?.home || '';
+  const reusedRows = reusableGoogleRows(seedRows);
+  const aggregatorPrimarySkipped = isAggregator(source) && reusedRows.length > 0;
+  const sourceMatchedSeed = reusedRows.find(row => similarity(source, row.source) >= 0.46);
+  const discoveredHome = !isAggregator(source) ? sourceMatchedSeed?.home || '' : '';
+  const cachedHome = aggregatorPrimarySkipped ? '' : homeGet(key);
+  const profileHome = aggregatorPrimarySkipped ? '' : (profile?.home || '');
+  const home = cachedHome || discoveredHome || profileHome || '';
 
-  const rowsPromise = googleRows(query);
+  const rowsPromise = reusedRows.length ? Promise.resolve(reusedRows) : googleRows(query);
   const primaryPromise = home
     ? crawlPublisher(query, key, home, (profile?.pages || []).map(path => new URL(path, home).href))
     : Promise.resolve(null);
@@ -618,8 +648,11 @@ async function publisherFallback(title, source) {
     homeSet(key, primary.homepage);
     return {
       ...primary,
-      fallback: hint ? 'publisher-hint' : 'publisher-direct',
-      rssCandidates: rows.length
+      fallback: reusedRows.length ? 'publisher-reused-google-row' : (hint ? 'publisher-hint' : 'publisher-direct'),
+      rssCandidates: rows.length,
+      googleNewsRowReused: Boolean(reusedRows.length),
+      googleNewsSearchSkipped: Boolean(reusedRows.length),
+      aggregatorPrimarySkipped
     };
   }
 
@@ -650,7 +683,14 @@ async function publisherFallback(title, source) {
   }));
 
   const hit = alternatives.filter(Boolean).sort((a, b) => b.similarity - a.similarity)[0];
-  if (hit) return hit;
+  if (hit) {
+    return {
+      ...hit,
+      googleNewsRowReused: Boolean(reusedRows.length),
+      googleNewsSearchSkipped: Boolean(reusedRows.length),
+      aggregatorPrimarySkipped
+    };
+  }
 
   return {
     image: '',
@@ -658,8 +698,41 @@ async function publisherFallback(title, source) {
     checked: primary?.checked || 0,
     rssCandidates: rows.length,
     publisherCandidates: choices.length,
+    googleNewsRowReused: Boolean(reusedRows.length),
+    googleNewsSearchSkipped: Boolean(reusedRows.length),
+    aggregatorPrimarySkipped,
     error: primary?.error || (rows.length ? 'same-story-publisher-not-found' : 'google-news-no-candidates')
   };
+}
+
+async function publisherWithDeadline(title, source, seedRows = []) {
+  let timer;
+  const started = Date.now();
+  const timeout = new Promise(resolve => {
+    timer = setTimeout(() => resolve({
+      result: {
+        image: '',
+        error: 'publisher-deadline',
+        googleNewsRowReused: Boolean(reusableGoogleRows(seedRows).length),
+        googleNewsSearchSkipped: Boolean(reusableGoogleRows(seedRows).length),
+        aggregatorPrimarySkipped: isAggregator(source) && reusableGoogleRows(seedRows).length > 0
+      },
+      timedOut: true,
+      ms: Date.now() - started
+    }), PUBLISHER_FALLBACK_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([
+      publisherFallback(title, source, seedRows).then(result => ({
+        result,
+        timedOut: false,
+        ms: Date.now() - started
+      })),
+      timeout
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function readerImageDiagnostic(req, res) {
@@ -695,6 +768,8 @@ export async function readerImageResolve(req, res) {
   const source = compact(body.source, 120);
   const link = compact(body.link, 2200);
   if (!/^https?:\/\//i.test(link)) return res.status(400).json({ error: 'Invalid article link' });
+  const seedRows = req?.__readerImageGoogleNewsRow ? [req.__readerImageGoogleNewsRow] : [];
+  const sourceHomeHost = hostOf(seedRows[0]?.home);
 
   console.info('[NEWS-IMAGE]', {
     diagnosticVersion: 2,
@@ -705,6 +780,9 @@ export async function readerImageResolve(req, res) {
     siteBrandEnabled: false,
     publisherBingParallel: true,
     googleNewsDecodeFallback: true,
+    googleNewsRowReuse: true,
+    duplicateGoogleSearchSuppression: true,
+    publisherDeadlineMs: PUBLISHER_FALLBACK_DEADLINE_MS,
     resolvedUrlReuse: true,
     positiveCacheTtlMs: POSITIVE_TTL_MS
   });
@@ -755,8 +833,10 @@ export async function readerImageResolve(req, res) {
       policy: RESOLVER_POLICY,
       articleId,
       reason: 'google-link-remained-after-preflight',
-      strategy: 'skip-second-decode+publisher-bing-parallel',
-      publisherHint: compact(publisherHint(title), 90)
+      strategy: 'reuse-google-news-row+publisher-bing-parallel',
+      publisherHint: compact(publisherHint(title), 90),
+      googleNewsRowAvailable: Boolean(seedRows.length),
+      sourceHomeHost
     });
   } else {
     direct = await resolveSourcePublishedTime(link, { stageTimeoutMs: 1400 });
@@ -771,7 +851,7 @@ export async function readerImageResolve(req, res) {
     backupImage: '',
     imageKind: directImage && !directBlocked ? 'article' : '',
     method: directBlocked ? '' : compact(direct?.sourceImageMethod, 120),
-    publisherUrl: compact(direct?.publisherUrl, 2200),
+    publisherUrl: compact(direct?.publisherUrl || req?.__readerImageRecoveredPublisherUrl, 2200),
     error: compact(direct?.error, 240),
     fallback: '',
     fallbackError: ''
@@ -784,13 +864,15 @@ export async function readerImageResolve(req, res) {
       policy: RESOLVER_POLICY,
       articleId,
       paths: ['publisher', 'bing'],
+      googleNewsRowReused: Boolean(seedRows.length),
+      sourceHomeHost,
+      duplicateGoogleSearchSkipped: Boolean(seedRows.length),
+      publisherDeadlineMs: PUBLISHER_FALLBACK_DEADLINE_MS,
       gdeltEnabled: false,
       siteBrandEnabled: false
     });
 
-    const publisherStarted = Date.now();
-    const publisherPromise = publisherFallback(title, source)
-      .then(result => ({ result, ms: Date.now() - publisherStarted }));
+    const publisherPromise = publisherWithDeadline(title, source, seedRows);
 
     const bingStarted = Date.now();
     const bingPromise = bingNews(title, source)
@@ -806,10 +888,15 @@ export async function readerImageResolve(req, res) {
       policy: RESOLVER_POLICY,
       articleId,
       publisherMs: publisherRun.ms,
+      publisherTimedOut: Boolean(publisherRun.timedOut),
       bingMs: bingRun.ms,
       totalParallelMs: Math.max(publisherRun.ms, bingRun.ms),
       publisherOk: Boolean(publisher.image),
       bingOk: Boolean(bing.image),
+      googleNewsRowReused: Boolean(publisher.googleNewsRowReused) || Boolean(seedRows.length),
+      duplicateGoogleSearchSkipped: Boolean(publisher.googleNewsSearchSkipped) || Boolean(seedRows.length),
+      aggregatorPrimarySkipped: Boolean(publisher.aggregatorPrimarySkipped),
+      sourceHomeHost,
       publisherReason: compact(publisher.error, 160),
       bingReason: compact(bing.error, 160),
       gdeltUsed: false,
@@ -833,6 +920,10 @@ export async function readerImageResolve(req, res) {
         rowSource: publisher.rowSource || '',
         checked: publisher.checked || 0,
         rssCandidates: publisher.rssCandidates || 0,
+        googleNewsRowReused: Boolean(publisher.googleNewsRowReused) || Boolean(seedRows.length),
+        duplicateGoogleSearchSkipped: Boolean(publisher.googleNewsSearchSkipped) || Boolean(seedRows.length),
+        aggregatorPrimarySkipped: Boolean(publisher.aggregatorPrimarySkipped),
+        publisherTimedOut: false,
         elapsedMs: Date.now() - started
       });
     } else if (bing.image) {
@@ -879,6 +970,11 @@ export async function readerImageResolve(req, res) {
         rssCandidates: publisher.rssCandidates || 0,
         publisherCandidates: publisher.publisherCandidates || 0,
         reason: publisherError,
+        googleNewsRowReused: Boolean(publisher.googleNewsRowReused) || Boolean(seedRows.length),
+        duplicateGoogleSearchSkipped: Boolean(publisher.googleNewsSearchSkipped) || Boolean(seedRows.length),
+        aggregatorPrimarySkipped: Boolean(publisher.aggregatorPrimarySkipped),
+        publisherTimedOut: Boolean(publisherRun.timedOut),
+        publisherDeadlineMs: PUBLISHER_FALLBACK_DEADLINE_MS,
         elapsedMs: Date.now() - started
       });
     }
