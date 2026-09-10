@@ -16,7 +16,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
       - name: Apply final targeted home and paper metadata cleanup
         shell: bash
         run: |
@@ -54,7 +53,7 @@ jobs:
               t = t.replace(old, new)
           tech.write_text(t)
           PY
-      - run: npm ci
+      - run: npm install --no-package-lock --no-audit --no-fund
       - run: npm run check
       - run: git diff --check
       - name: Assert scope and removed paper tab machinery
