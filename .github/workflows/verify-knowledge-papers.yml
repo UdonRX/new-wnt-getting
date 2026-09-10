@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Apply final targeted home and paper metadata cleanup
+      - name: Apply final targeted cleanup
         shell: bash
         run: |
           python - <<'PY'
@@ -34,6 +34,7 @@ jobs:
               if count != 1: raise SystemExit(f'Expected one home replacement, found {count}: {old[:70]!r}')
               s = s.replace(old, new)
           home.write_text(s)
+
           tech = Path('lib/technology-research.mjs')
           t = tech.read_text()
           for old, new in [("const VERSION = '生産技術8タブ-v13';", "const VERSION = '生産技術統合-v14';"), ("res.setHeader('X-Technology-Research-Version','13')", "res.setHeader('X-Technology-Research-Version','14')")]:
@@ -41,6 +42,13 @@ jobs:
               if count != 1: raise SystemExit(f'Expected one technology replacement, found {count}: {old!r}')
               t = t.replace(old, new)
           tech.write_text(t)
+
+          attention = Path('src/features/reader/reader-attention.js')
+          a = attention.read_text()
+          old = "const discoveredMs = Number.isFinite(incoming) && incoming > 0 ? incoming : remembered > 0 ? remembered : now;"
+          new = "const discoveredMs = Number.isFinite(incoming) && incoming > 0 && remembered > 0 ? Math.min(incoming, remembered) : Number.isFinite(incoming) && incoming > 0 ? incoming : remembered > 0 ? remembered : now;"
+          if a.count(old) != 1: raise SystemExit('Expected discoveredAt retention line exactly once')
+          attention.write_text(a.replace(old, new))
           PY
       - run: npm install --no-package-lock --no-audit --no-fund
       - name: Verify changed file syntax
@@ -88,6 +96,57 @@ jobs:
           node scripts/check-summary-prefetch.mjs
           rm lib/summary-dispatch-v2195.mjs
       - run: node scripts/check-recommendations.mjs
+      - name: Verify knowledge and paper requirements directly
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const memory = new Map();
+          globalThis.localStorage = {
+            getItem: key => memory.has(key) ? memory.get(key) : null,
+            setItem: (key, value) => memory.set(key, String(value)),
+            removeItem: key => memory.delete(key)
+          };
+          const m = await import('./src/features/reader/reader-attention.js?verify=' + Date.now());
+          const doiRows = m.dedupePaperItems([
+            {id:'d1',title:'Paper A',doi:'10.1000/test',description:'カテゴリ: 論文・研究 | short'},
+            {id:'d2',title:'Different mirror title',doi:'https://doi.org/10.1000/test',description:'カテゴリ: 論文・研究 | richer abstract '.repeat(20)}
+          ]);
+          assert.equal(doiRows.length, 1, 'DOI-first dedupe');
+          const titleRows = m.dedupePaperItems([
+            {id:'t1',title:'Thermal Control: A Study',description:'カテゴリ: 論文・研究'},
+            {id:'t2',title:'Thermal Control A Study',description:'カテゴリ: 論文・研究 | richer'}
+          ]);
+          assert.equal(titleRows.length, 1, 'normalized-title fallback dedupe');
+          const first = m.stampPaperItems([{id:'p1',title:'Retain Discovery',doi:'10.1000/retain',discoveredAt:'2026-09-01T00:00:00.000Z',pubDate:'2026-09-01',description:'カテゴリ: 論文・研究 | 実験 検証 新規 応用 | 関連度: 90 | 被引用数: 12 | DOI: 10.1000/retain'}])[0];
+          const second = m.stampPaperItems([{id:'p1',title:'Retain Discovery',doi:'10.1000/retain',discoveredAt:'2026-09-10T00:00:00.000Z',pubDate:'2026-09-01',description:'カテゴリ: 論文・研究 | 実験 検証 新規 応用 | 関連度: 90 | 被引用数: 12 | DOI: 10.1000/retain'}])[0];
+          assert.equal(second.discoveredAt, first.discoveredAt, 'discoveredAt must not reset on refetch');
+          const paperRank = m.rankPaperAttention([first, {id:'p2',title:'Plain paper',description:'カテゴリ: 論文・研究',pubDate:'2020-01-01'}], new Set());
+          assert.equal(paperRank[0].id, 'p1', 'Paper Attention ranks richer/newer paper first');
+          assert.ok(paperRank[0]._paperAttentionScore > 0);
+          const knowledge = [
+            {id:'k1',title:'半導体新技術',description:'研究開発',pubDate:new Date().toISOString(),source:'A'},
+            {id:'k2',title:'専門技術記事',description:'製造技術',pubDate:new Date().toISOString(),source:'B'}
+          ];
+          assert.equal(m.rankKnowledgeAttention(knowledge,new Set(),{k1:{trendScore:22}})[0].id,'k1','Trends boost ranking');
+          assert.equal(m.rankKnowledgeAttention(knowledge,new Set(),{}).length,2,'Trends unavailable fallback keeps RSS candidates');
+          const home=fs.readFileSync('src/features/home/home.js','utf8');
+          assert.ok(home.indexOf('root.replaceChildren(screen)') < home.indexOf('afterPaint(() => {'), 'home DOM before background network work');
+          assert.match(home,/readReaderCache\('knowledge', 'core'\)/);
+          assert.match(home,/readReaderCache\('papers', 'technology'\)/);
+          assert.match(home,/readReaderCache\('papers', 'creative'\)/);
+          assert.match(home,/openId:\s*String\(item\.id\)/);
+          const focus=fs.readFileSync('src/features/reader/reader-focus.js','utf8');
+          assert.match(focus,/paperAbstractSufficient/);
+          assert.match(focus,/rssOnly:\s*abstractFirst/);
+          assert.match(focus,/preferFullText:\s*abstractFirst \? false/);
+          const tech=fs.readFileSync('lib/technology-research.mjs','utf8');
+          assert.match(tech,/J-STAGE/); assert.match(tech,/CiNii Research/); assert.match(tech,/Semantic Scholar/);
+          assert.match(tech,/PAPER_LIGHT_TTL = 6\*60\*60\*1000/);
+          assert.match(tech,/PAPER_DEEP_TTL = 24\*60\*60\*1000/);
+          console.log('knowledge/paper targeted requirements: OK');
+          NODE
       - run: git diff --check
       - name: Assert scope, compatibility references, and removed paper tab machinery
         shell: bash
@@ -95,14 +154,14 @@ jobs:
           ! grep -R "TECHNOLOGY_TABS\|TECHNOLOGY_TAB_KEY\|technologyTab: 'papers'\|pdv2:technologyResearchTab" src/features/home src/features/reader --include='*.js'
           grep -q "papers-feed" server/papers-feed.mjs
           grep -q "papers-feed" api/research.mjs
-          grep -q "'/api/papers-feed'" vercel.json
+          grep -q '"/api/papers-feed"' vercel.json
           grep -q "reader-attention.js" sw.js
-          if git diff --name-only HEAD | grep -Ev '^(src/features/home/home.js|lib/technology-research.mjs)$'; then exit 1; fi
+          if git diff --name-only HEAD | grep -Ev '^(src/features/home/home.js|lib/technology-research.mjs|src/features/reader/reader-attention.js)$'; then exit 1; fi
       - name: Commit verified targeted cleanup
         shell: bash
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/features/home/home.js lib/technology-research.mjs
+          git add src/features/home/home.js lib/technology-research.mjs src/features/reader/reader-attention.js
           git commit -m 'chore: finalize unified paper home'
           git push origin HEAD:work/knowledge-papers-reader
