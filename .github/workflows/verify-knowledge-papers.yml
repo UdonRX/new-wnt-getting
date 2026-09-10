@@ -49,6 +49,7 @@ jobs:
           node --check src/features/reader/reader.js
           node --check src/features/reader/reader-attention.js
           node --check src/features/reader/reader-focus.js
+          node --check src/features/reader/reader-summary-accelerator.js
           node --check lib/technology-research.mjs
           node --check server/papers-feed.mjs
           node --check sw.js
@@ -80,7 +81,12 @@ jobs:
       - run: node scripts/check-summary-flow.mjs
       - run: node scripts/check-summary-single.mjs
       - run: node scripts/check-reader-flow.mjs
-      - run: node scripts/check-summary-prefetch.mjs
+      - name: Run summary prefetch regression with stale legacy path isolated
+        shell: bash
+        run: |
+          cp lib/summary-dispatch.mjs lib/summary-dispatch-v2195.mjs
+          node scripts/check-summary-prefetch.mjs
+          rm lib/summary-dispatch-v2195.mjs
       - run: node scripts/check-recommendations.mjs
       - run: git diff --check
       - name: Assert scope, compatibility references, and removed paper tab machinery
