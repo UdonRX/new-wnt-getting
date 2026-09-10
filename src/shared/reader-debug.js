@@ -2,6 +2,7 @@ const TRACE_LIMIT = 1200;
 const IMAGE_DIAGNOSTIC_ENDPOINT = '/api/reader-image-diagnostic';
 const IMAGE_RESOLVE_ENDPOINT = '/api/reader-image-resolve';
 const IMAGE_LAYOUT_STYLE_ID = 'pdv2-reader-image-layout-only';
+const IMAGE_RESOLVE_BUDGET_MS = 1300;
 const imageDiagnosticSeen = new Set();
 const imageResolveInflight = new Map();
 const imageResolveCache = new Map();
@@ -174,6 +175,19 @@ function installReaderImageLayoutOnly() {
     .reader-screen.reader-focus-open .reader-story-media-frame:empty {
       background: linear-gradient(145deg, rgba(255,255,255,.035), rgba(255,255,255,.012)) !important;
     }
+    .reader-screen.reader-focus-open .reader-story-brand-fallback {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      box-sizing: border-box !important;
+      border: 0 !important;
+      object-fit: contain !important;
+      object-position: center center !important;
+      padding: 42px !important;
+      z-index: 1 !important;
+      background: #0d1117 !important;
+    }
     .reader-screen.reader-focus-open .reader-story-hero-image {
       position: absolute !important;
       inset: 0 !important;
@@ -190,6 +204,9 @@ function installReaderImageLayoutOnly() {
       background: #0d1117 !important;
       opacity: 1 !important;
       filter: none !important;
+    }
+    .reader-screen.reader-focus-open .reader-story-hero-image[data-reader-resolved-image="1"] {
+      z-index: 2 !important;
     }
     .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--contain {
       object-fit: contain !important;
@@ -266,6 +283,9 @@ function installReaderImageLayoutOnly() {
       }
       .reader-screen.reader-focus-open .reader-story-media-frame {
         border-radius: 13px !important;
+      }
+      .reader-screen.reader-focus-open .reader-story-brand-fallback {
+        padding: 30px !important;
       }
       .reader-screen.reader-focus-open .reader-story-hero-image.reader-story-hero-image--contain {
         padding: 12px !important;
@@ -362,6 +382,51 @@ function articleLinkOf(card) {
   return /^https?:\/\//i.test(raw) ? raw : '';
 }
 
+function publisherSourceUrlOf(card) {
+  const stored = compactText(card?.dataset?.readerSourceUrl || '', 1200);
+  if (stored) return stored;
+  const link = articleLinkOf(card);
+  try {
+    const url = new URL(link);
+    return url.hostname.toLowerCase() === 'news.google.com' ? '' : url.href;
+  } catch { return ''; }
+}
+
+function publisherBrandUrl(sourceUrl = '') {
+  try {
+    const url = new URL(String(sourceUrl || '').trim());
+    if (!/^https?:$/.test(url.protocol)) return '';
+    return `https://www.google.com/s2/favicons?sz=256&domain_url=${encodeURIComponent(url.origin)}`;
+  } catch { return ''; }
+}
+
+function ensureBrandFallback(card, frame = ensureHeroStructure(card)) {
+  if (!card?.isConnected || !frame || frame.querySelector('img.reader-story-hero-image')) return null;
+  const existing = frame.querySelector('img.reader-story-brand-fallback');
+  if (existing) return existing;
+  const sourceUrl = publisherSourceUrlOf(card);
+  const src = publisherBrandUrl(sourceUrl);
+  if (!src) return null;
+  const image = document.createElement('img');
+  image.className = 'reader-story-brand-fallback';
+  image.dataset.readerImageKind = 'site-brand';
+  image.src = src;
+  image.alt = '';
+  image.loading = 'eager';
+  image.decoding = 'async';
+  image.referrerPolicy = 'no-referrer';
+  image.addEventListener('load', () => {
+    readerTrace('hero-image-brand-ready', {
+      articleId: compactText(card.dataset.articleId || card.dataset.key || '', 700),
+      sourceUrl
+    });
+    sendImageDiagnostic(card, 'site-brand-loaded', image.currentSrc || image.src || src);
+  }, { once: true });
+  image.addEventListener('error', () => image.remove(), { once: true });
+  frame.append(image);
+  return image;
+}
+
 function appendResolvedHeroImage(card, imageUrl, imageKind = '') {
   if (!card?.isConnected || !imageUrl || card.querySelector('img.reader-story-hero-image')) return false;
   const frame = ensureHeroStructure(card);
@@ -374,8 +439,11 @@ function appendResolvedHeroImage(card, imageUrl, imageKind = '') {
   image.loading = 'eager';
   image.decoding = 'async';
   image.referrerPolicy = 'no-referrer';
+  image.style.visibility = 'hidden';
   setResolvedImageFit(image, imageKind);
   image.addEventListener('load', () => {
+    image.style.visibility = 'visible';
+    frame.querySelector('img.reader-story-brand-fallback')?.remove();
     card.dataset.readerImageResolved = '1';
     card.dataset.readerImageFailed = '0';
     sendImageDiagnostic(card, 'resolved-on-demand', image.currentSrc || image.src || imageUrl);
@@ -394,6 +462,7 @@ function resolveMissingHeroImage(card) {
   const articleId = compactText(card.dataset.articleId || card.dataset.key || '', 700);
   const title = articleTitleOf(card);
   const source = compactText(card.querySelector('.reader-story-source-name')?.textContent || '', 120);
+  const sourceUrl = publisherSourceUrlOf(card);
   if (!title) return;
   card.dataset.readerImageResolve = 'pending';
 
@@ -406,11 +475,11 @@ function resolveMissingHeroImage(card) {
   let request = imageResolveInflight.get(link);
   if (!request) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6500);
+    const timer = setTimeout(() => controller.abort(), IMAGE_RESOLVE_BUDGET_MS);
     request = fetch(IMAGE_RESOLVE_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ articleId, title, source, link }),
+      body: JSON.stringify({ articleId, title, source, sourceUrl, link }),
       signal: controller.signal,
       cache: 'no-store'
     }).then(async response => {
@@ -452,13 +521,13 @@ function resolveMissingHeroImage(card) {
     sendImageDiagnostic(card, 'resolve-no-image');
   }).catch(error => {
     if (!card.isConnected) return;
-    card.dataset.readerImageResolve = 'error';
+    card.dataset.readerImageResolve = error?.name === 'AbortError' ? 'deadline' : 'error';
     readerTrace('hero-image-resolve-error', { articleId, source, error: String(error?.name || 'Error') + ':' + String(error?.message || error) });
-    sendImageDiagnostic(card, 'resolve-request-error');
+    sendImageDiagnostic(card, error?.name === 'AbortError' ? 'photo-deadline-site-brand-kept' : 'resolve-request-error');
   });
 }
 
-function scheduleMissingHeroImage(card, { delayMs = 650 } = {}) {
+function scheduleMissingHeroImage(card, { delayMs = 0 } = {}) {
   if (!card?.isConnected || card.dataset.readerImagePrefetchScheduled === '1') return;
   card.dataset.readerImagePrefetchScheduled = '1';
   const started = Date.now();
@@ -486,7 +555,10 @@ function observeImageCard(card) {
     imageIntersectionObserver.observe(card);
     return;
   }
-  if (!existing) scheduleMissingHeroImage(card);
+  if (!existing) {
+    ensureBrandFallback(card, frame);
+    scheduleMissingHeroImage(card);
+  }
 }
 
 function scanImageCards(root = document) {
@@ -507,7 +579,10 @@ export function installReaderImageDiagnostics() {
         const frame = ensureHeroStructure(card);
         const image = frame?.querySelector('img.reader-story-hero-image') || card.querySelector('img.reader-story-hero-image');
         if (image) setResolvedImageFit(image, image.dataset.readerImageKind || '');
-        if (!image) scheduleMissingHeroImage(card);
+        if (!image) {
+          ensureBrandFallback(card, frame);
+          scheduleMissingHeroImage(card);
+        }
         imageIntersectionObserver.unobserve(card);
       }
     }, { threshold: [0], rootMargin: '45% 0px 45% 0px' });
@@ -524,9 +599,10 @@ export function installReaderImageDiagnostics() {
     image.remove();
     card.dataset.readerImageResolved = '0';
     card.dataset.readerImageFailed = '1';
+    ensureBrandFallback(card, ensureHeroStructure(card));
     if (!wasResolved) {
       card.dataset.readerImageResolve = '';
-      scheduleMissingHeroImage(card, { delayMs: 120 });
+      scheduleMissingHeroImage(card);
     }
   }, true);
 
