@@ -252,13 +252,15 @@ function shortResponse(parsed) {
 
 export function buildRssOnlyAiBody(sourceBody = {}) {
   const evidence = rssEvidence(sourceBody);
-  // 技術リサーチはRSS内の構造化フィールドをサーバー側で3カードへ整形する。
-  // rssOnly=trueを維持するため元記事URLを残しても初回は本文取得せず、Validation失敗時のRecoveryだけに利用できる。
+  // 十分なRSS/Abstractは本文取得を行わず、その内容だけをAI要約へ渡す。
+  // 情報不足時の元記事本文/PDF取得はrouteReaderSummary→sourceRecoveryAiの別経路で行う。
   const preparedResearch = /技術リサーチ:\s*Web調査済み/i.test(evidence.description);
   const description = preparedResearch ? stripResearchSelectionMetadata(evidence.description) : evidence.description;
   return {
     ...sourceBody,
     description: Array.from(description).slice(0, preparedResearch ? 1800 : 380).join(''),
+    url: '',
+    link: '',
     preferFullText: false,
     rssOnly: true,
     fast: true
