@@ -354,8 +354,7 @@ function paintDiscoverCard(shell, item, label, readKey, navigate, kind) {
     const paper = kind === 'paper';
     heroNavigate(navigate, shell, `${kind}:${item.id}`, 'reader', {
       readerMode: paper ? 'papers' : 'knowledge',
-      openId: String(item.id),
-      ...(paper ? { technologyTab: 'papers' } : {})
+      openId: String(item.id)
     });
   };
   const copy = el('div', { class: 'home-discover-copy' });
@@ -376,20 +375,25 @@ function paintDiscoverCard(shell, item, label, readKey, navigate, kind) {
 }
 async function readDiscoverItems() {
   try {
-    const [{ readReaderCache }, { pickHomeKnowledge, pickHomePaper }] = await Promise.all([
+    const [{ readReaderCache }, { dedupePaperItems, pickHomeKnowledge, pickHomePaper }] = await Promise.all([
       import('../reader/reader-data.js'),
       import('../reader/reader-attention.js')
     ]);
-    const [knowledge, papers] = await Promise.all([readReaderCache('knowledge', 'core'), readReaderCache('papers', 'technology')]);
+    const [knowledge, papers, creativePapers] = await Promise.all([
+      readReaderCache('knowledge', 'core'),
+      readReaderCache('papers', 'technology'),
+      readReaderCache('papers', 'creative')
+    ]);
     const stored = readJson(DISCOVER_KEY, {}), day = jstDay(), sameDay = stored?.day === day;
     const knowledgeRead = readSet('pdv2:read:knowledge'), paperRead = readSet('pdv2:read:papers:technology');
-    const knowledgeItems = knowledge?.items || [], paperItems = papers?.items || [];
+    const knowledgeItems = knowledge?.items || [];
+    const paperItems = dedupePaperItems([...(papers?.items || []), ...(creativePapers?.items || [])]);
     const k = pickHomeKnowledge(knowledgeItems, knowledgeRead, sameDay ? stored.knowledgeId : '');
     const p = pickHomePaper(paperItems, paperRead, sameDay ? stored.paperId : '');
     try { localStorage.setItem(DISCOVER_KEY, JSON.stringify({ day, knowledgeId: k?.id || '', paperId: p?.id || '' })); } catch {}
     return {
       knowledge: k, paper: p, knowledgeItems, paperItems,
-      knowledgeFresh: Boolean(knowledge?.fresh), paperFresh: Boolean(papers?.fresh)
+      knowledgeFresh: Boolean(knowledge?.fresh), paperFresh: Boolean(papers?.fresh && creativePapers?.fresh)
     };
   } catch {
     return { knowledge: null, paper: null, knowledgeItems: [], paperItems: [], knowledgeFresh: false, paperFresh: false };
@@ -541,7 +545,10 @@ export async function renderHome(root, { navigate, refresh = false } = {}) {
         sourceJobs.push(loadReader('knowledge', { force, selectedFeed: '', preferCache: false, backgroundRefresh: true }).catch(() => null));
       }
       if (force || !result.paperFresh) {
-        sourceJobs.push(loadReader('papers', { force, paperTrack: 'core', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null));
+        sourceJobs.push(
+          loadReader('papers', { force, paperTrack: 'core', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null),
+          loadReader('papers', { force, paperTrack: 'creative', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null)
+        );
       }
       if (sourceJobs.length) {
         await Promise.allSettled(sourceJobs);

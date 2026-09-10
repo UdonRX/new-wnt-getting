@@ -130,7 +130,7 @@ export function stampPaperItems(items = []) {
     const upstreamDiscoveredAt = item?.discoveredAt || dateField(item?.description, 'discoveredAt');
     const incoming = new Date(upstreamDiscoveredAt || 0).getTime();
     const remembered = Number(map[key] || 0);
-    const discoveredMs = Number.isFinite(incoming) && incoming > 0 ? incoming : remembered > 0 ? remembered : now;
+    const discoveredMs = Number.isFinite(incoming) && incoming > 0 && remembered > 0 ? Math.min(incoming, remembered) : Number.isFinite(incoming) && incoming > 0 ? incoming : remembered > 0 ? remembered : now;
     if (key && (!remembered || discoveredMs < remembered)) { map[key] = discoveredMs; changed = true; }
     const publishedMs = itemTime(item);
     const publishedAt = publishedMs ? new Date(publishedMs).toISOString() : '';
