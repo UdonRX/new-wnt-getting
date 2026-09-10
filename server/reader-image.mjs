@@ -7,8 +7,8 @@ const NEGATIVE_TTL_MS = 90 * 1000;
 const HOME_TTL_MS = 6 * 60 * 60 * 1000;
 const PAGE_BYTES = 1500 * 1024;
 const RSS_BYTES = 512 * 1024;
-const PUBLISHER_FALLBACK_DEADLINE_MS = 1600;
-const RESOLVER_POLICY = 'reader-image-fast-v2';
+const PUBLISHER_FALLBACK_DEADLINE_MS = 1200;
+const RESOLVER_POLICY = 'reader-image-fast-v3';
 const imageCache = new Map();
 const homeCache = new Map();
 
@@ -735,6 +735,56 @@ async function publisherWithDeadline(title, source, seedRows = []) {
   }
 }
 
+function raceImagePaths(entries = [], deadlineMs = PUBLISHER_FALLBACK_DEADLINE_MS) {
+  const started = Date.now();
+  const states = Object.fromEntries(entries.map(entry => [entry.name, {
+    result: { image: '', error: `${entry.name}-pending` },
+    timedOut: false,
+    ms: 0
+  }]));
+  return new Promise(resolve => {
+    let finished = false;
+    let settled = 0;
+    const finish = winner => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve({ winner, states, ms: Date.now() - started });
+    };
+    const timer = setTimeout(() => {
+      for (const entry of entries) {
+        if (String(states[entry.name]?.result?.error || '').endsWith('-pending')) {
+          states[entry.name] = {
+            result: { image: '', error: `${entry.name}-deadline` },
+            timedOut: true,
+            ms: Date.now() - started
+          };
+        }
+      }
+      finish('');
+    }, deadlineMs);
+
+    for (const entry of entries) {
+      Promise.resolve(entry.promise).then(run => {
+        if (finished) return;
+        states[entry.name] = run || { result: { image: '', error: `${entry.name}-empty` }, timedOut: false, ms: Date.now() - started };
+        settled += 1;
+        if (states[entry.name]?.result?.image) return finish(entry.name);
+        if (settled >= entries.length) finish('');
+      }).catch(error => {
+        if (finished) return;
+        states[entry.name] = {
+          result: { image: '', error: `${entry.name}-${error?.message || error}` },
+          timedOut: false,
+          ms: Date.now() - started
+        };
+        settled += 1;
+        if (settled >= entries.length) finish('');
+      });
+    }
+  });
+}
+
 export function readerImageDiagnostic(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -770,6 +820,7 @@ export async function readerImageResolve(req, res) {
   if (!/^https?:\/\//i.test(link)) return res.status(400).json({ error: 'Invalid article link' });
   const seedRows = req?.__readerImageGoogleNewsRow ? [req.__readerImageGoogleNewsRow] : [];
   const sourceHomeHost = hostOf(seedRows[0]?.home);
+  const parallelGoogleDecode = isGoogleNewsUrl(link) && req?.__readerImageGoogleDecodeMethod === 'rss-source-url-seed';
 
   console.info('[NEWS-IMAGE]', {
     diagnosticVersion: 2,
@@ -780,6 +831,7 @@ export async function readerImageResolve(req, res) {
     siteBrandEnabled: false,
     publisherBingParallel: true,
     googleNewsDecodeFallback: true,
+    googleNewsParallelDecode: parallelGoogleDecode,
     googleNewsRowReuse: true,
     duplicateGoogleSearchSuppression: true,
     publisherDeadlineMs: PUBLISHER_FALLBACK_DEADLINE_MS,
@@ -832,14 +884,16 @@ export async function readerImageResolve(req, res) {
       phase: 'google-news-decode-fallback',
       policy: RESOLVER_POLICY,
       articleId,
-      reason: 'google-link-remained-after-preflight',
-      strategy: 'reuse-google-news-row+publisher-bing-parallel',
+      reason: parallelGoogleDecode ? 'rss-source-url-seeded' : 'google-link-remained-after-preflight',
+      strategy: parallelGoogleDecode
+        ? 'publisher+google-decode+bing-race'
+        : 'reuse-google-news-row+publisher-bing-parallel',
       publisherHint: compact(publisherHint(title), 90),
       googleNewsRowAvailable: Boolean(seedRows.length),
       sourceHomeHost
     });
   } else {
-    direct = await resolveSourcePublishedTime(link, { stageTimeoutMs: 1400 });
+    direct = await resolveSourcePublishedTime(link, { stageTimeoutMs: 1200 });
   }
 
   const directImage = compact(direct?.sourceImage, 2200);
@@ -863,7 +917,7 @@ export async function readerImageResolve(req, res) {
       phase: 'fallback-parallel-start',
       policy: RESOLVER_POLICY,
       articleId,
-      paths: ['publisher', 'bing'],
+      paths: parallelGoogleDecode ? ['publisher', 'google-decode', 'bing'] : ['publisher', 'bing'],
       googleNewsRowReused: Boolean(seedRows.length),
       sourceHomeHost,
       duplicateGoogleSearchSkipped: Boolean(seedRows.length),
@@ -876,10 +930,42 @@ export async function readerImageResolve(req, res) {
 
     const bingStarted = Date.now();
     const bingPromise = bingNews(title, source)
-      .then(result => ({ result, ms: Date.now() - bingStarted }));
+      .then(result => ({ result, timedOut: false, ms: Date.now() - bingStarted }));
 
-    const [publisherRun, bingRun] = await Promise.all([publisherPromise, bingPromise]);
+    const decodeStarted = Date.now();
+    const decodePromise = parallelGoogleDecode
+      ? resolveSourcePublishedTime(link, { stageTimeoutMs: 550 }).then(result => {
+          const candidate = compact(result?.sourceImage, 2200);
+          const blocked = candidate ? imageBlockedReason(candidate, 'article') : '';
+          if (blocked) logRejected('google-parallel-decode', candidate, blocked, result?.sourceImageMethod || '');
+          return {
+            result: {
+              image: blocked ? '' : candidate,
+              method: compact(result?.sourceImageMethod, 140),
+              articleUrl: compact(result?.publisherUrl, 2200),
+              error: compact(result?.error || (candidate ? '' : 'google-decode-no-image'), 160)
+            },
+            timedOut: false,
+            ms: Date.now() - decodeStarted
+          };
+        }).catch(error => ({
+          result: { image: '', error: `google-decode-${error?.message || error}` },
+          timedOut: false,
+          ms: Date.now() - decodeStarted
+        }))
+      : Promise.resolve({ result: { image: '', error: 'google-decode-not-needed' }, timedOut: false, ms: 0 });
+
+    const entries = [
+      { name: 'publisher', promise: publisherPromise },
+      ...(parallelGoogleDecode ? [{ name: 'google-decode', promise: decodePromise }] : []),
+      { name: 'bing', promise: bingPromise }
+    ];
+    const race = await raceImagePaths(entries, PUBLISHER_FALLBACK_DEADLINE_MS);
+    const publisherRun = race.states.publisher || { result: { image: '', error: 'publisher-empty' }, timedOut: false, ms: 0 };
+    const decodeRun = race.states['google-decode'] || { result: { image: '', error: 'google-decode-not-needed' }, timedOut: false, ms: 0 };
+    const bingRun = race.states.bing || { result: { image: '', error: 'bing-empty' }, timedOut: false, ms: 0 };
     const publisher = publisherRun.result || { image: '', error: 'publisher-empty' };
+    const decoded = decodeRun.result || { image: '', error: 'google-decode-empty' };
     const bing = bingRun.result || { image: '', error: 'bing-empty' };
 
     console.info('[NEWS-IMAGE]', {
@@ -887,23 +973,29 @@ export async function readerImageResolve(req, res) {
       phase: 'fallback-parallel-finish',
       policy: RESOLVER_POLICY,
       articleId,
+      winner: race.winner || '',
       publisherMs: publisherRun.ms,
       publisherTimedOut: Boolean(publisherRun.timedOut),
+      googleDecodeMs: decodeRun.ms,
+      googleDecodeTimedOut: Boolean(decodeRun.timedOut),
       bingMs: bingRun.ms,
-      totalParallelMs: Math.max(publisherRun.ms, bingRun.ms),
+      bingTimedOut: Boolean(bingRun.timedOut),
+      totalParallelMs: race.ms,
       publisherOk: Boolean(publisher.image),
+      googleDecodeOk: Boolean(decoded.image),
       bingOk: Boolean(bing.image),
       googleNewsRowReused: Boolean(publisher.googleNewsRowReused) || Boolean(seedRows.length),
       duplicateGoogleSearchSkipped: Boolean(publisher.googleNewsSearchSkipped) || Boolean(seedRows.length),
       aggregatorPrimarySkipped: Boolean(publisher.aggregatorPrimarySkipped),
       sourceHomeHost,
       publisherReason: compact(publisher.error, 160),
+      googleDecodeReason: compact(decoded.error, 160),
       bingReason: compact(bing.error, 160),
       gdeltUsed: false,
       siteBrandUsed: false
     });
 
-    if (publisher.image) {
+    if (race.winner === 'publisher' && publisher.image) {
       payload.image = compact(publisher.image, 2200);
       payload.imageKind = 'article';
       payload.method = compact(publisher.method, 140);
@@ -926,7 +1018,22 @@ export async function readerImageResolve(req, res) {
         publisherTimedOut: false,
         elapsedMs: Date.now() - started
       });
-    } else if (bing.image) {
+    } else if (race.winner === 'google-decode' && decoded.image) {
+      payload.image = compact(decoded.image, 2200);
+      payload.imageKind = 'article';
+      payload.method = compact(decoded.method, 140);
+      payload.publisherUrl = compact(decoded.articleUrl || payload.publisherUrl, 2200);
+      payload.fallback = 'google-news-parallel-decode';
+      console.info('[reader-image-resolve:google-news-decode]', {
+        ok: true,
+        articleId,
+        title,
+        source,
+        imageHost: hostOf(payload.image),
+        publisherHost: hostOf(payload.publisherUrl),
+        elapsedMs: Date.now() - started
+      });
+    } else if (race.winner === 'bing' && bing.image) {
       payload.image = compact(bing.image, 2200);
       payload.imageKind = 'article';
       payload.method = compact(bing.method, 140);
@@ -947,8 +1054,9 @@ export async function readerImageResolve(req, res) {
     } else {
       const bingError = compact(bing.error || 'unknown', 120);
       const publisherError = compact(publisher.error || 'unknown', 160);
+      const decodeError = compact(decoded.error || 'not-needed', 160);
       payload.fallbackError = compact(
-        `bing:${bingError};publisher:${publisherError};gdelt:disabled;site-brand:disabled`,
+        `bing:${bingError};publisher:${publisherError};decode:${decodeError};gdelt:disabled;site-brand:client-fallback`,
         500
       );
       console.warn('[reader-image-resolve:bing-news]', {

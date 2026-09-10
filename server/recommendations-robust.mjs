@@ -323,6 +323,7 @@ function finalizeSelection(rows = []) {
         googleNewsLink: row.link,
         description: row.description,
         source: row.source,
+        sourceUrl: row.sourceUrl || '',
         feedName: row.feedName,
         image: row.image || '',
         pubDate: new Date(effectiveTimestamp).toISOString(),

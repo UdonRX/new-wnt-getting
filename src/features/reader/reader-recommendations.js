@@ -1,5 +1,5 @@
 const RECOMMENDATION_TIMEOUT_MS = 7000;
-const RECOMMENDATION_API_VERSION = '4';
+const RECOMMENDATION_API_VERSION = '5';
 export const RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v2';
 const HOME_RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v1';
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
@@ -21,7 +21,7 @@ function sortLatest(items = []) {
 }
 function compactItem(item = {}) {
   return {
-    id: item.id || '', title: item.title || '', link: item.link || '', publisherUrl: item.publisherUrl || '', description: String(item.description || '').slice(0, 900),
+    id: item.id || '', title: item.title || '', link: item.link || '', publisherUrl: item.publisherUrl || '', sourceUrl: item.sourceUrl || '', description: String(item.description || '').slice(0, 900),
     source: item.source || '', feedName: item.feedName || '', image: item.image || '', pubDate: item.pubDate || '', recommendationDateSource: item.recommendationDateSource || '',
     publishedTimestamp: Number(item.publishedTimestamp || 0), sourcePublishedTimestamp: Number(item.sourcePublishedTimestamp || 0),
     effectivePublishedTimestamp: Number(item.effectivePublishedTimestamp || 0), trendMatch: item.trendMatch || '', trendScore: Number(item.trendScore || 0),

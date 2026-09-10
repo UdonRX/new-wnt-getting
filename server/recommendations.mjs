@@ -51,6 +51,15 @@ function xmlValue(block, tag) {
   const match = String(block || '').match(new RegExp(`<${safe}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${safe}>`, 'i'));
   return match ? decodeXml(match[1]) : '';
 }
+function sourceUrlFromBlock(block = '') {
+  const attrs = String(block || '').match(/<source\b([^>]*)>/i)?.[1] || '';
+  const match = attrs.match(/(?:^|\s)url\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+  const raw = decodeXml(match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
+  try {
+    const url = new URL(raw);
+    return /^https?:$/.test(url.protocol) ? url.href : '';
+  } catch { return ''; }
+}
 function stripHtml(value = '') {
   return decodeXml(String(value).replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
@@ -76,6 +85,7 @@ function isRecentTimestamp(timestamp, { now = nowMs(), windowMs = RECENT_NEWS_WI
 export function parseGoogleNews(xml = '') {
   return itemBlocks(xml).map((block, index) => {
     const source = stripHtml(xmlValue(block, 'source')) || 'Google News';
+    const sourceUrl = sourceUrlFromBlock(block);
     const title = cleanGoogleTitle(xmlValue(block, 'title'), source);
     const link = stripHtml(xmlValue(block, 'link'));
     const pubDate = stripHtml(xmlValue(block, 'pubDate'));
@@ -85,7 +95,7 @@ export function parseGoogleNews(xml = '') {
     const googlePublishedTimestamp = Number.isFinite(timestamp) ? timestamp : 0;
     return {
       id: stableId(link || `${title}|${pubDate}`), title, link, description,
-      source, feedName: 'Google News', pubDate,
+      source, sourceUrl, feedName: 'Google News', pubDate,
       googlePubDate: pubDate,
       googlePublishedTimestamp,
       // Google日時は一次候補の鮮度判定にだけ使用。最終表示前に配信元日時へ置換する。
