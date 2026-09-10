@@ -3,6 +3,7 @@ const KNOWLEDGE_TREND_KEY = 'pdv2:knowledgeTrend:v1';
 const KNOWLEDGE_TREND_TTL = 30 * 60 * 1000;
 const MAX_DISCOVERY_KEYS = 1600;
 const MAX_TREND_ITEMS = 90;
+const GOOGLE_TRENDS_RSS = 'https://trends.google.com/trending/rss?geo=JP';
 
 const KNOWLEDGE_IMPORTANCE_RE = /AI|人工知能|半導体|量子|ロボット|自動化|製造|生産|センサ|電池|エネルギー|材料|新技術|研究|開発|サイバー|通信|データセンター|宇宙|モビリティ|熱|断熱|省エネ|innovation|semiconductor|robot|manufactur|sensor|battery|energy|material|research/i;
 const PAPER_NOVELTY_RE = /新規|新しい|初めて|世界初|独創|提案|発見|革新|novel|novelty|new approach|first|unexpected|discovery|propose[ds]?/i;
@@ -48,6 +49,30 @@ function paperKey(item) {
   return title ? `title:${title}` : `id:${text(item?.id || item?.link || '')}`;
 }
 function clamp(value, min = 0, max = 100) { return Math.max(min, Math.min(max, Number(value) || 0)); }
+function bigrams(value = '') {
+  const normalized = normalizeTitle(value);
+  const set = new Set();
+  for (let index = 0; index < normalized.length - 1; index += 1) set.add(normalized.slice(index, index + 2));
+  return { normalized, set };
+}
+function trendMatchScore(title = '', trendTitle = '') {
+  const a = bigrams(title);
+  const b = bigrams(trendTitle);
+  if (!a.normalized || !b.normalized) return 0;
+  if (b.normalized.length >= 3 && (a.normalized.includes(b.normalized) || b.normalized.includes(a.normalized))) return 22;
+  if (!a.set.size || !b.set.size) return 0;
+  let same = 0;
+  for (const token of a.set) if (b.set.has(token)) same += 1;
+  const similarity = (2 * same) / (a.set.size + b.set.size);
+  return similarity >= 0.45 ? 16 : similarity >= 0.28 ? 9 : 0;
+}
+function parseTrendTitles(xml = '') {
+  try {
+    const document = new DOMParser().parseFromString(String(xml || ''), 'application/xml');
+    if (document.querySelector('parsererror')) return [];
+    return [...document.querySelectorAll('item > title')].map(node => text(node.textContent)).filter(Boolean).slice(0, 40);
+  } catch { return []; }
+}
 
 export function isPaperLike(item) {
   const hay = `${sourceName(item)} ${item?.description || ''}`;
@@ -141,34 +166,38 @@ export async function refreshKnowledgeTrendScores(items = [], { force = false } 
   const rows = (Array.isArray(items) ? items : [])
     .filter(item => item?.id && item?.title)
     .sort((a, b) => itemTime(b) - itemTime(a))
-    .slice(0, MAX_TREND_ITEMS)
-    .map(item => ({ id: String(item.id), title: text(item.title), description: text(item.description).slice(0, 700), pubDate: item?.pubDate || '', source: sourceName(item) }));
+    .slice(0, MAX_TREND_ITEMS);
   if (!rows.length) return cached.scores || {};
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3000);
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const response = await fetch('/api/recommendations?mode=knowledge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: rows }),
+    const response = await fetch(`/api/rss?url=${encodeURIComponent(GOOGLE_TRENDS_RSS)}&timeout=5000`, {
       signal: controller.signal,
-      cache: 'no-store'
+      cache: 'default',
+      headers: { Accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !Array.isArray(data?.ranking)) throw new Error(data?.error || `knowledge trends ${response.status}`);
+    if (!response.ok) throw new Error(`Google Trends RSS ${response.status}`);
+    const trends = parseTrendTitles(await response.text());
+    if (!trends.length) throw new Error('Google Trends RSS returned no rows');
+
     const scores = { ...(cached.scores || {}) };
-    data.ranking.forEach(row => {
-      if (!row?.id) return;
-      scores[String(row.id)] = {
-        trendScore: clamp(row.trendScore, 0, 22),
-        trendMatch: text(row.trendMatch),
-        at: Date.now()
-      };
+    const stampedAt = Date.now();
+    rows.forEach(item => {
+      let bestScore = 0;
+      let bestMatch = '';
+      for (const trend of trends) {
+        const score = trendMatchScore(item.title, trend);
+        if (score > bestScore) { bestScore = score; bestMatch = trend; }
+        if (bestScore === 22) break;
+      }
+      scores[String(item.id)] = { trendScore: bestScore, trendMatch: bestMatch, at: stampedAt };
     });
-    writeJson(KNOWLEDGE_TREND_KEY, { at: Date.now(), scores });
+    writeJson(KNOWLEDGE_TREND_KEY, { at: stampedAt, scores });
+    console.info('[knowledge-trends]', { cache: 'miss', registeredItems: rows.length, trends: trends.length, matched: rows.filter(item => Number(scores[String(item.id)]?.trendScore || 0) > 0).length });
     return scores;
-  } catch {
+  } catch (error) {
+    console.warn('[knowledge-trends]', { cache: cached.at ? 'stale' : 'unavailable', registeredItems: rows.length, error: error?.message || String(error) });
     return cached.scores || {};
   } finally {
     clearTimeout(timer);
