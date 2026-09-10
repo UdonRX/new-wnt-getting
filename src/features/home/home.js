@@ -104,7 +104,7 @@ function weatherGraph(rows) {
   const line = points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
   const nodes = points.map(point => {
     const [glyph] = wx(point.code), hour = new Date(point.time).getHours();
-    return `<text class="wx" x="${point.x}" y="${point.y - 9}">${glyph}</text><circle cx="${point.x}" cy="${point.y}" r="1.7"/><text class="temp" x="${point.x}" cy="${point.y}" y="${point.y + 13}">${Math.round(point.temp)}°</text><text class="time" x="${point.x}" y="108">${hour}時</text>${point.rain >= .1 ? `<text class="rain" x="${point.x}" y="120">${point.rain.toFixed(1)}mm</text>` : ''}`;
+    return `<text class="wx" x="${point.x}" y="${point.y - 9}">${glyph}</text><circle cx="${point.x}" cy="${point.y}" r="1.7"/><text class="temp" x="${point.x}" y="${point.y + 13}">${Math.round(point.temp)}°</text><text class="time" x="${point.x}" y="108">${hour}時</text>${point.rain >= .1 ? `<text class="rain" x="${point.x}" y="120">${point.rain.toFixed(1)}mm</text>` : ''}`;
   }).join('');
   return `<div class="home-weather-chart"><svg viewBox="0 0 320 124" preserveAspectRatio="xMidYMid meet" aria-label="数時間先までの天気"><polyline points="${line}"/>${nodes}</svg></div>`;
 }
