@@ -43,7 +43,7 @@ jobs:
           tech.write_text(t)
           PY
       - run: npm install --no-package-lock --no-audit --no-fund
-      - name: Syntax check changed implementation files
+      - name: Verify changed file syntax
         run: |
           node --check src/features/home/home.js
           node --check src/features/reader/reader.js
@@ -52,27 +52,45 @@ jobs:
           node --check lib/technology-research.mjs
           node --check server/papers-feed.mjs
           node --check sw.js
-      - name: Run repository checks with preexisting Settings syntax isolated
+      - name: Verify repository syntax with known main Settings defect isolated
         shell: bash
         run: |
           cp src/features/settings/settings.js /tmp/settings.js.original
           python - <<'PY'
           from pathlib import Path
-          p=Path('src/features/settings/settings.js')
-          s=p.read_text()
-          old="patchSettings({colors:{[k]:v}}))));"
-          new="patchSettings({colors:{[k]:v}})))));"
+          p=Path('src/features/settings/settings.js'); s=p.read_text()
+          old="patchSettings({colors:{[k]:v}}))));"; new="patchSettings({colors:{[k]:v}})))));"
           if s.count(old) != 1: raise SystemExit('Known main Settings syntax signature changed')
           p.write_text(s.replace(old,new))
           PY
-          npm run check
+          node scripts/check-syntax.mjs
           cp /tmp/settings.js.original src/features/settings/settings.js
-      - run: git diff --check
-      - name: Assert scope and removed paper tab machinery
+      - run: node scripts/check-stable-structure.mjs
+      - name: Verify Vercel function count and routes
         shell: bash
         run: |
           test "$(find api -maxdepth 1 -type f -name '*.mjs' | wc -l)" -eq 4
+          node - <<'NODE'
+          const fs=require('fs'); const v=JSON.parse(fs.readFileSync('vercel.json','utf8'));
+          const keys=Object.keys(v.functions||{}).sort();
+          const expected=['api/ai.mjs','api/feeds.mjs','api/research.mjs','api/youtube.mjs'];
+          if(JSON.stringify(keys)!==JSON.stringify(expected)) throw new Error(`Function set changed: ${keys.join(',')}`);
+          if(!(v.rewrites||[]).some(r=>r.source==='/api/papers-feed'&&String(r.destination).includes('__route=papers-feed'))) throw new Error('papers-feed compatibility rewrite missing');
+          NODE
+      - run: node scripts/check-summary-flow.mjs
+      - run: node scripts/check-summary-single.mjs
+      - run: node scripts/check-reader-flow.mjs
+      - run: node scripts/check-summary-prefetch.mjs
+      - run: node scripts/check-recommendations.mjs
+      - run: git diff --check
+      - name: Assert scope, compatibility references, and removed paper tab machinery
+        shell: bash
+        run: |
           ! grep -R "TECHNOLOGY_TABS\|TECHNOLOGY_TAB_KEY\|technologyTab: 'papers'\|pdv2:technologyResearchTab" src/features/home src/features/reader --include='*.js'
+          grep -q "papers-feed" server/papers-feed.mjs
+          grep -q "papers-feed" api/research.mjs
+          grep -q "'/api/papers-feed'" vercel.json
+          grep -q "reader-attention.js" sw.js
           if git diff --name-only HEAD | grep -Ev '^(src/features/home/home.js|lib/technology-research.mjs)$'; then exit 1; fi
       - name: Commit verified targeted cleanup
         shell: bash
