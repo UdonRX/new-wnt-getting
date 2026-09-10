@@ -143,8 +143,23 @@ function meaningfulCandidate(value = '') {
   if (!/[。！？.!?][」』）】〉》]?$/.test(text)) return false;
   return (text.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length >= 10;
 }
+function paperAbstractText(description = '') {
+  const text = plainText(description);
+  if (!text) return '';
+  const overview = text.match(/(?:^|｜)\s*概要\s*[:：]\s*([\s\S]*?)(?=\s*｜\s*(?:応用着眼点|媒体|DOI|被引用数|影響引用数|Open Access PDF|関連度|有用度|選別理由|取得方式)\s*[:：]|$)/i)?.[1];
+  if (overview) return plainText(overview).slice(0, 7000);
+  const labeled = text.match(/(?:抄録|abstract)\s*[:：]\s*([\s\S]*?)(?=\s+(?:掲載誌|掲載先|著者|DOI|被引用数|独創検索|情報提供元|検索語)\s*[:：]|$)/i)?.[1];
+  if (labeled) return plainText(labeled).slice(0, 7000);
+  const beforeMeta = text.split(/\s+(?=(?:掲載誌|掲載先|著者|DOI|被引用数|独創検索|情報提供元|検索語|独創区分|独創研究軸|狙い|独創性スコア|検証性スコア)\s*[:：])/i)[0] || '';
+  return plainText(beforeMeta).slice(0, 7000);
+}
+function paperAbstractSufficient(description = '') {
+  const abstract = paperAbstractText(description);
+  const informative = (abstract.match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length;
+  return abstract.length >= 160 && informative >= 120;
+}
 function descriptionNeedsFullText(item, description, mode) {
-  if (mode === 'papers') return true;
+  if (mode === 'papers') return !paperAbstractSufficient(description);
   const text = plainText(description);
   if (text.length < 620) return true;
   if (sentenceCandidates(text).filter(meaningfulCandidate).length < 3) return true;
@@ -155,7 +170,10 @@ function descriptionNeedsFullText(item, description, mode) {
 
 function summaryPayload(item, mode = '', requestType = 'display') {
   const activeMode = summaryModeOf(item, mode) || 'auto';
-  const description = stripHtml(item?.description).slice(0, 16_000);
+  const fullDescription = stripHtml(item?.description).slice(0, 16_000);
+  const abstract = activeMode === 'papers' ? paperAbstractText(fullDescription) : '';
+  const abstractFirst = activeMode === 'papers' && paperAbstractSufficient(fullDescription);
+  const description = abstractFirst ? abstract : fullDescription;
   return {
     articleId: focusItemKey(item),
     requestType: requestType === 'prefetch' ? 'prefetch' : 'display',
@@ -165,10 +183,13 @@ function summaryPayload(item, mode = '', requestType = 'display') {
     source: item?.source || item?.feedName,
     category: categoryHeaderLabel(item),
     mode: activeMode,
-    preferFullText: descriptionNeedsFullText(item, description, activeMode),
+    preferFullText: abstractFirst ? false : descriptionNeedsFullText(item, fullDescription, activeMode),
+    rssOnly: abstractFirst,
+    paperAbstractFirst: abstractFirst,
+    paperAbstractChars: abstractFirst ? abstract.length : 0,
     forceJapanese: looksMostlyEnglish(`${item?.title || ''}\n${description}`),
     allowAi: true,
-    fast: activeMode !== 'papers'
+    fast: activeMode !== 'papers' || abstractFirst
   };
 }
 

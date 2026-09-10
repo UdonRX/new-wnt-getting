@@ -329,40 +329,33 @@ function readSet(key) {
   try { return new Set(JSON.parse(localStorage.getItem(key) || '[]').map(String)); }
   catch { return new Set(); }
 }
-function discoverPick(items, read, preferredId = '') {
-  const rows = (items || []).filter(item => item?.link || item?.url);
-  const preferred = preferredId && rows.find(item => String(item.id) === String(preferredId) && !read.has(String(item.id)));
-  if (preferred) return preferred;
-  const unread = rows.filter(item => !read.has(String(item.id))).sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0));
-  return unread[0] || rows.sort((a, b) => new Date(b.pubDate || 0) - new Date(a.pubDate || 0))[0] || null;
-}
-function makeDiscoverCard(label, kind) {
+function makeDiscoverCard(label, kind, navigate) {
   const shell = el('a', {
     class: `home-card home-discover-card home-discover-${kind}`,
     href: '#',
     'data-home-section': kind,
-    'aria-label': `${label}の記事を開く`
+    'aria-label': `${label}の記事をAI要約で開く`
   });
-  paintDiscoverCard(shell, null, label, '');
+  paintDiscoverCard(shell, null, label, '', navigate, kind);
   return shell;
 }
-function paintDiscoverCard(shell, item, label, readKey) {
-  const link = item?.link || item?.url || '';
-  if (link) {
-    shell.href = link;
-    shell.target = '_blank';
-    shell.rel = 'noopener noreferrer';
-  } else {
-    shell.removeAttribute('target');
-    shell.removeAttribute('rel');
-    shell.href = '#';
-  }
+function paintDiscoverCard(shell, item, label, readKey, navigate, kind) {
+  shell.href = '#';
+  shell.removeAttribute('target');
+  shell.removeAttribute('rel');
   shell.onclick = event => {
-    if (!link) { event.preventDefault(); return; }
-    if (!item?.id || !readKey) return;
-    const read = readSet(readKey);
-    read.add(String(item.id));
-    try { localStorage.setItem(readKey, JSON.stringify([...read].slice(-1500))); } catch {}
+    event.preventDefault();
+    if (!item?.id || !navigate) return;
+    if (readKey) {
+      const read = readSet(readKey);
+      read.add(String(item.id));
+      try { localStorage.setItem(readKey, JSON.stringify([...read].slice(-1500))); } catch {}
+    }
+    const paper = kind === 'paper';
+    heroNavigate(navigate, shell, `${kind}:${item.id}`, 'reader', {
+      readerMode: paper ? 'papers' : 'knowledge',
+      openId: String(item.id)
+    });
   };
   const copy = el('div', { class: 'home-discover-copy' });
   copy.append(
@@ -378,20 +371,32 @@ function paintDiscoverCard(shell, item, label, readKey) {
   const body = el('div', { class: 'home-discover-body' }, [copy]);
   const image = makeImage(item?.image || '', '');
   if (image) body.append(el('div', { class: 'home-discover-media' }, [image]));
-  shell.replaceChildren(sectionHeader(label), body, el('span', { class: 'home-card-open', text: '記事を開く ›' }));
+  shell.replaceChildren(sectionHeader(label), body, el('span', { class: 'home-card-open', text: 'AI要約を開く ›' }));
 }
 async function readDiscoverItems() {
   try {
-    const { readReaderCache } = await import('../reader/reader-data.js');
-    const [knowledge, papers] = await Promise.all([readReaderCache('knowledge', 'core'), readReaderCache('papers', 'technology')]);
+    const [{ readReaderCache }, { dedupePaperItems, pickHomeKnowledge, pickHomePaper }] = await Promise.all([
+      import('../reader/reader-data.js'),
+      import('../reader/reader-attention.js')
+    ]);
+    const [knowledge, papers, creativePapers] = await Promise.all([
+      readReaderCache('knowledge', 'core'),
+      readReaderCache('papers', 'technology'),
+      readReaderCache('papers', 'creative')
+    ]);
     const stored = readJson(DISCOVER_KEY, {}), day = jstDay(), sameDay = stored?.day === day;
     const knowledgeRead = readSet('pdv2:read:knowledge'), paperRead = readSet('pdv2:read:papers:technology');
-    const k = discoverPick(knowledge?.items, knowledgeRead, sameDay ? stored.knowledgeId : '');
-    const p = discoverPick(papers?.items, paperRead, sameDay ? stored.paperId : '');
+    const knowledgeItems = knowledge?.items || [];
+    const paperItems = dedupePaperItems([...(papers?.items || []), ...(creativePapers?.items || [])]);
+    const k = pickHomeKnowledge(knowledgeItems, knowledgeRead, sameDay ? stored.knowledgeId : '');
+    const p = pickHomePaper(paperItems, paperRead, sameDay ? stored.paperId : '');
     try { localStorage.setItem(DISCOVER_KEY, JSON.stringify({ day, knowledgeId: k?.id || '', paperId: p?.id || '' })); } catch {}
-    return { knowledge: k, paper: p };
+    return {
+      knowledge: k, paper: p, knowledgeItems, paperItems,
+      knowledgeFresh: Boolean(knowledge?.fresh), paperFresh: Boolean(papers?.fresh && creativePapers?.fresh)
+    };
   } catch {
-    return { knowledge: null, paper: null };
+    return { knowledge: null, paper: null, knowledgeItems: [], paperItems: [], knowledgeFresh: false, paperFresh: false };
   }
 }
 
@@ -432,7 +437,7 @@ export async function renderHome(root, { navigate, refresh = false } = {}) {
   const started = performance.now();
   cleanupHome();
   ensureStyles();
-  let disposed = false, weatherUpdating = false, newsUpdating = false, hiddenAt = 0;
+  let disposed = false, weatherUpdating = false, newsUpdating = false, discoverUpdating = false, hiddenAt = 0;
   const screen = el('section', { class: 'screen home-screen', 'data-wx': 'cloudy' });
   const stack = el('div', { class: 'home-stack' });
   screen.append(stack);
@@ -449,8 +454,8 @@ export async function renderHome(root, { navigate, refresh = false } = {}) {
   const xCard = makeXCard(navigate);
   const instagramCard = makeInstagramCard(navigate);
   const media = makeMediaPair(navigate);
-  const knowledgeCard = makeDiscoverCard('知識', 'knowledge');
-  const paperCard = makeDiscoverCard('論文', 'paper');
+  const knowledgeCard = makeDiscoverCard('知識', 'knowledge', navigate);
+  const paperCard = makeDiscoverCard('論文', 'paper', navigate);
 
   stack.append(weatherCard, newsCard, xCard, instagramCard, media.shell, knowledgeCard, paperCard);
   root.replaceChildren(screen);
@@ -518,12 +523,51 @@ export async function renderHome(root, { navigate, refresh = false } = {}) {
     const data = await readInstagramHomeData();
     if (!disposed && instagramCard.isConnected) paintInstagramCard(instagramCard, data);
   };
-  const updateDiscover = async () => {
+  const paintDiscoverResult = result => {
     if (disposed) return;
-    const result = await readDiscoverItems();
-    if (disposed) return;
-    paintDiscoverCard(knowledgeCard, result.knowledge, '知識', 'pdv2:read:knowledge');
-    paintDiscoverCard(paperCard, result.paper, '論文', 'pdv2:read:papers:technology');
+    paintDiscoverCard(knowledgeCard, result.knowledge, '知識', 'pdv2:read:knowledge', navigate, 'knowledge');
+    paintDiscoverCard(paperCard, result.paper, '論文', 'pdv2:read:papers:technology', navigate, 'paper');
+  };
+  const updateDiscover = async (force = false) => {
+    if (disposed || discoverUpdating) return;
+    discoverUpdating = true;
+    try {
+      let result = await readDiscoverItems();
+      if (disposed) return;
+      paintDiscoverResult(result);
+
+      const [{ loadReader }, { refreshKnowledgeTrendScores }] = await Promise.all([
+        import('../reader/reader-data.js'),
+        import('../reader/reader-attention.js')
+      ]);
+      const sourceJobs = [];
+      if (force || !result.knowledgeFresh) {
+        sourceJobs.push(loadReader('knowledge', { force, selectedFeed: '', preferCache: false, backgroundRefresh: true }).catch(() => null));
+      }
+      if (force || !result.paperFresh) {
+        sourceJobs.push(
+          loadReader('papers', { force, paperTrack: 'core', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null),
+          loadReader('papers', { force, paperTrack: 'creative', fastOnly: true, preferCache: false, backgroundRefresh: true }).catch(() => null)
+        );
+      }
+      if (sourceJobs.length) {
+        await Promise.allSettled(sourceJobs);
+        if (disposed) return;
+        result = await readDiscoverItems();
+        paintDiscoverResult(result);
+      }
+
+      if (result.knowledgeItems.length) {
+        await refreshKnowledgeTrendScores(result.knowledgeItems, { force });
+        if (disposed) return;
+        result = await readDiscoverItems();
+        paintDiscoverResult(result);
+      }
+    } catch (error) {
+      console.warn('[home-discover]', error?.message || error);
+    } finally {
+      discoverUpdating = false;
+    }
   };
   const syncLocalCards = () => {
     if (disposed) return;
@@ -531,13 +575,14 @@ export async function renderHome(root, { navigate, refresh = false } = {}) {
   };
 
   const navigationEntry = performance.getEntriesByType?.('navigation')?.[0];
+  const forceOnEntry = Boolean(refresh || navigationEntry?.type === 'reload');
   afterPaint(() => {
     updateXFromCache();
     updateInstagramFromCache();
-    updateDiscover();
+    updateDiscover(forceOnEntry);
     syncLocalCards();
-    updateWeather(Boolean(refresh || navigationEntry?.type === 'reload'));
-    updateNews(Boolean(refresh || navigationEntry?.type === 'reload'));
+    updateWeather(forceOnEntry);
+    updateNews(forceOnEntry);
   });
 
   const onCurrentWeather = () => { if (!disposed) syncWeatherContext(); };
@@ -570,7 +615,7 @@ export async function renderHome(root, { navigate, refresh = false } = {}) {
         updateNews(false);
         updateXFromCache();
         updateInstagramFromCache();
-        updateDiscover();
+        updateDiscover(false);
       });
     }
   };
