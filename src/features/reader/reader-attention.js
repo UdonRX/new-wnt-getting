@@ -28,8 +28,12 @@ function numberField(description = '', label = '') {
   const value = Number(match?.[1] || 0);
   return Number.isFinite(value) ? value : 0;
 }
+function dateField(description = '', label = '') {
+  const escaped = String(label || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text(String(description || '').match(new RegExp(`(?:^|[｜\\n])\\s*${escaped}\\s*[:：]\\s*([^｜\\n]+)`, 'i'))?.[1] || '');
+}
 function itemTime(item) {
-  const explicit = new Date(item?.publishedAt || item?.pubDate || 0).getTime();
+  const explicit = new Date(item?.publishedAt || dateField(item?.description, 'publishedAt') || item?.pubDate || 0).getTime();
   return Number.isFinite(explicit) && explicit > 0 ? explicit : 0;
 }
 function ageDays(time, now = Date.now()) {
@@ -86,10 +90,11 @@ export function stampPaperItems(items = []) {
   let changed = false;
   const rows = (Array.isArray(items) ? items : []).map(item => {
     const key = paperKey(item);
-    const incoming = new Date(item?.discoveredAt || 0).getTime();
+    const upstreamDiscoveredAt = item?.discoveredAt || dateField(item?.description, 'discoveredAt');
+    const incoming = new Date(upstreamDiscoveredAt || 0).getTime();
     const remembered = Number(map[key] || 0);
     const discoveredMs = Number.isFinite(incoming) && incoming > 0 ? incoming : remembered > 0 ? remembered : now;
-    if (key && !remembered) { map[key] = discoveredMs; changed = true; }
+    if (key && (!remembered || discoveredMs < remembered)) { map[key] = discoveredMs; changed = true; }
     const publishedMs = itemTime(item);
     const publishedAt = publishedMs ? new Date(publishedMs).toISOString() : '';
     const discoveredAt = new Date(discoveredMs).toISOString();
@@ -105,7 +110,7 @@ export function stampPaperItems(items = []) {
 export function paperAttention(item, { unread = true, now = Date.now() } = {}) {
   const description = String(item?.description || '');
   const hay = `${item?.title || ''} ${description}`;
-  const discovered = new Date(item?.discoveredAt || 0).getTime();
+  const discovered = new Date(item?.discoveredAt || dateField(description, 'discoveredAt') || 0).getTime();
   const discoveredDays = ageDays(Number.isFinite(discovered) ? discovered : 0, now);
   const publishedDays = ageDays(itemTime(item), now);
 
