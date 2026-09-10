@@ -15,8 +15,6 @@ const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
 const GDELT_TIMEOUT_MS = 2200;
 const GDELT_CHECK_COUNT = 4;
-// ここから下の件数は表示上限ではなく、追加メタデータ取得の速度を守るための enrichment budget。
-// 未確認の記事も Google News の日時が12時間以内なら候補から落とさない。
 const SOURCE_DATE_ENRICHMENT_COUNT = 12;
 const RECOMMENDATION_MIN_COUNT = 5;
 const SOURCE_DATE_STAGE_TIMEOUT_MS = 1300;
@@ -25,9 +23,7 @@ const PUBLISHER_VERIFY_TIMEOUT_MS = 1200;
 const PUBLISHER_VERIFY_MAX_BYTES = 256 * 1024;
 const PUBLISHER_VERIFY_ENRICHMENT_COUNT = 6;
 
-// 明らかな一覧タイトルだけはGoogle News候補の時点で除外する。
 const NON_ARTICLE_TITLE_RE = /(?:新着記事一覧|記事一覧|ニュース一覧|検索結果|タグ一覧|関連タグ|カテゴリ(?:ー)?一覧|アーカイブ一覧|新着一覧)/i;
-// publisherUrlのpathは「疑い」のヒントにだけ使い、これだけでは候補を落とさない。
 const NON_ARTICLE_PATH_HINT_RE = /\/(?:relatedtags?|tags?|search|archive|archives|authors?)(?:\/|$)|\/(?:category|categories)\/[^/?#]+\/?$/i;
 const ARTICLE_DATE_METHOD_RE = /^(?:json-ld:datePublished|meta:article:published_time|meta:og:published_time|meta:datepublished|time:datePublished)$/i;
 
@@ -167,8 +163,6 @@ function analyzePublisherHtml(html = '', rawUrl = '') {
     || (hasDatePublished && paragraphs.length >= 3 && paragraphChars >= 260)
   );
 
-  // pathだけでは落とさない。HTMLを見てもArticle系シグナルがなく、
-  // かつページ自身が一覧を明示している場合にだけ「非記事」を確定する。
   const confirmedNonArticle = Boolean(pathHint && !strongArticle && listHeading);
 
   return {
@@ -317,12 +311,11 @@ function finalizeSelection(rows = []) {
       return {
         id: row.id,
         title: row.title,
-        // 配信元が「記事」と確認できた時だけ直URLを使う。
-        // 未確認・日時取得失敗・path疑いは旧版同様Google News URLを保持する。
         link: usePublisherLink ? row.publisherUrl : row.link,
         googleNewsLink: row.link,
         description: row.description,
         source: row.source,
+        sourceUrl: row.sourceUrl || '',
         feedName: row.feedName,
         image: row.image || '',
         pubDate: new Date(effectiveTimestamp).toISOString(),
@@ -352,9 +345,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   if (!allNews.length) throw Object.assign(new Error('Google News returned no candidates'), { stage: 'google-news' });
 
   const sourceAllowed = filterBlockedSources(allNews);
-  // ここではタイトルだけをhard filterにする。publisher pathは後段の参考情報。
   const articleTitleAllowed = filterArticleCandidates(sourceAllowed);
-  // 記事件数では切らない。Google News RSSが返した全候補を12時間フィルタへ渡す。
   const allowedNews = articleTitleAllowed;
   stage.googleNewsCandidates = allNews.length;
   stage.blockedSourceCandidates = allNews.length - sourceAllowed.length;
@@ -371,10 +362,8 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
 
   let ranked = preliminaryScore(recent, trendResult.rows);
   const gdeltTargets = ranked.slice(0, Math.min(GDELT_CHECK_COUNT, ranked.length));
-  // 配信元日時は上位だけを enrichment するが、未確認の記事も最終候補には残す。
   const initialSourceTargets = ranked.slice(0, Math.min(SOURCE_DATE_ENRICHMENT_COUNT, ranked.length));
 
-  // GDELTと配信元日時は並列。日時確認に失敗しても後段でGoogle News日時を使って補充する。
   const parallelStarted = Date.now();
   const [gdeltResults, initialSourceRows] = await Promise.all([
     Promise.all(gdeltTargets.map(checkGdelt)),
@@ -405,8 +394,6 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
     .filter(row => sourceById.has(row.id))
     .map(row => mergeSourceResult(row, sourceById.get(row.id)));
 
-  // /tag/ /category/ 等はここで初めてHTMLを確認する。
-  // pathだけでは除外せず、Article/NewsArticle/articleBody/datePublished/本文段落の証拠を評価する。
   checkedRows = await verifyPublisherPathHints(checkedRows);
   const checkedById = new Map(checkedRows.map(row => [row.id, row]));
 
@@ -433,9 +420,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
     .map(row => checkedById.get(row.id) || row)
     .filter(row => {
       if (row.nonArticle) return false;
-      // 配信元日時が取得できて「12時間より古い」と分かった記事は補充しない。
       if (Number(row.sourcePublishedTimestamp || 0) > 0 && !isRecentTimestamp(row.sourcePublishedTimestamp, { now: evaluatedAt })) return false;
-      // 配信元日時が取得できない/未確認なら、Google News上で12時間以内であることを使う。
       return isRecentTimestamp(row.googlePublishedTimestamp || row.publishedTimestamp, { now: evaluatedAt });
     })
     .map(row => ({
@@ -444,7 +429,6 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
       effectivePublishedTimestamp: Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0)
     }));
 
-  // 表示件数の目標値・上限値は設けない。12時間条件を満たす候補をすべて返す。
   const selectedRows = [...verifiedRecent, ...supplementRows];
   const items = finalizeSelection(selectedRows);
 
@@ -455,7 +439,6 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   stage.imageMissingCount = items.length - stage.imageCount;
   stage.outputCountUnbounded = true;
 
-  // 1件だけを成功扱いにはしない。最低5件に届かない場合は既存RSS fallbackへ渡す。
   if (items.length < RECOMMENDATION_MIN_COUNT) {
     throw Object.assign(new Error(`Only ${items.length} recommendation articles available after supplementation`), { stage: 'recommendation-minimum' });
   }
