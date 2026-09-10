@@ -11,10 +11,11 @@ const { Readability } = readabilityPackage;
 const { JSDOM } = jsdomPackage;
 
 const PRIMARY_MODEL = String(process.env.GEMINI_SUMMARY_MODEL || 'gemini-3.5-flash-lite').trim();
-const FAST_MODEL_TIMEOUT_MS = 15000;
+const PREFETCH_MODEL_TIMEOUT_MS = 9000;
+const DISPLAY_MODEL_TIMEOUT_MS = 15000;
 const FAST_INPUT_LIMIT = 380;
 const FAST_OUTPUT_TOKEN_LIMIT = 280;
-const RSS_MIN_CHARS = 160;
+const RSS_MIN_CHARS = 120;
 const RSS_MIN_SENTENCES = 2;
 const ARTICLE_MIN_CHARS = 180;
 const HTML_MAX_BYTES = 2 * 1024 * 1024;
@@ -22,9 +23,9 @@ const GOOGLE_RESOLVE_STAGE_TIMEOUT_MS = 550;
 const DIRECT_PUBLISHER_FETCH_TIMEOUT_MS = 2200;
 const RESOLVED_PUBLISHER_FETCH_TIMEOUT_MS = 1200;
 const MAX_REDIRECTS = 3;
-const SUMMARY_MIN_CHARS = 45;
-const SUMMARY_TARGET_MAX_CHARS = 82;
-const SUMMARY_HARD_MAX_CHARS = 96;
+const SUMMARY_MIN_INFORMATIVE_CHARS = 8;
+const SUMMARY_TARGET_MAX_CHARS = 85;
+const SUMMARY_HARD_MAX_CHARS = 85;
 
 const GENERIC_RE = /(?:記事の要点をわかりやすく整理|記事の要点を整理|についての記事です|背景や特徴(?:を|は).*(?:整理|確認)|影響や今後(?:を|は).*(?:確認|整理)|記事本文から(?:整理|確認)|主要な内容を確認|元記事(?:本文)?(?:を|で)|詳しくは元記事|本文を十分に取得できず|タイトルだけから内容を推測)/i;
 const RSS_BOILERPLATE_RE = /(?:続きを読む(?:…|\.{3})?|続き(?:はこちら|を読む)|詳細(?:はこちら|を見る)|全文(?:はこちら|を読む)|記事(?:はこちら|を読む)|元記事(?:はこちら|を読む|で確認)|Read\s*more|More\s*details?)/gi;
@@ -316,21 +317,24 @@ async function prepareFastBody(incoming = {}) {
   const body = { ...incoming, fast: true };
   const title = clean(body.title, 1000);
   const description = clean(body.description, 16000);
-  const url = clean(body.url || body.link, 1800);
+  const recoveryUrl = clean(body.summaryRecoveryUrl || '', 1800);
+  const url = clean(body.url || body.link || recoveryUrl, 1800);
   const usefulRss = stripRssBoilerplate(description);
+  const forceArticleRecovery = body.forceArticleRecovery === true || String(body.forceArticleRecovery || '').toLowerCase() === 'true';
+  const rssOnlyRequested = body.rssOnly === true || String(body.rssOnly || '').toLowerCase() === 'true';
   body.rssOriginalChars = chars(description);
   body.rssUsefulChars = chars(usefulRss);
 
-  const hint = classifyArticleHint({ title, url });
+  const hint = classifyArticleHint({ title, url: rssOnlyRequested && !forceArticleRecovery ? '' : url });
   if (hint.nonArticle) {
     return { ...body, description: '', preparedSource: 'non-article', prepareReason: 'non-article-page', pageType: hint.pageType, rejectionReason: hint.rejectionReason, replaceCandidate: isGoogleNewsUrl(url) };
   }
 
-  if (body.rssOnly === true || String(body.rssOnly || '').toLowerCase() === 'true') {
+  if (rssOnlyRequested && !forceArticleRecovery) {
     return { ...body, description: firstChars(usefulRss, 500), preparedSource: usefulRss ? 'rss' : 'missing', prepareReason: usefulRss ? 'reader-rss-only' : 'reader-rss-only-empty' };
   }
 
-  if (fastRssSufficient(title, description)) {
+  if (!forceArticleRecovery && fastRssSufficient(title, description)) {
     return { ...body, description: firstChars(usefulRss, 500), preparedSource: 'rss', prepareReason: 'fast-rss-description-sufficient', pageType: 'article-candidate' };
   }
 
@@ -425,7 +429,6 @@ function compactSentence(value = '') {
   const content = normalized.replace(/[。！？.!?]+$/, '').trim();
   const arr = Array.from(content);
   if (arr.length <= SUMMARY_TARGET_MAX_CHARS) return normalized;
-  if (arr.length <= SUMMARY_HARD_MAX_CHARS) return normalized;
   const prefix = arr.slice(0, SUMMARY_HARD_MAX_CHARS).join('');
   const boundary = naturalBoundaryIndex(prefix, Math.floor(SUMMARY_HARD_MAX_CHARS * 0.55));
   const clipped = (boundary >= 0 ? prefix.slice(0, boundary + 1) : arr.slice(0, SUMMARY_HARD_MAX_CHARS - 1).join('')).replace(/[。、，,；;：:\s]+$/g, '').trim();
@@ -449,10 +452,13 @@ function parseFastJson(raw = '') {
 function buildSummary(row = {}, body = {}, model = '') {
   const lines = [row.c, row.b, row.i].map(normalizeSentence);
   const lengths = lines.map(sentenceLength);
-  if (lines.some((line, index) => !line || lengths[index] < SUMMARY_MIN_CHARS)) throw validationError('AI要約の必須項目が不足または短すぎます', { lineLengths: lengths });
-  if (lines.some(mostlyEnglish)) throw validationError('AI要約が日本語になっていません', { lineLengths: lengths, languageStats: lines.map(languageStats) });
+  const informativeLengths = lines.map(informativeChars);
+  if (lines.some((line, index) => !line || informativeLengths[index] < SUMMARY_MIN_INFORMATIVE_CHARS)) {
+    throw validationError('AI要約の必須項目が不足または短すぎます', { lineLengths: lengths, informativeLengths });
+  }
+  if (lines.some(mostlyEnglish)) throw validationError('AI要約が日本語になっていません', { lineLengths: lengths, informativeLengths, languageStats: lines.map(languageStats) });
   const keys = lines.map(line => line.replace(/[\s。、，,.!！?？]/g, '').toLowerCase());
-  if (new Set(keys).size !== 3) throw validationError('AI要約が重複しています', { lineLengths: lengths });
+  if (new Set(keys).size !== 3) throw validationError('AI要約が重複しています', { lineLengths: lengths, informativeLengths });
   const compacted = lines.map(compactSentence);
   return {
     headline: clean(row.h, 100) || clean(body.title, 100) || '記事のポイント',
@@ -474,12 +480,12 @@ function fastPrompt(body = {}, repairReason = '') {
     body.category ? `カテゴリ: ${clean(body.category, 160)}` : '',
     `記事冒頭（最大${FAST_INPUT_LIMIT}文字）:`, firstChars(body.description, FAST_INPUT_LIMIT), '',
     '上の文章だけを根拠に、日本語で要約してください。',
-    'hは16〜32文字。c/b/iは各58〜82文字を目標に1文で、iPhone表示で約3行になる情報量にし、必ず句点で完結させてください。',
+    'hは16〜32文字。c/b/iは必要十分な長さの自然な1文にし、短くまとめられる場合は短くて構いません。各項目は最大85文字で、必ず句点で完結させてください。',
     'cは最重要の具体的事実、bは背景・方法・特徴、iは意味・影響・今後を記述してください。',
     '商品名・企業名・型番・規格名（例: Amazon、REDMI Watch、AMOLED、USB Type-C）は原表記の英字のままで構いません。',
     '本文にない推測、一般論、補完は禁止です。'
   ].filter(Boolean);
-  if (repairReason) base.push('', '前回のJSONが形式または品質チェックで不採用でした。これが唯一の再生成です。', `不採用理由: ${clean(repairReason, 180)}`, 'h/c/b/iをすべて埋め、3項目を互いに重複しない自然な日本語1文にして、指定JSONだけを返してください。');
+  if (repairReason) base.push('', '前回のJSONが形式または品質チェックで不採用でした。これが唯一の再生成です。', `不採用理由: ${clean(repairReason, 180)}`, 'h/c/b/iをすべて埋め、3項目を互いに重複しない自然な日本語1文にして、各項目85文字以内の指定JSONだけを返してください。');
   return base.join('\n');
 }
 function visibleText(data = {}) {
@@ -513,8 +519,9 @@ async function callGeminiOnce(body, meta, { repairReason = '' } = {}) {
   if (!key) throw Object.assign(new Error('GEMINI_API_KEY が設定されていません'), { failureStage: 'config' });
   const slot = await waitForGeminiStartSlot({ requestType: meta.requestType, requestId: meta.requestId });
   const queueWaitMs = Number(slot?.queueWaitMs || 0);
+  const modelTimeoutMs = meta.requestType === 'prefetch' ? PREFETCH_MODEL_TIMEOUT_MS : DISPLAY_MODEL_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FAST_MODEL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), modelTimeoutMs);
   const started = Date.now();
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(PRIMARY_MODEL)}:generateContent`, {
@@ -530,12 +537,36 @@ async function callGeminiOnce(body, meta, { repairReason = '' } = {}) {
     const raw = visibleText(data);
     if (!raw) throw Object.assign(new Error('Gemini single response empty'), { repairable: true, failureStage: 'response' });
     const summary = buildSummary(parseFastJson(raw), body, PRIMARY_MODEL);
-    return { summary, attempt: { model: PRIMARY_MODEL, status: response.status, ok: true, elapsedMs: Date.now() - started, queueWaitMs, repair: Boolean(repairReason), failureStage: 'none' } };
+    return { summary, attempt: { model: PRIMARY_MODEL, status: response.status, ok: true, elapsedMs: Date.now() - started, queueWaitMs, repair: Boolean(repairReason), failureStage: 'none', timeoutMs: modelTimeoutMs } };
   } catch (error) {
     if (error?.name === 'AbortError') error.failureStage = 'gemini-timeout';
-    error.attempt = { model: PRIMARY_MODEL, status: Number(error?.statusCode || 0), ok: false, elapsedMs: Date.now() - started, queueWaitMs, repair: Boolean(repairReason), failureStage: error?.failureStage || 'gemini', errorName: error?.name || 'Error', errorMessage: String(error?.message || error) };
+    error.attempt = { model: PRIMARY_MODEL, status: Number(error?.statusCode || 0), ok: false, elapsedMs: Date.now() - started, queueWaitMs, repair: Boolean(repairReason), failureStage: error?.failureStage || 'gemini', errorName: error?.name || 'Error', errorMessage: String(error?.message || error), timeoutMs: modelTimeoutMs };
     throw error;
   } finally { clearTimeout(timer); }
+}
+
+function isPreparedArticle(body = {}) {
+  return String(body?.preparedSource || '').startsWith('article');
+}
+
+function isPreparedRss(body = {}) {
+  return String(body?.preparedSource || '').startsWith('rss');
+}
+
+async function recoverArticleForRepair(body = {}) {
+  const recoveryUrl = clean(body.summaryRecoveryUrl || body.url || body.link || '', 1800);
+  if (!recoveryUrl) return null;
+  const started = Date.now();
+  const recovered = await prepareFastBody({
+    ...body,
+    url: recoveryUrl,
+    link: recoveryUrl,
+    rssOnly: false,
+    preferFullText: true,
+    forceArticleRecovery: true
+  });
+  recovered.articlePrepareMs = Number(body.articlePrepareMs || 0) + (Date.now() - started);
+  return isPreparedArticle(recovered) ? recovered : null;
 }
 
 async function generateFastSummary(body = {}) {
@@ -553,17 +584,30 @@ async function generateFastSummary(body = {}) {
   } catch (error) {
     firstError = error; attempts.push(error.attempt || {});
   }
+
   if (firstError?.repairable === true) {
+    let repairBody = body;
+    if (isPreparedRss(body) && body.readerSourceRecovery !== 'google-news-prepared') {
+      repairBody = await recoverArticleForRepair(body);
+      if (!repairBody) {
+        const fallback = extractiveFallback(body, `article-recovery-failed:${String(firstError?.message || firstError)}`);
+        return attachDiagnostics(fallback, body, meta, attempts, 'article-recovery');
+      }
+    } else if (!isPreparedArticle(body) && body.readerSourceRecovery !== 'google-news-prepared') {
+      const fallback = extractiveFallback(body, String(firstError?.message || firstError));
+      return attachDiagnostics(fallback, body, meta, attempts, firstError?.failureStage || 'validation');
+    }
+
     try {
-      const repaired = await callGeminiOnce(body, meta, { repairReason: String(firstError?.message || firstError) });
+      const repaired = await callGeminiOnce(repairBody, meta, { repairReason: String(firstError?.message || firstError) });
       attempts.push(repaired.attempt);
-      const result = attachDiagnostics(repaired.summary, body, meta, attempts, 'none');
+      const result = attachDiagnostics(repaired.summary, repairBody, meta, attempts, 'none');
       result.repaired = true;
       return result;
     } catch (error) {
       attempts.push(error.attempt || {});
-      const fallback = extractiveFallback(body, String(error?.message || error));
-      return attachDiagnostics(fallback, body, meta, attempts, error?.failureStage || 'validation');
+      const fallback = extractiveFallback(repairBody, String(error?.message || error));
+      return attachDiagnostics(fallback, repairBody, meta, attempts, error?.failureStage || 'validation');
     }
   }
   const fallback = extractiveFallback(body, String(firstError?.message || firstError || 'gemini-failed'));
@@ -585,7 +629,7 @@ function attachDiagnostics(summary, body, meta, attempts, failureStage) {
     extractionMethod: body.extractionMethod || '', pageType: body.pageType || '', rejectionReason: body.rejectionReason || '',
     rssOriginalChars: Number(body.rssOriginalChars || 0), rssUsefulChars: Number(body.rssUsefulChars || 0), replaceCandidate: Boolean(body.replaceCandidate),
     prepareReason: body.prepareReason || '', prepareError: body.prepareError || '',
-    geminiAttempts: attempts.map(row => ({ model: row?.model || '', status: Number(row?.status || 0), ok: Boolean(row?.ok), elapsedMs: Number(row?.elapsedMs || 0), queueWaitMs: Number(row?.queueWaitMs || 0), repair: Boolean(row?.repair), failureStage: row?.failureStage || '', errorName: row?.errorName || '', errorMessage: clean(row?.errorMessage || '', 260) }))
+    geminiAttempts: attempts.map(row => ({ model: row?.model || '', status: Number(row?.status || 0), ok: Boolean(row?.ok), elapsedMs: Number(row?.elapsedMs || 0), queueWaitMs: Number(row?.queueWaitMs || 0), repair: Boolean(row?.repair), failureStage: row?.failureStage || '', errorName: row?.errorName || '', errorMessage: clean(row?.errorMessage || '', 260), timeoutMs: Number(row?.timeoutMs || 0) }))
   };
 }
 function setDiagHeaders(res, summary = {}) {
@@ -660,7 +704,8 @@ export default async function handler(req, res) {
     readabilityChars: summary.readabilityChars, jsonLdChars: summary.jsonLdChars, domFallbackChars: summary.domFallbackChars,
     extractionMethod: summary.extractionMethod, pageType: summary.pageType, rejectionReason: summary.rejectionReason,
     rssOriginalChars: summary.rssOriginalChars, rssUsefulChars: summary.rssUsefulChars,
-    replaceCandidate: summary.replaceCandidate, fallbackReason: summary.fallbackReason || '', prepareError: summary.prepareError || ''
+    replaceCandidate: summary.replaceCandidate, fallbackReason: summary.fallbackReason || '', prepareError: summary.prepareError || '',
+    geminiAttempts: summary.geminiAttempts
   });
   return res.status(200).json(summary);
 }

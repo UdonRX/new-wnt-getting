@@ -4,6 +4,7 @@ import { readerSummaryRequestCoordinator } from './summary-request-coordinator.j
 const nativeFetch = globalThis.fetch?.bind(globalThis);
 const SUMMARY_PATH = '/api/summary';
 const FAILURE_PROVIDERS = new Set(['pending', 'instant', 'insufficient', 'unavailable']);
+const SUMMARY_MIN_INFORMATIVE_CHARS = 8;
 // v2.19.7: iOS Safari/PWAのscroll-snap中に一瞬だけarticleIdが外れる場合は、
 // 即座に「取得不能」と確定せず短時間だけ表示位置の安定を待つ。
 const CLIENT_SUPPRESSION_REASONS = new Set([
@@ -71,6 +72,10 @@ function cleanInstantText(value = '') {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 1800);
+}
+
+function informativeChars(value = '') {
+  return (String(value || '').match(/[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/g) || []).length;
 }
 
 function instantPreviewSentences(value = '') {
@@ -157,6 +162,19 @@ function responseSummary(data = {}) {
     upstreamStatus: Number(data?.upstreamStatus || 0) || 0,
     fallbackReason: String(data?.fallbackReason || '').slice(0, 260)
   };
+}
+
+function summaryDataUsable(data = {}) {
+  const provider = String(data?.provider || '');
+  const failureStage = String(data?.failureStage || 'none');
+  const lines = Array.isArray(data?.lines) ? data.lines : [];
+  if (failureStage && failureStage !== 'none') return false;
+  if (!data?.validated || !provider || FAILURE_PROVIDERS.has(provider) || lines.length !== 3) return false;
+  return lines.every(row => informativeChars(row?.text || '') >= SUMMARY_MIN_INFORMATIVE_CHARS);
+}
+
+function snapshotSummaryUsable(snapshot) {
+  return summaryDataUsable(safeJson(snapshot?.body || ''));
 }
 
 function snapshotResponse(response, text) {
@@ -369,6 +387,16 @@ function createReaderSummaryRecord(key, input, init, parsed, requestType) {
   }, meta => executeReaderSummary(input, init, parsed, meta));
 }
 
+function retryDisplayRecord({ key, input, init, parsed, record, reason }) {
+  readerTrace('gemini-prefetch-display-retry', {
+    articleId: parsed.articleId,
+    originalRequestId: record.requestId,
+    reason,
+    requestType: 'display'
+  });
+  return createReaderSummaryRecord(`${key}::display-recovery`, input, init, parsed, 'display');
+}
+
 async function responseWithDisplayRecovery(record, {
   key,
   input,
@@ -376,9 +404,27 @@ async function responseWithDisplayRecovery(record, {
   parsed,
   requestedAs
 }) {
-  const firstSnapshot = await record.promise;
-  const reason = requestedAs === 'display' ? clientSuppressionReason(firstSnapshot) : '';
+  let firstSnapshot;
+  try {
+    firstSnapshot = await record.promise;
+  } catch (error) {
+    const position = requestedAs === 'display' ? currentReaderPosition(parsed.articleId) : null;
+    if (requestedAs === 'display' && record.requestType === 'prefetch' && position?.requestType === 'display') {
+      const retryRecord = retryDisplayRecord({ key, input, init, parsed, record, reason: `prefetch-error:${String(error?.name || 'Error')}` });
+      return responseFromSnapshot(await retryRecord.promise);
+    }
+    throw error;
+  }
+
   const position = requestedAs === 'display' ? currentReaderPosition(parsed.articleId) : null;
+  if (requestedAs === 'display' && record.requestType === 'prefetch' && position?.requestType === 'display' && !snapshotSummaryUsable(firstSnapshot)) {
+    const data = safeJson(firstSnapshot?.body || '');
+    const reason = String(data?.failureStage || data?.fallbackReason || 'prefetch-result-invalid');
+    const retryRecord = retryDisplayRecord({ key, input, init, parsed, record, reason });
+    return responseFromSnapshot(await retryRecord.promise);
+  }
+
+  const reason = requestedAs === 'display' ? clientSuppressionReason(firstSnapshot) : '';
   if (!reason || position?.requestType !== 'display') return responseFromSnapshot(firstSnapshot);
 
   // v2.19.7: prefetch/displayの共有PromiseがSafariのsnap揺れで一度だけ抑止された場合、

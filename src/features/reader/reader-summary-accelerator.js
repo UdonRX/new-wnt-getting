@@ -15,6 +15,8 @@ const GOOGLE_NEWS_PREPARE_CONCURRENCY = 2;
 const GOOGLE_NEWS_PREPARE_TIMEOUT_MS = 5000;
 const PREFETCH_READY_TIMEOUT_MS = 22000;
 const PREFETCH_READY_POLL_MS = 90;
+const RSS_RECOVERY_MIN_CHARS = 120;
+const RSS_RECOVERY_MIN_FACTS = 2;
 const FAILURE_PROVIDERS = new Set(['', 'pending', 'instant', 'insufficient', 'unavailable']);
 const googleNewsPrepareInflight = new Set();
 const LABELS = ['結論/事実', '背景/特徴', '影響/展望'];
@@ -137,9 +139,7 @@ export function isSufficientRss(body = {}) {
   if (/技術リサーチ:\s*Web調査済み/i.test(raw)) return true;
   const evidence = rssEvidence(body);
   if (!evidence.description || evidence.titleEcho) return false;
-  if (evidence.chars >= 52) return true;
-  if (evidence.chars >= 36 && evidence.facts.length >= 2) return true;
-  return false;
+  return Array.from(evidence.description).length >= RSS_RECOVERY_MIN_CHARS && evidence.facts.length >= RSS_RECOVERY_MIN_FACTS;
 }
 
 function titleFact(body = {}) {
@@ -253,14 +253,12 @@ function shortResponse(parsed) {
 export function buildRssOnlyAiBody(sourceBody = {}) {
   const evidence = rssEvidence(sourceBody);
   // 技術リサーチはRSS内の構造化フィールドをサーバー側で3カードへ整形する。
-  // Geminiへは送られないため、各フィールドが380文字で欠けないようRSS記述を保持する。
+  // rssOnly=trueを維持するため元記事URLを残しても初回は本文取得せず、Validation失敗時のRecoveryだけに利用できる。
   const preparedResearch = /技術リサーチ:\s*Web調査済み/i.test(evidence.description);
   const description = preparedResearch ? stripResearchSelectionMetadata(evidence.description) : evidence.description;
   return {
     ...sourceBody,
     description: Array.from(description).slice(0, preparedResearch ? 1800 : 380).join(''),
-    url: '',
-    link: '',
     preferFullText: false,
     rssOnly: true,
     fast: true
@@ -416,11 +414,11 @@ function sourceRecoveryAi(input, init, parsed, kind) {
   const body = {
     ...parsed.body,
     description: Array.from(evidence.description).slice(0, 500).join(''),
-    // Google Newsは中間URLの解決、EE Timesは記事本文取得が必要。
-    // この2系統だけ既存の本文抽出を復活させ、抽出後は冒頭500文字だけをGeminiへ渡す。
+    // RSS情報が不足する場合は記事本文を取得し、抽出後の冒頭500文字だけをGeminiへ渡す。
     preferFullText: true,
     rssOnly: false,
-    fast: false,
+    fast: true,
+    forceArticleRecovery: true,
     readerSourceRecovery: kind
   };
   readerTrace('summary-source-recovery-ai', {
@@ -428,21 +426,31 @@ function sourceRecoveryAi(input, init, parsed, kind) {
     kind,
     source: clean(parsed.body?.source || parsed.body?.feedName || '', 160),
     urlHost: hostnameOf(parsed.body?.url || parsed.body?.link || ''),
-    rssDescriptionChars: evidence.chars
+    rssDescriptionChars: evidence.chars,
+    rssFactCount: evidence.facts.length
   });
   return upstreamFetch(input, { ...init, body: JSON.stringify(body) });
 }
 
 function routeReaderSummary(input, init, parsed) {
-  // Google NewsのRSSリンクは出版社URLではなくnews.google.comの中間URL。
-  // 通常RSSと同じ「URLを消してRSS本文だけ」の経路へ入れると、短い見出ししか残らず
-  // 全件 unavailable になる。Google Newsだけ既存のURL解決→本文抽出経路へ戻す。
-  // 事前準備済みなら、その500文字を使ってReader表示時のURL解決・本文抽出を省略する。
   const recoveryKind = sourceRecoveryKind(parsed.body);
   if (recoveryKind === 'google-news') {
     readerTrace('summary-google-news-recovery', { articleId: parsed.articleId });
     return sourceRecoveryAi(input, init, parsed, recoveryKind);
   }
+
+  if (recoveryKind || !isSufficientRss(parsed.body)) {
+    const evidence = rssEvidence(parsed.body);
+    readerTrace('summary-rss-recovery', {
+      articleId: parsed.articleId,
+      kind: recoveryKind || 'low-rss',
+      rssDescriptionChars: evidence.chars,
+      rssFactCount: evidence.facts.length,
+      titleEcho: evidence.titleEcho
+    });
+    return sourceRecoveryAi(input, init, parsed, recoveryKind || 'low-rss');
+  }
+
   return rssOnlyAi(input, init, parsed);
 }
 
