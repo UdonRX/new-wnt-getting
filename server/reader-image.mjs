@@ -2,11 +2,12 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { extractArticleImageFromHtml, resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
 
-const POSITIVE_TTL_MS = 30 * 60 * 1000;
+const POSITIVE_TTL_MS = 12 * 60 * 60 * 1000;
 const NEGATIVE_TTL_MS = 90 * 1000;
 const HOME_TTL_MS = 6 * 60 * 60 * 1000;
 const PAGE_BYTES = 1500 * 1024;
 const RSS_BYTES = 512 * 1024;
+const RESOLVER_POLICY = 'reader-image-fast-v1';
 const imageCache = new Map();
 const homeCache = new Map();
 
@@ -26,55 +27,908 @@ const PROFILES = [
 
 const compact = (value, max = 500) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 const bareHost = value => String(value || '').toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
-function hostOf(value = '') { try { return new URL(String(value)).hostname.toLowerCase().replace(/\.$/, ''); } catch { return ''; } }
-function sameSite(a, b) { const aa = bareHost(a); const bb = bareHost(b); return Boolean(aa && bb && (aa === bb || aa.endsWith(`.${bb}`) || bb.endsWith(`.${aa}`))); }
-function safeUrl(value = '') { try { const url = new URL(String(value).trim()); if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return ''; if (url.port && !['80', '443'].includes(url.port)) return ''; return url.href; } catch { return ''; } }
-function bodyOf(req) { if (req?.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body; try { return JSON.parse(req?.body || '{}'); } catch { return {}; } }
-function decode(value = '') { return String(value).replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16) || 0)).replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n) || 0)); }
-function text(value = '') { return decode(String(value).replace(/<script\b[\s\S]*?<\/script>/gi, ' ').replace(/<style\b[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim(); }
-function attr(raw = '', name = '') { const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); const match = String(raw).match(new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i')); return decode(match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim(); }
-function norm(value = '') { return String(value).normalize('NFKC').toLowerCase().replace(/https?:\/\/\S+/g, ' ').replace(/[\s\p{P}\p{S}]+/gu, ''); }
-function similarity(a = '', b = '') { const aa = norm(a); const bb = norm(b); if (!aa || !bb) return 0; if (aa === bb) return 1; if (aa.length >= 10 && (aa.includes(bb) || bb.includes(aa))) return Math.min(0.98, Math.min(aa.length, bb.length) / Math.max(aa.length, bb.length) + 0.22); const grams = value => { const set = new Set(); for (let i = 0; i < value.length - 1; i += 1) set.add(value.slice(i, i + 2)); return set; }; const ga = grams(aa); const gb = grams(bb); if (!ga.size || !gb.size) return 0; let same = 0; for (const token of ga) if (gb.has(token)) same += 1; return 2 * same / (ga.size + gb.size); }
-function profileFor(value = '') { return PROFILES.find(profile => profile.re.test(String(value))) || null; }
-function publisherHint(title = '') { const match = String(title).match(/[（(]([^（）()]{2,90})[）)]\s*$/); const hint = compact(match?.[1] || '', 90); return /(?:news|新聞|テレビ|tv|jnn|ann|nhk|共同|時事|ロイター|reuters|bloomberg|gizmodo|ウェザー|通信|報知|産経|毎日|日テレ|nnn|女子プロゴルフ|jlpga|lpga)/i.test(hint) ? hint : ''; }
-function baseTitle(title = '') { return compact(publisherHint(title) ? String(title).replace(/[（(][^（）()]{2,90}[）)]\s*$/, '') : title, 320); }
-function isAggregator(source = '') { return /(?:yahoo|google\s*news|googleニュース|smartnews|スマートニュース|グノシー|gunosy)/i.test(norm(source)); }
 
-function private4(ip) { const parts = String(ip).split('.').map(Number); if (parts.length !== 4 || parts.some(n => !Number.isInteger(n))) return true; const [a, b, c] = parts; return [0,10,127].includes(a) || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0 && c === 0) || (a === 198 && (b === 18 || b === 19)) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || a >= 224; }
-function private6(ip) { const value = String(ip).toLowerCase().split('%')[0]; if (value === '::' || value === '::1' || value.startsWith('fc') || value.startsWith('fd') || /^fe[89ab]/.test(value) || value.startsWith('2001:db8:') || value.startsWith('ff')) return true; const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/); return mapped ? private4(mapped[1]) : false; }
-function privateIp(ip) { const family = net.isIP(ip); return family === 4 ? private4(ip) : family === 6 ? private6(ip) : true; }
-async function publicUrl(raw) { const href = safeUrl(raw); if (!href) throw new Error('invalid-url'); const url = new URL(href); const host = url.hostname.toLowerCase().replace(/\.$/, ''); if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localhost')) throw new Error('private-host'); if (net.isIP(host)) { if (privateIp(host)) throw new Error('private-host'); return url; } const rows = await dns.lookup(host, { all: true, verbatim: true }); if (!rows.length || rows.some(row => privateIp(row.address))) throw new Error('private-host'); return url; }
-async function readLimited(response, max) { if (!response.body?.getReader) return String(await response.text()).slice(0, max); const reader = response.body.getReader(); const parts = []; let total = 0; try { while (total < max) { const { done, value } = await reader.read(); if (done) break; const bytes = Buffer.from(value); const left = max - total; parts.push(bytes.length > left ? bytes.subarray(0, left) : bytes); total += Math.min(bytes.length, left); if (bytes.length >= left) break; } if (total >= max) try { await reader.cancel(); } catch {} } finally { try { reader.releaseLock(); } catch {} } return Buffer.concat(parts).toString('utf8'); }
-async function fetchText(raw, { timeout = 1300, max = PAGE_BYTES, accept = 'text/html,application/xhtml+xml;q=.9,*/*;q=.2' } = {}) { let url = await publicUrl(raw); const deadline = Date.now() + timeout; for (let redirectCount = 0; redirectCount < 4; redirectCount += 1) { const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), Math.max(220, deadline - Date.now())); try { const response = await fetch(url, { redirect: 'manual', signal: controller.signal, headers: { Accept: accept, 'Accept-Language': 'ja,en-US;q=.8,en;q=.6', 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1' } }); if ([301,302,303,307,308].includes(response.status)) { const location = response.headers.get('location'); if (!location || redirectCount === 3) throw new Error('redirect-failed'); try { await response.body?.cancel?.(); } catch {} url = await publicUrl(new URL(location, url).href); continue; } if (!response.ok) throw new Error(`HTTP ${response.status}`); return { text: await readLimited(response, max), finalUrl: url.href }; } catch (error) { if (error?.name === 'AbortError') throw new Error('timeout'); throw error; } finally { clearTimeout(timer); } } throw new Error('redirect-failed'); }
+function hostOf(value = '') {
+  try { return new URL(String(value)).hostname.toLowerCase().replace(/\.$/, ''); }
+  catch { return ''; }
+}
 
-function cacheGet(key) { const row = imageCache.get(key); if (!row) return null; const ttl = row.value?.image ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS; if (Date.now() - row.at > ttl) { imageCache.delete(key); return null; } return row.value; }
-function cacheSet(key, value) { if (!key || !value) return; imageCache.set(key, { at: Date.now(), value }); while (imageCache.size > 180) imageCache.delete(imageCache.keys().next().value); }
-function homeGet(key) { const normalized = norm(key).slice(0, 100); const row = homeCache.get(normalized); if (!row || Date.now() - row.at > HOME_TTL_MS) { if (row) homeCache.delete(normalized); return ''; } return safeUrl(row.home); }
-function homeSet(key, home) { const normalized = norm(key).slice(0, 100); const href = safeUrl(home); if (!normalized || !href) return; homeCache.set(normalized, { at: Date.now(), home: href }); while (homeCache.size > 120) homeCache.delete(homeCache.keys().next().value); }
+function sameSite(a, b) {
+  const aa = bareHost(a);
+  const bb = bareHost(b);
+  return Boolean(aa && bb && (aa === bb || aa.endsWith(`.${bb}`) || bb.endsWith(`.${aa}`)));
+}
 
-function pageTitle(html = '') { const source = String(html); const match = source.match(/<meta\b[^>]*(?:property|name)=["'](?:og:title|twitter:title)["'][^>]*content=["']([^"']+)["'][^>]*>/i) || source.match(/<meta\b[^>]*content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:title|twitter:title)["'][^>]*>/i) || source.match(/<title[^>]*>([\s\S]*?)<\/title>/i); return text(match?.[1] || ''); }
-function candidates(html, base, title) { const baseHost = hostOf(base); const source = decode(String(html).replace(/\\\//g, '/').replace(/\\u002F/gi, '/')); const out = []; const seen = new Set(); const wanted = baseTitle(title); const add = (raw, label = '', bonus = 0) => { if (!raw || /^(?:#|javascript:|mailto:|tel:)/i.test(raw)) return; let url; try { url = new URL(raw, base); } catch { return; } if (!['http:','https:'].includes(url.protocol) || !sameSite(baseHost, url.hostname) || url.pathname === '/' || /\.(?:jpg|jpeg|png|gif|webp|svg|css|js)(?:$|\?)/i.test(url.href) || seen.has(url.href)) return; const score = label ? similarity(wanted, baseTitle(label)) : 0; if (label && score < 0.4) return; seen.add(url.href); out.push({ url: url.href, sim: score, score: score + bonus }); }; let match; const anchor = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi; while ((match = anchor.exec(source))) add(attr(match[1], 'href'), text(match[2]) || attr(match[1], 'aria-label') || attr(match[1], 'title'), 0.08); for (const fragment of [wanted.slice(0,28), wanted.slice(0,18), wanted.slice(0,12)].filter(value => value.length >= 10)) { let position = 0; let hits = 0; while (hits < 5) { const index = source.indexOf(fragment, position); if (index < 0) break; position = index + fragment.length; hits += 1; const window = source.slice(Math.max(0, index - 2200), Math.min(source.length, index + 2600)); let urlMatch; const embedded = /(?:href|url|link|canonicalUrl|articleUrl)\s*[=:]\s*["']([^"']+)["']/gi; while ((urlMatch = embedded.exec(window))) add(urlMatch[1], wanted, 0.22); const absolute = /https?:\/\/[^\s"'<>]+/gi; while ((urlMatch = absolute.exec(window))) add(urlMatch[0], wanted, 0.12); } } return out.sort((a,b) => b.score - a.score).slice(0,10); }
-async function articleImage(url, title, expectedHost = '') { try { const page = await fetchText(url, { timeout: 1450, max: PAGE_BYTES }); if (expectedHost && !sameSite(expectedHost, hostOf(page.finalUrl))) return null; const resolvedTitle = pageTitle(page.text); const titleScore = resolvedTitle ? similarity(baseTitle(title), baseTitle(resolvedTitle)) : 0; if (resolvedTitle && titleScore < 0.36) return null; const image = extractArticleImageFromHtml(page.text, { baseUrl: page.finalUrl || url }); return image?.url ? { image: image.url, method: image.method || 'image', articleUrl: page.finalUrl || url, similarity: titleScore } : null; } catch { return null; } }
-async function crawlPublisher(title, source, home, extra = []) { const homepage = safeUrl(home); if (!homepage) return { image: '', error: 'publisher-homepage-not-found' }; const expectedHost = hostOf(homepage); const urls = [homepage, ...extra].filter(Boolean).slice(0,8); const pages = await Promise.all(urls.map(async url => { try { const page = await fetchText(url, { timeout: 1250, max: PAGE_BYTES }); return sameSite(expectedHost, hostOf(page.finalUrl)) ? page : null; } catch { return null; } })); const found = []; const seen = new Set(); for (const page of pages.filter(Boolean)) for (const candidate of candidates(page.text, page.finalUrl, title)) if (!seen.has(candidate.url)) { seen.add(candidate.url); found.push(candidate); } const hits = await Promise.all(found.sort((a,b)=>b.score-a.score).slice(0,8).map(async candidate => { const result = await articleImage(candidate.url, title, expectedHost); return result ? { ...result, linkScore: candidate.score } : null; })); const best = hits.filter(Boolean).sort((a,b)=>(b.similarity+b.linkScore)-(a.similarity+a.linkScore))[0]; return best ? { ...best, homepage, checked: urls.length } : { image: '', homepage, checked: urls.length, error: 'publisher-article-not-found' }; }
+function safeUrl(value = '') {
+  try {
+    const url = new URL(String(value).trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';
+    if (url.port && !['80', '443'].includes(url.port)) return '';
+    return url.href;
+  } catch { return ''; }
+}
 
-function bingArticle(raw = '') { const href = safeUrl(decode(raw)); if (!href) return ''; try { const url = new URL(href); return bareHost(url.hostname) === 'bing.com' && /\/news\/apiclick\.aspx$/i.test(url.pathname) ? safeUrl(url.searchParams.get('url') || '') || href : href; } catch { return href; } }
-function bingImage(raw = '') { const href = safeUrl(decode(raw)); if (!href) return ''; try { const url = new URL(href); if (url.protocol === 'http:' && /(?:^|\.)bing(?:4)?\.com$|(?:^|\.)bing\.net$/i.test(url.hostname)) url.protocol = 'https:'; return url.href; } catch { return href; } }
-async function bingNews(title, source) { const query = baseTitle(title); const hint = publisherHint(title); const wantedSource = hint || source; const aggregator = isAggregator(source); try { const page = await fetchText(`https://www.bing.com/news/search?q=${encodeURIComponent(query)}&setmkt=ja-JP&format=RSS`, { timeout: 1050, max: RSS_BYTES, accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }); const blocks = page.text.match(/<item\b[\s\S]*?<\/item>/gi) || []; const rows = []; for (const block of blocks) { const titleMatch = block.match(/<title[^>]*>([\s\S]*?)<\/title>/i); const linkMatch = block.match(/<link[^>]*>([\s\S]*?)<\/link>/i); const sourceMatch = block.match(/<(?:News:)?Source[^>]*>([\s\S]*?)<\/(?:News:)?Source>/i); const imageMatch = block.match(/<(?:News:)?Image[^>]*>([\s\S]*?)<\/(?:News:)?Image>/i); const rowTitle = text(titleMatch?.[1] || ''); const rowSource = text(sourceMatch?.[1] || ''); const titleScore = similarity(query, baseTitle(rowTitle)); const sourceScore = wantedSource ? similarity(wantedSource, rowSource) : 0; if (!rowTitle || titleScore < 0.58) continue; if (!aggregator && wantedSource && sourceScore < 0.24 && titleScore < 0.9) continue; if (hint && sourceScore < 0.2 && titleScore < 0.9) continue; rows.push({ title: rowTitle, source: rowSource, sim: titleScore, sourceSim: sourceScore, url: bingArticle(text(linkMatch?.[1] || '')), image: bingImage(text(imageMatch?.[1] || '')), score: titleScore + sourceScore * 0.35 + (imageMatch?.[1]?.length ? 0.1 : 0) }); } rows.sort((a,b)=>b.score-a.score); const imageRow = rows.find(row => row.image && (row.sim >= 0.68 || row.sourceSim >= 0.42)); if (imageRow) return { image: imageRow.image, method: 'bing-news:thumbnail', articleUrl: imageRow.url, rowSource: imageRow.source, similarity: imageRow.sim, candidates: rows.length }; const linkRow = rows.find(row => row.url && (row.sim >= 0.76 || row.sourceSim >= 0.52)); if (linkRow) { const image = await articleImage(linkRow.url, query); if (image) return { ...image, method: `bing-news:${image.method}`, rowSource: linkRow.source, candidates: rows.length }; } return { image: '', error: rows.length ? 'bing-no-image' : 'bing-no-matching-story', candidates: rows.length }; } catch (error) { return { image: '', error: `bing-${error?.message || error}`, candidates: 0 }; } }
+function bodyOf(req) {
+  if (req?.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) return req.body;
+  try { return JSON.parse(req?.body || '{}'); }
+  catch { return {}; }
+}
 
-async function googleRows(title) { const query = baseTitle(title); try { const page = await fetchText(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`, { timeout: 1150, max: RSS_BYTES, accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }); const blocks = page.text.match(/<item\b[\s\S]*?<\/item>/gi) || []; return blocks.map(block => { const titleMatch = block.match(/<title[^>]*>([\s\S]*?)<\/title>/i); const sourceMatch = block.match(/<source\b([^>]*)>([\s\S]*?)<\/source>/i); if (!sourceMatch) return null; const rowTitle = text(titleMatch?.[1] || ''); const rowSource = text(sourceMatch?.[2] || ''); const home = safeUrl(attr(sourceMatch[1], 'url')); const titleScore = similarity(query, baseTitle(rowTitle)); return rowTitle && home && titleScore >= 0.58 ? { title: rowTitle, source: rowSource, home, sim: titleScore } : null; }).filter(Boolean).sort((a,b)=>b.sim-a.sim); } catch { return []; } }
-function fallbackType(row, source, hint) { return similarity(source, row.source) >= 0.5 || (hint && similarity(hint, row.source) >= 0.4) ? 'publisher-rss' : 'same-story'; }
-async function publisherFallback(title, source) { const query = baseTitle(title); const hint = publisherHint(title); const profile = profileFor(hint) || profileFor(source); const key = hint || source; const home = homeGet(key) || profile?.home || ''; const rowsPromise = googleRows(query); const primaryPromise = home ? crawlPublisher(query, key, home, (profile?.pages || []).map(path => new URL(path, home).href)) : Promise.resolve(null); const [primary, rows] = await Promise.all([primaryPromise, rowsPromise]); if (primary?.image) { homeSet(key, primary.homepage); return { ...primary, fallback: hint ? 'publisher-hint' : 'publisher-direct', rssCandidates: rows.length }; } const choices = []; for (const row of rows) { const sourceScore = similarity(source, row.source); const hintScore = hint ? similarity(hint, row.source) : 0; if (!(sourceScore >= 0.46 || hintScore >= 0.36 || row.sim >= 0.86 || (isAggregator(source) && row.sim >= 0.74))) continue; if (home && sameSite(hostOf(home), hostOf(row.home))) continue; if (choices.some(choice => choice.home === row.home)) continue; choices.push({ ...row, sourceScore, hintScore }); if (choices.length >= 3) break; } const alternatives = await Promise.all(choices.map(async row => { const rowProfile = profileFor(row.source); const result = await crawlPublisher(query, row.source, row.home, (rowProfile?.pages || []).map(path => new URL(path, row.home).href)); return result?.image ? { ...result, rowSource: row.source, rowTitle: row.title, fallback: fallbackType(row, source, hint) } : null; })); const hit = alternatives.filter(Boolean).sort((a,b)=>b.similarity-a.similarity)[0]; if (hit) return hit; return { image: '', homepage: primary?.homepage || home, checked: primary?.checked || 0, rssCandidates: rows.length, publisherCandidates: choices.length, error: primary?.error || (rows.length ? 'same-story-publisher-not-found' : 'google-news-no-candidates') }; }
+function decode(value = '') {
+  return String(value)
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16) || 0))
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n) || 0));
+}
 
-function resolveAsset(raw, base) { if (!raw) return ''; try { return safeUrl(new URL(decode(raw), base).href); } catch { return ''; } }
-function siteLogoFromHtml(html = '', baseUrl = '') { const source = String(html || ''); const linkRe = /<link\b([^>]*)>/gi; const candidates = []; let match; while ((match = linkRe.exec(source))) { const rel = attr(match[1], 'rel').toLowerCase(); if (!/(?:apple-touch-icon|icon|mask-icon)/i.test(rel)) continue; const href = resolveAsset(attr(match[1], 'href'), baseUrl); if (!href) continue; const sizes = attr(match[1], 'sizes'); const number = Number((sizes.match(/(\d{2,4})x\d{2,4}/i) || [])[1] || 0); const score = (rel.includes('apple-touch-icon') ? 5 : rel.includes('icon') ? 3 : 1) + Math.min(number / 128, 4); candidates.push({ image: href, method: 'publisher-site:icon', score }); } const imgRe = /<img\b([^>]*)>/gi; while ((match = imgRe.exec(source))) { const attrs = match[1]; const label = `${attr(attrs, 'alt')} ${attr(attrs, 'class')} ${attr(attrs, 'id')}`; const src = attr(attrs, 'src') || attr(attrs, 'data-src') || attr(attrs, 'data-original'); if (!/(?:logo|brand|header|site|ロゴ)/i.test(label + ' ' + src)) continue; const href = resolveAsset(src, baseUrl); if (!href || /(?:sprite|pixel|tracking|blank)/i.test(href)) continue; candidates.push({ image: href, method: 'publisher-site:logo', score: 4 }); } return candidates.sort((a,b)=>b.score-a.score)[0] || null; }
-function googleFavicon(home) { const href = safeUrl(home); return href ? `https://www.google.com/s2/favicons?sz=256&domain_url=${encodeURIComponent(href)}` : ''; }
-async function publisherSiteVisual(title, source) { const hint = publisherHint(title); const profile = profileFor(hint) || profileFor(source); let home = homeGet(hint || source) || profile?.home || ''; if (!home) { const rows = await googleRows(title); const best = rows.find(row => { const sourceScore = similarity(hint || source, row.source); return sourceScore >= 0.4 || (isAggregator(source) && row.sim >= 0.76); }); home = best?.home || ''; } const homepage = safeUrl(home); if (!homepage) return { image: '', backupImage: '', error: 'publisher-site-home-not-found' }; homeSet(hint || source, homepage); const backupImage = googleFavicon(homepage); try { const page = await fetchText(homepage, { timeout: 1000, max: 700 * 1024 }); const base = page.finalUrl || homepage; const metadataImage = extractArticleImageFromHtml(page.text, { baseUrl: base }); if (metadataImage?.url) return { image: metadataImage.url, backupImage, method: `publisher-site:${metadataImage.method || 'meta-image'}`, homepage, imageKind: 'site-brand' }; const logo = siteLogoFromHtml(page.text, base); if (logo?.image) return { image: logo.image, backupImage, method: logo.method, homepage, imageKind: 'site-brand' }; } catch {} return { image: backupImage, backupImage: '', method: 'publisher-site:google-favicon', homepage, imageKind: 'site-brand' }; }
+function text(value = '') {
+  return decode(String(value)
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-async function gdelt(title) { const query = baseTitle(title).replace(/[【】「」『』（）()〈〉《》“”"'’‘,:：;；!?！？。・／/|｜―—]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100); if (query.length < 8) return { image: '', error: 'gdelt-query-too-short' }; const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 850); try { const response = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(query)}&mode=ArtList&maxrecords=6&format=json&sort=HybridRel&timespan=72h`, { signal: controller.signal, headers: { Accept: 'application/json', 'User-Agent': 'new-wnt-getting/1.0' } }); if (!response.ok) throw new Error(`HTTP ${response.status}`); const json = await response.json(); let best = null; for (const row of Array.isArray(json?.articles) ? json.articles : []) { const image = safeUrl(row?.socialimage || row?.image || row?.thumbnail || ''); const titleScore = similarity(query, baseTitle(row?.title || '')); if (image && titleScore >= 0.72 && (!best || titleScore > best.similarity)) best = { image, method: 'gdelt:socialimage', articleUrl: safeUrl(row?.url || ''), similarity: titleScore }; } return best || { image: '', error: 'gdelt-no-matching-image' }; } catch (error) { return { image: '', error: error?.name === 'AbortError' ? 'gdelt-timeout' : String(error?.message || error) }; } finally { clearTimeout(timer); } }
+function attr(raw = '', name = '') {
+  const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(raw).match(new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  return decode(match?.[1] ?? match?.[2] ?? match?.[3] ?? '').trim();
+}
 
-export function readerImageDiagnostic(req, res) { if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'Method Not Allowed' }); } const body = bodyOf(req); const log = { phase: compact(body.phase, 80) || 'unknown', articleId: compact(body.articleId, 700), title: compact(body.title, 260), source: compact(body.source, 120), imageUrl: compact(body.imageUrl, 1100), imageHost: compact(body.imageHost, 180), summaryProvider: compact(body.summaryProvider, 80), viewport: compact(body.viewport, 80), online: body.online !== false }; console.warn('[reader-image]', log); return res.status(204).end(); }
+function norm(value = '') {
+  return String(value)
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
 
-export async function readerImageResolve(req, res) { if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return res.status(405).json({ error: 'Method Not Allowed' }); } const body = bodyOf(req); const articleId = compact(body.articleId, 700); const title = compact(body.title, 320); const source = compact(body.source, 120); const link = compact(body.link, 2200); if (!/^https?:\/\//i.test(link)) return res.status(400).json({ error: 'Invalid article link' }); const cached = cacheGet(link); if (cached) { console.info('[reader-image-resolve]', { ok: Boolean(cached.image), cached: true, articleId, title, source, imageHost: hostOf(cached.image), publisherHost: hostOf(cached.publisherUrl), method: cached.method || '', fallback: cached.fallback || '', imageKind: cached.imageKind || 'article', fallbackError: cached.fallbackError || '' }); res.setHeader('Cache-Control', 'private, max-age=300'); return res.status(200).json({ ...cached, cached: true }); }
-  const started = Date.now(); const direct = await resolveSourcePublishedTime(link, { stageTimeoutMs: 1400 }); const payload = { image: compact(direct?.sourceImage, 2200), backupImage: '', imageKind: direct?.sourceImage ? 'article' : '', method: compact(direct?.sourceImageMethod, 120), publisherUrl: compact(direct?.publisherUrl, 2200), error: compact(direct?.error, 240), fallback: '', fallbackError: '' };
-  if (!payload.image) { const [publisher, bing, gdeltResult, siteVisual] = await Promise.all([publisherFallback(title, source), bingNews(title, source), gdelt(title), publisherSiteVisual(title, source)]); if (publisher.image) { payload.image = compact(publisher.image, 2200); payload.imageKind = 'article'; payload.method = compact(publisher.method, 140); payload.publisherUrl = compact(publisher.articleUrl || payload.publisherUrl, 2200); payload.fallback = publisher.fallback || 'publisher'; console.info('[reader-image-resolve:publisher-discovery]', { ok: true, articleId, title, source, imageHost: hostOf(payload.image), publisherHost: hostOf(payload.publisherUrl), fallback: payload.fallback, rowSource: publisher.rowSource || '', checked: publisher.checked || 0, rssCandidates: publisher.rssCandidates || 0, elapsedMs: Date.now() - started }); } else if (bing.image) { payload.image = compact(bing.image, 2200); payload.imageKind = 'article'; payload.method = compact(bing.method, 140); payload.publisherUrl = compact(bing.articleUrl || payload.publisherUrl, 2200); payload.fallback = 'bing-news'; console.info('[reader-image-resolve:bing-news]', { ok: true, articleId, title, source, imageHost: hostOf(payload.image), publisherHost: hostOf(payload.publisherUrl), rowSource: bing.rowSource || '', similarity: Number((bing.similarity || 0).toFixed(3)), candidates: bing.candidates || 0, elapsedMs: Date.now() - started }); } else if (gdeltResult.image) { payload.image = compact(gdeltResult.image, 2200); payload.imageKind = 'article'; payload.method = gdeltResult.method; payload.publisherUrl = compact(gdeltResult.articleUrl || payload.publisherUrl, 2200); payload.fallback = 'gdelt'; } else if (siteVisual.image) { payload.image = compact(siteVisual.image, 2200); payload.backupImage = compact(siteVisual.backupImage, 2200); payload.imageKind = 'site-brand'; payload.method = compact(siteVisual.method, 140); payload.publisherUrl = compact(siteVisual.homepage || payload.publisherUrl, 2200); payload.fallback = 'publisher-site'; payload.fallbackError = compact(`article-image-missing: bing=${bing.error || 'none'}; publisher=${publisher.error || 'none'}; gdelt=${gdeltResult.error || 'none'}`, 400); console.info('[reader-image-resolve:site-visual]', { ok: true, articleId, title, source, imageHost: hostOf(payload.image), publisherHost: hostOf(payload.publisherUrl), method: payload.method, backupImageHost: hostOf(payload.backupImage), elapsedMs: Date.now() - started }); } else { const bingError = compact(bing.error || 'unknown', 120); const publisherError = compact(publisher.error || 'unknown', 160); const gdeltError = compact(gdeltResult.error || 'unknown', 120); const siteError = compact(siteVisual.error || 'unknown', 120); payload.fallbackError = compact(`bing:${bingError};publisher:${publisherError};gdelt:${gdeltError};site:${siteError}`, 500); console.warn('[reader-image-resolve:bing-news]', { ok: false, articleId, title, source, reason: bingError, candidates: bing.candidates || 0, elapsedMs: Date.now() - started }); console.warn('[reader-image-resolve:publisher-discovery]', { ok: false, articleId, title, source, homepageHost: hostOf(publisher.homepage), checked: publisher.checked || 0, rssCandidates: publisher.rssCandidates || 0, publisherCandidates: publisher.publisherCandidates || 0, reason: publisherError, elapsedMs: Date.now() - started }); console.warn('[reader-image-resolve:fallback]', { ok: false, articleId, source, reason: gdeltError, siteReason: siteError, elapsedMs: Date.now() - started }); } }
-  cacheSet(link, payload); const log = { ok: Boolean(payload.image), cached: false, articleId, title, source, imageHost: hostOf(payload.image), publisherHost: hostOf(payload.publisherUrl), method: payload.method, fallback: payload.fallback, imageKind: payload.imageKind || 'article', elapsedMs: Date.now() - started, error: payload.error, fallbackError: payload.fallbackError }; if (payload.image) console.info('[reader-image-resolve]', log); else console.warn('[reader-image-resolve]', log); res.setHeader('Cache-Control', 'private, max-age=300'); return res.status(200).json(payload); }
+function similarity(a = '', b = '') {
+  const aa = norm(a);
+  const bb = norm(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+  if (aa.length >= 10 && (aa.includes(bb) || bb.includes(aa))) {
+    return Math.min(0.98, Math.min(aa.length, bb.length) / Math.max(aa.length, bb.length) + 0.22);
+  }
+  const grams = value => {
+    const set = new Set();
+    for (let i = 0; i < value.length - 1; i += 1) set.add(value.slice(i, i + 2));
+    return set;
+  };
+  const ga = grams(aa);
+  const gb = grams(bb);
+  if (!ga.size || !gb.size) return 0;
+  let same = 0;
+  for (const token of ga) if (gb.has(token)) same += 1;
+  return 2 * same / (ga.size + gb.size);
+}
+
+function profileFor(value = '') {
+  return PROFILES.find(profile => profile.re.test(String(value))) || null;
+}
+
+function publisherHint(title = '') {
+  const match = String(title).match(/[（(]([^（）()]{2,90})[）)]\s*$/);
+  const hint = compact(match?.[1] || '', 90);
+  if (!hint) return '';
+  if (hint.length <= 60 && !/[。！？!?]/.test(hint)) return hint;
+  return '';
+}
+
+function baseTitle(title = '') {
+  return compact(publisherHint(title)
+    ? String(title).replace(/[（(][^（）()]{2,90}[）)]\s*$/, '')
+    : title, 320);
+}
+
+function isAggregator(source = '') {
+  return /(?:yahoo|google\s*news|googleニュース|smartnews|スマートニュース|グノシー|gunosy)/i.test(norm(source));
+}
+
+function isGoogleNewsUrl(value = '') {
+  try {
+    const url = new URL(String(value || ''));
+    return url.hostname.toLowerCase() === 'news.google.com'
+      && /\/(?:rss\/articles|articles|read)\//.test(url.pathname);
+  } catch { return false; }
+}
+
+function imageBlockedReason(image = '', imageKind = '') {
+  const href = safeUrl(image);
+  if (!href) return 'invalid-image-url';
+  if (String(imageKind || '').toLowerCase() === 'site-brand') return 'site-brand';
+  try {
+    const url = new URL(href);
+    const path = decodeURIComponent(`${url.pathname}${url.search}`).toLowerCase();
+    if (url.hostname === 'www.google.com' && url.pathname.startsWith('/s2/favicons')) return 'site-brand';
+    if (/(?:^|[\/_.-])(?:ogp[_-]?default|default[_-]?ogp|default[_-]?image|no[_-]?image|noimage|placeholder|site[_-]?brand)(?:[\/_.?&=-]|$)/i.test(path)) {
+      return 'default-ogp';
+    }
+  } catch {}
+  return '';
+}
+
+function logRejected(stage, image, reason, method = '') {
+  console.info('[NEWS-IMAGE]', {
+    diagnosticVersion: 2,
+    phase: 'candidate-rejected',
+    policy: RESOLVER_POLICY,
+    stage,
+    reason,
+    imageHost: hostOf(image),
+    method: compact(method, 140)
+  });
+}
+
+function private4(ip) {
+  const parts = String(ip).split('.').map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n))) return true;
+  const [a, b, c] = parts;
+  return [0, 10, 127].includes(a)
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168)
+    || (a === 192 && b === 0 && c === 0)
+    || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51 && c === 100)
+    || (a === 203 && b === 0 && c === 113)
+    || a >= 224;
+}
+
+function private6(ip) {
+  const value = String(ip).toLowerCase().split('%')[0];
+  if (value === '::' || value === '::1' || value.startsWith('fc') || value.startsWith('fd')
+      || /^fe[89ab]/.test(value) || value.startsWith('2001:db8:') || value.startsWith('ff')) return true;
+  const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  return mapped ? private4(mapped[1]) : false;
+}
+
+function privateIp(ip) {
+  const family = net.isIP(ip);
+  return family === 4 ? private4(ip) : family === 6 ? private6(ip) : true;
+}
+
+async function publicUrl(raw) {
+  const href = safeUrl(raw);
+  if (!href) throw new Error('invalid-url');
+  const url = new URL(href);
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localhost')) {
+    throw new Error('private-host');
+  }
+  if (net.isIP(host)) {
+    if (privateIp(host)) throw new Error('private-host');
+    return url;
+  }
+  const rows = await dns.lookup(host, { all: true, verbatim: true });
+  if (!rows.length || rows.some(row => privateIp(row.address))) throw new Error('private-host');
+  return url;
+}
+
+async function readLimited(response, max) {
+  if (!response.body?.getReader) return String(await response.text()).slice(0, max);
+  const reader = response.body.getReader();
+  const parts = [];
+  let total = 0;
+  try {
+    while (total < max) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const bytes = Buffer.from(value);
+      const left = max - total;
+      parts.push(bytes.length > left ? bytes.subarray(0, left) : bytes);
+      total += Math.min(bytes.length, left);
+      if (bytes.length >= left) break;
+    }
+    if (total >= max) {
+      try { await reader.cancel(); } catch {}
+    }
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+  return Buffer.concat(parts).toString('utf8');
+}
+
+async function fetchText(raw, {
+  timeout = 1300,
+  max = PAGE_BYTES,
+  accept = 'text/html,application/xhtml+xml;q=.9,*/*;q=.2'
+} = {}) {
+  let url = await publicUrl(raw);
+  const deadline = Date.now() + timeout;
+  for (let redirectCount = 0; redirectCount < 4; redirectCount += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(220, deadline - Date.now()));
+    try {
+      const response = await fetch(url, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          Accept: accept,
+          'Accept-Language': 'ja,en-US;q=.8,en;q=.6',
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1'
+        }
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (!location || redirectCount === 3) throw new Error('redirect-failed');
+        try { await response.body?.cancel?.(); } catch {}
+        url = await publicUrl(new URL(location, url).href);
+        continue;
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return { text: await readLimited(response, max), finalUrl: url.href };
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('timeout');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error('redirect-failed');
+}
+
+function cacheKeys(link, articleId = '', title = '') {
+  const keys = [safeUrl(link)];
+  if (articleId) keys.push(`article:${compact(articleId, 700)}`);
+  const titleKey = norm(baseTitle(title)).slice(0, 220);
+  if (titleKey.length >= 12) keys.push(`title:${titleKey}`);
+  return [...new Set(keys.filter(Boolean))];
+}
+
+function cacheGet(keys = []) {
+  for (const key of keys) {
+    const row = imageCache.get(key);
+    if (!row) continue;
+    const ttl = row.value?.image ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS;
+    if (Date.now() - row.at > ttl) {
+      imageCache.delete(key);
+      continue;
+    }
+    const blocked = row.value?.image ? imageBlockedReason(row.value.image, row.value.imageKind) : '';
+    if (blocked) {
+      imageCache.delete(key);
+      console.info('[NEWS-IMAGE]', {
+        diagnosticVersion: 2,
+        phase: 'resolved-url-cache-invalidated',
+        policy: RESOLVER_POLICY,
+        cacheLayer: 'server-memory',
+        reason: blocked,
+        imageHost: hostOf(row.value.image)
+      });
+      continue;
+    }
+    return { key, value: row.value };
+  }
+  return null;
+}
+
+function cacheSet(keys = [], value) {
+  if (!value) return;
+  const blocked = value.image ? imageBlockedReason(value.image, value.imageKind) : '';
+  if (blocked) return;
+  for (const key of keys) {
+    if (key) imageCache.set(key, { at: Date.now(), value });
+  }
+  while (imageCache.size > 240) imageCache.delete(imageCache.keys().next().value);
+}
+
+function cacheKeyType(key = '') {
+  if (key.startsWith('article:')) return 'article-id';
+  if (key.startsWith('title:')) return 'title';
+  return 'link';
+}
+
+function homeGet(key) {
+  const normalized = norm(key).slice(0, 100);
+  const row = homeCache.get(normalized);
+  if (!row || Date.now() - row.at > HOME_TTL_MS) {
+    if (row) homeCache.delete(normalized);
+    return '';
+  }
+  return safeUrl(row.home);
+}
+
+function homeSet(key, home) {
+  const normalized = norm(key).slice(0, 100);
+  const href = safeUrl(home);
+  if (!normalized || !href) return;
+  homeCache.set(normalized, { at: Date.now(), home: href });
+  while (homeCache.size > 120) homeCache.delete(homeCache.keys().next().value);
+}
+
+function pageTitle(html = '') {
+  const source = String(html);
+  const match = source.match(/<meta\b[^>]*(?:property|name)=["'](?:og:title|twitter:title)["'][^>]*content=["']([^"']+)["'][^>]*>/i)
+    || source.match(/<meta\b[^>]*content=["']([^"']+)["'][^>]*(?:property|name)=["'](?:og:title|twitter:title)["'][^>]*>/i)
+    || source.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return text(match?.[1] || '');
+}
+
+function candidates(html, base, title) {
+  const baseHost = hostOf(base);
+  const source = decode(String(html).replace(/\\\//g, '/').replace(/\\u002F/gi, '/'));
+  const out = [];
+  const seen = new Set();
+  const wanted = baseTitle(title);
+
+  const add = (raw, label = '', bonus = 0) => {
+    if (!raw || /^(?:#|javascript:|mailto:|tel:)/i.test(raw)) return;
+    let url;
+    try { url = new URL(raw, base); }
+    catch { return; }
+    if (!['http:', 'https:'].includes(url.protocol)
+      || !sameSite(baseHost, url.hostname)
+      || url.pathname === '/'
+      || /\.(?:jpg|jpeg|png|gif|webp|svg|css|js)(?:$|\?)/i.test(url.href)
+      || seen.has(url.href)) return;
+
+    const score = label ? similarity(wanted, baseTitle(label)) : 0;
+    if (label && score < 0.4) return;
+    seen.add(url.href);
+    out.push({ url: url.href, sim: score, score: score + bonus });
+  };
+
+  let match;
+  const anchor = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+  while ((match = anchor.exec(source))) {
+    add(attr(match[1], 'href'), text(match[2]) || attr(match[1], 'aria-label') || attr(match[1], 'title'), 0.08);
+  }
+
+  for (const fragment of [wanted.slice(0, 28), wanted.slice(0, 18), wanted.slice(0, 12)].filter(value => value.length >= 10)) {
+    let position = 0;
+    let hits = 0;
+    while (hits < 5) {
+      const index = source.indexOf(fragment, position);
+      if (index < 0) break;
+      position = index + fragment.length;
+      hits += 1;
+      const window = source.slice(Math.max(0, index - 2200), Math.min(source.length, index + 2600));
+      let urlMatch;
+      const embedded = /(?:href|url|link|canonicalUrl|articleUrl)\s*[=:]\s*["']([^"']+)["']/gi;
+      while ((urlMatch = embedded.exec(window))) add(urlMatch[1], wanted, 0.22);
+      const absolute = /https?:\/\/[^\s"'<>]+/gi;
+      while ((urlMatch = absolute.exec(window))) add(urlMatch[0], wanted, 0.12);
+    }
+  }
+
+  return out.sort((a, b) => b.score - a.score).slice(0, 10);
+}
+
+async function articleImage(url, title, expectedHost = '') {
+  try {
+    const page = await fetchText(url, { timeout: 1450, max: PAGE_BYTES });
+    if (expectedHost && !sameSite(expectedHost, hostOf(page.finalUrl))) return null;
+    const resolvedTitle = pageTitle(page.text);
+    const titleScore = resolvedTitle ? similarity(baseTitle(title), baseTitle(resolvedTitle)) : 0;
+    if (resolvedTitle && titleScore < 0.36) return null;
+
+    const image = extractArticleImageFromHtml(page.text, { baseUrl: page.finalUrl || url });
+    if (!image?.url) return null;
+    const blocked = imageBlockedReason(image.url, 'article');
+    if (blocked) {
+      logRejected('publisher-article', image.url, blocked, image.method || 'image');
+      return null;
+    }
+    return {
+      image: image.url,
+      method: image.method || 'image',
+      articleUrl: page.finalUrl || url,
+      similarity: titleScore
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function crawlPublisher(title, source, home, extra = []) {
+  const homepage = safeUrl(home);
+  if (!homepage) return { image: '', error: 'publisher-homepage-not-found' };
+
+  const expectedHost = hostOf(homepage);
+  const urls = [homepage, ...extra].filter(Boolean).slice(0, 8);
+  const pages = await Promise.all(urls.map(async url => {
+    try {
+      const page = await fetchText(url, { timeout: 1250, max: PAGE_BYTES });
+      return sameSite(expectedHost, hostOf(page.finalUrl)) ? page : null;
+    } catch { return null; }
+  }));
+
+  const found = [];
+  const seen = new Set();
+  for (const page of pages.filter(Boolean)) {
+    for (const candidate of candidates(page.text, page.finalUrl, title)) {
+      if (seen.has(candidate.url)) continue;
+      seen.add(candidate.url);
+      found.push(candidate);
+    }
+  }
+
+  const hits = await Promise.all(found
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map(async candidate => {
+      const result = await articleImage(candidate.url, title, expectedHost);
+      return result ? { ...result, linkScore: candidate.score } : null;
+    }));
+
+  const best = hits
+    .filter(Boolean)
+    .sort((a, b) => (b.similarity + b.linkScore) - (a.similarity + a.linkScore))[0];
+
+  return best
+    ? { ...best, homepage, checked: urls.length }
+    : { image: '', homepage, checked: urls.length, error: 'publisher-article-not-found' };
+}
+
+function bingArticle(raw = '') {
+  const href = safeUrl(decode(raw));
+  if (!href) return '';
+  try {
+    const url = new URL(href);
+    return bareHost(url.hostname) === 'bing.com' && /\/news\/apiclick\.aspx$/i.test(url.pathname)
+      ? safeUrl(url.searchParams.get('url') || '') || href
+      : href;
+  } catch { return href; }
+}
+
+function bingImage(raw = '') {
+  const href = safeUrl(decode(raw));
+  if (!href) return '';
+  try {
+    const url = new URL(href);
+    if (url.protocol === 'http:' && /(?:^|\.)bing(?:4)?\.com$|(?:^|\.)bing\.net$/i.test(url.hostname)) {
+      url.protocol = 'https:';
+    }
+    return url.href;
+  } catch { return href; }
+}
+
+async function bingNews(title, source) {
+  const query = baseTitle(title);
+  const hint = publisherHint(title);
+  const wantedSource = hint || source;
+  const aggregator = isAggregator(source);
+
+  try {
+    const page = await fetchText(
+      `https://www.bing.com/news/search?q=${encodeURIComponent(query)}&setmkt=ja-JP&format=RSS`,
+      { timeout: 1050, max: RSS_BYTES, accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }
+    );
+    const blocks = page.text.match(/<item\b[\s\S]*?<\/item>/gi) || [];
+    const rows = [];
+
+    for (const block of blocks) {
+      const titleMatch = block.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      const linkMatch = block.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
+      const sourceMatch = block.match(/<(?:News:)?Source[^>]*>([\s\S]*?)<\/(?:News:)?Source>/i);
+      const imageMatch = block.match(/<(?:News:)?Image[^>]*>([\s\S]*?)<\/(?:News:)?Image>/i);
+      const rowTitle = text(titleMatch?.[1] || '');
+      const rowSource = text(sourceMatch?.[1] || '');
+      const titleScore = similarity(query, baseTitle(rowTitle));
+      const sourceScore = wantedSource ? similarity(wantedSource, rowSource) : 0;
+
+      if (!rowTitle || titleScore < 0.58) continue;
+      if (!aggregator && wantedSource && sourceScore < 0.24 && titleScore < 0.9) continue;
+      if (hint && sourceScore < 0.2 && titleScore < 0.9) continue;
+
+      const rowImage = bingImage(text(imageMatch?.[1] || ''));
+      const blocked = rowImage ? imageBlockedReason(rowImage, 'article') : '';
+      if (blocked) logRejected('bing-thumbnail', rowImage, blocked, 'bing-news:thumbnail');
+
+      rows.push({
+        title: rowTitle,
+        source: rowSource,
+        sim: titleScore,
+        sourceSim: sourceScore,
+        url: bingArticle(text(linkMatch?.[1] || '')),
+        image: blocked ? '' : rowImage,
+        score: titleScore + sourceScore * 0.35 + (rowImage && !blocked ? 0.1 : 0)
+      });
+    }
+
+    rows.sort((a, b) => b.score - a.score);
+    const imageRow = rows.find(row => row.image && (row.sim >= 0.68 || row.sourceSim >= 0.42));
+    if (imageRow) {
+      return {
+        image: imageRow.image,
+        method: 'bing-news:thumbnail',
+        articleUrl: imageRow.url,
+        rowSource: imageRow.source,
+        similarity: imageRow.sim,
+        candidates: rows.length
+      };
+    }
+
+    const linkRow = rows.find(row => row.url && (row.sim >= 0.76 || row.sourceSim >= 0.52));
+    if (linkRow) {
+      const image = await articleImage(linkRow.url, query);
+      if (image) {
+        return {
+          ...image,
+          method: `bing-news:${image.method}`,
+          rowSource: linkRow.source,
+          candidates: rows.length
+        };
+      }
+    }
+
+    return {
+      image: '',
+      error: rows.length ? 'bing-no-image' : 'bing-no-matching-story',
+      candidates: rows.length
+    };
+  } catch (error) {
+    return { image: '', error: `bing-${error?.message || error}`, candidates: 0 };
+  }
+}
+
+async function googleRows(title) {
+  const query = baseTitle(title);
+  try {
+    const page = await fetchText(
+      `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`,
+      { timeout: 1150, max: RSS_BYTES, accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }
+    );
+    const blocks = page.text.match(/<item\b[\s\S]*?<\/item>/gi) || [];
+    return blocks.map(block => {
+      const titleMatch = block.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      const sourceMatch = block.match(/<source\b([^>]*)>([\s\S]*?)<\/source>/i);
+      if (!sourceMatch) return null;
+      const rowTitle = text(titleMatch?.[1] || '');
+      const rowSource = text(sourceMatch?.[2] || '');
+      const home = safeUrl(attr(sourceMatch[1], 'url'));
+      const titleScore = similarity(query, baseTitle(rowTitle));
+      return rowTitle && home && titleScore >= 0.58
+        ? { title: rowTitle, source: rowSource, home, sim: titleScore }
+        : null;
+    }).filter(Boolean).sort((a, b) => b.sim - a.sim);
+  } catch {
+    return [];
+  }
+}
+
+function fallbackType(row, source, hint) {
+  return similarity(source, row.source) >= 0.5 || (hint && similarity(hint, row.source) >= 0.4)
+    ? 'publisher-rss'
+    : 'same-story';
+}
+
+async function publisherFallback(title, source) {
+  const query = baseTitle(title);
+  const hint = publisherHint(title);
+  const profile = profileFor(hint) || profileFor(source);
+  const key = hint || source;
+  const home = homeGet(key) || profile?.home || '';
+
+  const rowsPromise = googleRows(query);
+  const primaryPromise = home
+    ? crawlPublisher(query, key, home, (profile?.pages || []).map(path => new URL(path, home).href))
+    : Promise.resolve(null);
+
+  const [primary, rows] = await Promise.all([primaryPromise, rowsPromise]);
+  if (primary?.image) {
+    homeSet(key, primary.homepage);
+    return {
+      ...primary,
+      fallback: hint ? 'publisher-hint' : 'publisher-direct',
+      rssCandidates: rows.length
+    };
+  }
+
+  const choices = [];
+  for (const row of rows) {
+    const sourceScore = similarity(source, row.source);
+    const hintScore = hint ? similarity(hint, row.source) : 0;
+    if (!(sourceScore >= 0.46 || hintScore >= 0.36 || row.sim >= 0.86 || (isAggregator(source) && row.sim >= 0.74))) {
+      continue;
+    }
+    if (home && sameSite(hostOf(home), hostOf(row.home))) continue;
+    if (choices.some(choice => choice.home === row.home)) continue;
+    choices.push({ ...row, sourceScore, hintScore });
+    if (choices.length >= 3) break;
+  }
+
+  const alternatives = await Promise.all(choices.map(async row => {
+    const rowProfile = profileFor(row.source);
+    const result = await crawlPublisher(
+      query,
+      row.source,
+      row.home,
+      (rowProfile?.pages || []).map(path => new URL(path, row.home).href)
+    );
+    return result?.image
+      ? { ...result, rowSource: row.source, rowTitle: row.title, fallback: fallbackType(row, source, hint) }
+      : null;
+  }));
+
+  const hit = alternatives.filter(Boolean).sort((a, b) => b.similarity - a.similarity)[0];
+  if (hit) return hit;
+
+  return {
+    image: '',
+    homepage: primary?.homepage || home,
+    checked: primary?.checked || 0,
+    rssCandidates: rows.length,
+    publisherCandidates: choices.length,
+    error: primary?.error || (rows.length ? 'same-story-publisher-not-found' : 'google-news-no-candidates')
+  };
+}
+
+export function readerImageDiagnostic(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+  const body = bodyOf(req);
+  const log = {
+    phase: compact(body.phase, 80) || 'unknown',
+    articleId: compact(body.articleId, 700),
+    title: compact(body.title, 260),
+    source: compact(body.source, 120),
+    imageUrl: compact(body.imageUrl, 1100),
+    imageHost: compact(body.imageHost, 180),
+    summaryProvider: compact(body.summaryProvider, 80),
+    viewport: compact(body.viewport, 80),
+    online: body.online !== false
+  };
+  console.warn('[reader-image]', log);
+  return res.status(204).end();
+}
+
+export async function readerImageResolve(req, res) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  const body = bodyOf(req);
+  const articleId = compact(body.articleId, 700);
+  const title = compact(body.title, 320);
+  const source = compact(body.source, 120);
+  const link = compact(body.link, 2200);
+  if (!/^https?:\/\//i.test(link)) return res.status(400).json({ error: 'Invalid article link' });
+
+  console.info('[NEWS-IMAGE]', {
+    diagnosticVersion: 2,
+    phase: 'resolver-policy',
+    policy: RESOLVER_POLICY,
+    articleId,
+    gdeltEnabled: false,
+    siteBrandEnabled: false,
+    publisherBingParallel: true,
+    googleNewsDecodeFallback: true,
+    resolvedUrlReuse: true,
+    positiveCacheTtlMs: POSITIVE_TTL_MS
+  });
+
+  const keys = cacheKeys(link, articleId, title);
+  const cached = cacheGet(keys);
+  if (cached) {
+    console.info('[NEWS-IMAGE]', {
+      diagnosticVersion: 2,
+      phase: 'resolved-url-reuse',
+      policy: RESOLVER_POLICY,
+      articleId,
+      cacheLayer: 'server-memory',
+      cacheKey: cacheKeyType(cached.key),
+      imageHost: hostOf(cached.value?.image),
+      method: compact(cached.value?.method, 140)
+    });
+    console.info('[reader-image-resolve]', {
+      ok: Boolean(cached.value?.image),
+      cached: true,
+      articleId,
+      title,
+      source,
+      imageHost: hostOf(cached.value?.image),
+      publisherHost: hostOf(cached.value?.publisherUrl),
+      method: cached.value?.method || '',
+      fallback: cached.value?.fallback || '',
+      imageKind: cached.value?.imageKind || 'article',
+      fallbackError: cached.value?.fallbackError || ''
+    });
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return res.status(200).json({ ...cached.value, cached: true });
+  }
+
+  const started = Date.now();
+  let direct = {
+    sourceImage: '',
+    sourceImageMethod: '',
+    publisherUrl: '',
+    error: ''
+  };
+
+  if (isGoogleNewsUrl(link)) {
+    direct.error = 'google-news-decode-fallback';
+    console.info('[NEWS-IMAGE]', {
+      diagnosticVersion: 2,
+      phase: 'google-news-decode-fallback',
+      policy: RESOLVER_POLICY,
+      articleId,
+      reason: 'google-link-remained-after-preflight',
+      strategy: 'skip-second-decode+publisher-bing-parallel',
+      publisherHint: compact(publisherHint(title), 90)
+    });
+  } else {
+    direct = await resolveSourcePublishedTime(link, { stageTimeoutMs: 1400 });
+  }
+
+  const directImage = compact(direct?.sourceImage, 2200);
+  const directBlocked = directImage ? imageBlockedReason(directImage, 'article') : '';
+  if (directBlocked) logRejected('direct', directImage, directBlocked, direct?.sourceImageMethod || '');
+
+  const payload = {
+    image: directBlocked ? '' : directImage,
+    backupImage: '',
+    imageKind: directImage && !directBlocked ? 'article' : '',
+    method: directBlocked ? '' : compact(direct?.sourceImageMethod, 120),
+    publisherUrl: compact(direct?.publisherUrl, 2200),
+    error: compact(direct?.error, 240),
+    fallback: '',
+    fallbackError: ''
+  };
+
+  if (!payload.image) {
+    console.info('[NEWS-IMAGE]', {
+      diagnosticVersion: 2,
+      phase: 'fallback-parallel-start',
+      policy: RESOLVER_POLICY,
+      articleId,
+      paths: ['publisher', 'bing'],
+      gdeltEnabled: false,
+      siteBrandEnabled: false
+    });
+
+    const publisherStarted = Date.now();
+    const publisherPromise = publisherFallback(title, source)
+      .then(result => ({ result, ms: Date.now() - publisherStarted }));
+
+    const bingStarted = Date.now();
+    const bingPromise = bingNews(title, source)
+      .then(result => ({ result, ms: Date.now() - bingStarted }));
+
+    const [publisherRun, bingRun] = await Promise.all([publisherPromise, bingPromise]);
+    const publisher = publisherRun.result || { image: '', error: 'publisher-empty' };
+    const bing = bingRun.result || { image: '', error: 'bing-empty' };
+
+    console.info('[NEWS-IMAGE]', {
+      diagnosticVersion: 2,
+      phase: 'fallback-parallel-finish',
+      policy: RESOLVER_POLICY,
+      articleId,
+      publisherMs: publisherRun.ms,
+      bingMs: bingRun.ms,
+      totalParallelMs: Math.max(publisherRun.ms, bingRun.ms),
+      publisherOk: Boolean(publisher.image),
+      bingOk: Boolean(bing.image),
+      publisherReason: compact(publisher.error, 160),
+      bingReason: compact(bing.error, 160),
+      gdeltUsed: false,
+      siteBrandUsed: false
+    });
+
+    if (publisher.image) {
+      payload.image = compact(publisher.image, 2200);
+      payload.imageKind = 'article';
+      payload.method = compact(publisher.method, 140);
+      payload.publisherUrl = compact(publisher.articleUrl || payload.publisherUrl, 2200);
+      payload.fallback = publisher.fallback || 'publisher';
+      console.info('[reader-image-resolve:publisher-discovery]', {
+        ok: true,
+        articleId,
+        title,
+        source,
+        imageHost: hostOf(payload.image),
+        publisherHost: hostOf(payload.publisherUrl),
+        fallback: payload.fallback,
+        rowSource: publisher.rowSource || '',
+        checked: publisher.checked || 0,
+        rssCandidates: publisher.rssCandidates || 0,
+        elapsedMs: Date.now() - started
+      });
+    } else if (bing.image) {
+      payload.image = compact(bing.image, 2200);
+      payload.imageKind = 'article';
+      payload.method = compact(bing.method, 140);
+      payload.publisherUrl = compact(bing.articleUrl || payload.publisherUrl, 2200);
+      payload.fallback = 'bing-news';
+      console.info('[reader-image-resolve:bing-news]', {
+        ok: true,
+        articleId,
+        title,
+        source,
+        imageHost: hostOf(payload.image),
+        publisherHost: hostOf(payload.publisherUrl),
+        rowSource: bing.rowSource || '',
+        similarity: Number((bing.similarity || 0).toFixed(3)),
+        candidates: bing.candidates || 0,
+        elapsedMs: Date.now() - started
+      });
+    } else {
+      const bingError = compact(bing.error || 'unknown', 120);
+      const publisherError = compact(publisher.error || 'unknown', 160);
+      payload.fallbackError = compact(
+        `bing:${bingError};publisher:${publisherError};gdelt:disabled;site-brand:disabled`,
+        500
+      );
+      console.warn('[reader-image-resolve:bing-news]', {
+        ok: false,
+        articleId,
+        title,
+        source,
+        reason: bingError,
+        candidates: bing.candidates || 0,
+        elapsedMs: Date.now() - started
+      });
+      console.warn('[reader-image-resolve:publisher-discovery]', {
+        ok: false,
+        articleId,
+        title,
+        source,
+        homepageHost: hostOf(publisher.homepage),
+        checked: publisher.checked || 0,
+        rssCandidates: publisher.rssCandidates || 0,
+        publisherCandidates: publisher.publisherCandidates || 0,
+        reason: publisherError,
+        elapsedMs: Date.now() - started
+      });
+    }
+  }
+
+  const finalBlocked = payload.image ? imageBlockedReason(payload.image, payload.imageKind) : '';
+  if (finalBlocked) {
+    logRejected('final', payload.image, finalBlocked, payload.method);
+    payload.image = '';
+    payload.backupImage = '';
+    payload.imageKind = '';
+    payload.method = '';
+    payload.fallbackError = compact(
+      `${payload.fallbackError ? `${payload.fallbackError};` : ''}final-image-rejected:${finalBlocked}`,
+      500
+    );
+  }
+
+  cacheSet(keys, payload);
+  console.info('[NEWS-IMAGE]', {
+    diagnosticVersion: 2,
+    phase: 'resolved-url-cache-store',
+    policy: RESOLVER_POLICY,
+    articleId,
+    cacheLayer: 'server-memory',
+    cacheKeys: keys.map(cacheKeyType),
+    stored: Boolean(payload.image),
+    imageHost: hostOf(payload.image),
+    ttlMs: payload.image ? POSITIVE_TTL_MS : NEGATIVE_TTL_MS
+  });
+
+  const log = {
+    ok: Boolean(payload.image),
+    cached: false,
+    articleId,
+    title,
+    source,
+    imageHost: hostOf(payload.image),
+    publisherHost: hostOf(payload.publisherUrl),
+    method: payload.method,
+    fallback: payload.fallback,
+    imageKind: payload.imageKind || 'article',
+    elapsedMs: Date.now() - started,
+    error: payload.error,
+    fallbackError: payload.fallbackError
+  };
+
+  if (payload.image) console.info('[reader-image-resolve]', log);
+  else console.warn('[reader-image-resolve]', log);
+
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  return res.status(200).json(payload);
+}
