@@ -6,6 +6,7 @@ import { loadReader, readReaderCache, feedsFor } from './reader-data.js';
 import { chooseTop, heuristicRank, requestAiRank } from './reader-rank.js';
 import { mountFocus } from './reader-focus.js';
 import { loadCrossSourceRecommendations } from './reader-recommendations.js';
+import { rankKnowledgeAttention, refreshKnowledgeTrendScores, stampPaperItems } from './reader-attention.js';
 import { shortDate } from '../../shared/time.js';
 
 const READER_MODES = ['news', 'knowledge', 'papers'];
@@ -358,7 +359,7 @@ async function loadTechnologyRecommendations(onProgress) {
 
   onProgress?.(82, '技術リサーチ全タブを新しい順に整理中');
   const merged = filterTechnologyItems([...core, ...creative], 'all');
-  return newestRecommendationOrder(annotateItems(merged, 'papers', 'all'));
+  return newestRecommendationOrder(annotateItems(stampPaperItems(merged), 'papers', 'all'));
 }
 
 async function loadModeRecommendations(mode, { tab = technologyTab(), onProgress } = {}) {
@@ -369,6 +370,12 @@ async function loadModeRecommendations(mode, { tab = technologyTab(), onProgress
     onProgress: () => onProgress?.(52, '登録した取得先を均等に確認中')
   });
   const annotated = annotateItems(result.items, mode);
+  if (mode === 'knowledge') {
+    onProgress?.(72, 'Google Trendsと登録RSSを照合中');
+    const trendScores = await refreshKnowledgeTrendScores(annotated);
+    onProgress?.(88, '注目度・鮮度・未読を整理中');
+    return rankKnowledgeAttention(annotated, getRead(mode, 'core'), trendScores);
+  }
   onProgress?.(78, '更新日時を優先しておすすめを選別中');
   return chooseTop(annotated, mode, getRead(mode, 'core'), 0, cachedAiRanking(mode, 'core'));
 }
@@ -505,12 +512,14 @@ function installReaderListSwipe(node, mode, rerender) {
 
 export async function renderReader(root, {
   navigate, refresh = false, readerRecommendations = false,
-  recommendationMode = '', recommendationTrack = '', recommendationFamily = ''
+  recommendationMode = '', recommendationTrack = '', recommendationFamily = '',
+  openId = '', technologyTab: requestedTechnologyTab = ''
 }) {
   focusHandle?.destroy?.(); focusHandle = null;
   swipeDetach?.(); swipeDetach = null;
   compactDetach?.(); compactDetach = null;
 
+  if ((state.readerMode || 'news') === 'papers' && TECHNOLOGY_TAB_VALUES.has(requestedTechnologyTab)) setTechnologyTab(requestedTechnologyTab);
   const mode = state.readerMode || 'news';
   const tab = mode === 'papers' ? technologyTab() : 'all';
   const track = mode === 'papers' ? 'technology' : 'core';
@@ -634,6 +643,22 @@ export async function renderReader(root, {
     return;
   }
 
+  if (openId) {
+    try {
+      const cached = await readReaderCache(mode, track);
+      const cachedRows = mode === 'papers' ? stampPaperItems(filterTechnologyItems(cached?.items || [], tab)) : (cached?.items || []);
+      const annotatedCached = annotateItems(cachedRows, mode, tab);
+      const cachedIndex = annotatedCached.findIndex(item => String(item?.id || '') === String(openId));
+      if (cachedIndex >= 0) {
+        const r = getRead(mode, track); r.add(String(openId)); saveRead(mode, track, r);
+        openArticleSequence(annotatedCached[cachedIndex], cachedIndex, annotatedCached);
+        if (mode === 'papers') loadTechnologyRows({ tab, force: false, fastOnly: true, preferCache: false }).catch(() => {});
+        else loadReader(mode, { selectedFeed: '', force: false, preferCache: false, backgroundRefresh: true }).catch(() => {});
+        return;
+      }
+    } catch {}
+  }
+
   screen.classList.add('reader-list-open');
   swipeDetach = installReaderListSwipe(screen, mode, () => renderReader(root, { navigate, readerRecommendations: false }));
   host.replaceChildren(el('div', { class: 'card', html: '<div class="loading">記事一覧を読み込み中...</div>' }));
@@ -642,7 +667,8 @@ export async function renderReader(root, {
     const selectedFeed = getSelectedFeed(mode);
     const showList = rows => {
       const visible = mode === 'papers' ? filterTechnologyItems(rows, tab) : rows;
-      const annotated = annotateItems(visible, mode, tab);
+      const prepared = mode === 'papers' ? stampPaperItems(visible) : visible;
+      const annotated = annotateItems(prepared, mode, tab);
       renderBento(host, mode, track, tab, annotated, { onOpen: openArticleSequence });
       return annotated;
     };
@@ -662,6 +688,14 @@ export async function renderReader(root, {
         }
       });
     const annotated = showList(result.items);
+    if (openId) {
+      const targetIndex = annotated.findIndex(item => String(item?.id || '') === String(openId));
+      if (targetIndex >= 0) {
+        const r = getRead(mode, track); r.add(String(openId)); saveRead(mode, track, r);
+        openArticleSequence(annotated[targetIndex], targetIndex, annotated);
+        return;
+      }
+    }
     compactDetach = installShrinkingHeader(screen, { threshold: 72, className: 'reader-list-motion-compact', range: 58, hysteresis: 20 });
     if (state.settings.rankWithAi && annotated.length) {
       const rankMode = mode === 'papers' && tab === 'general' ? 'papers-creative-general' : mode;
