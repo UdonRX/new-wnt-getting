@@ -77,10 +77,47 @@ function parseTrendTitles(xml = '') {
     return [...document.querySelectorAll('item > title')].map(node => text(node.textContent)).filter(Boolean).slice(0, 40);
   } catch { return []; }
 }
+function earlierIso(a = '', b = '') {
+  const at = new Date(a || 0).getTime();
+  const bt = new Date(b || 0).getTime();
+  if (Number.isFinite(at) && at > 0 && Number.isFinite(bt) && bt > 0) return at <= bt ? a : b;
+  if (Number.isFinite(at) && at > 0) return a;
+  return b;
+}
 
 export function isPaperLike(item) {
   const hay = `${sourceName(item)} ${item?.description || ''}`;
   return /カテゴリ\s*[:：]\s*論文・研究|J-STAGE|CiNii|Semantic Scholar|PLOS|PubMed|PMC|CORE|IEEE|独創研究|独創区分/i.test(hay);
+}
+
+export function dedupePaperItems(items = []) {
+  const merged = new Map();
+  for (const raw of Array.isArray(items) ? items : []) {
+    if (!raw) continue;
+    const key = paperKey(raw);
+    if (!key) continue;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, raw);
+      continue;
+    }
+    const rawRichness = text(raw.description).length + (raw.image ? 80 : 0) + (doiOf(raw) ? 60 : 0);
+    const currentRichness = text(current.description).length + (current.image ? 80 : 0) + (doiOf(current) ? 60 : 0);
+    const primary = rawRichness > currentRichness ? raw : current;
+    const secondary = primary === raw ? current : raw;
+    merged.set(key, {
+      ...secondary,
+      ...primary,
+      id: primary.id || secondary.id,
+      link: primary.link || secondary.link,
+      image: primary.image || secondary.image,
+      discoveredAt: earlierIso(
+        primary.discoveredAt || dateField(primary.description, 'discoveredAt'),
+        secondary.discoveredAt || dateField(secondary.description, 'discoveredAt')
+      )
+    });
+  }
+  return [...merged.values()];
 }
 
 export function stampPaperItems(items = []) {
@@ -88,7 +125,7 @@ export function stampPaperItems(items = []) {
   const stored = readJson(PAPER_DISCOVERY_KEY, {});
   const map = stored && typeof stored === 'object' ? { ...stored } : {};
   let changed = false;
-  const rows = (Array.isArray(items) ? items : []).map(item => {
+  const rows = dedupePaperItems(items).map(item => {
     const key = paperKey(item);
     const upstreamDiscoveredAt = item?.discoveredAt || dateField(item?.description, 'discoveredAt');
     const incoming = new Date(upstreamDiscoveredAt || 0).getTime();
@@ -154,8 +191,9 @@ export function pickHomePaper(items = [], readSet = new Set(), preferredId = '')
   const pool = recentDiscovery.length ? recentDiscovery : recentPublished.length ? recentPublished : unread.length ? unread : ranked;
   const best = pool[0] || null;
   const preferred = preferredId ? pool.find(item => String(item?.id || '') === String(preferredId)) : null;
-  if (preferred && best && Number(preferred._paperAttentionScore || 0) >= Number(best._paperAttentionScore || 0) - 5) return preferred;
-  return best;
+  const chosen = preferred && best && Number(preferred._paperAttentionScore || 0) >= Number(best._paperAttentionScore || 0) - 5 ? preferred : best;
+  if (chosen) console.info('[paper-attention]', { id: chosen.id, title: chosen.titleJa || chosen.title || '', score: chosen._paperAttentionScore, breakdown: chosen._paperAttentionBreakdown, candidates: ranked.length });
+  return chosen;
 }
 
 function trendCache() {
@@ -167,7 +205,10 @@ export function knowledgeTrendScores() { return trendCache().scores || {}; }
 
 export async function refreshKnowledgeTrendScores(items = [], { force = false } = {}) {
   const cached = trendCache();
-  if (!force && cached.at && Date.now() - Number(cached.at) < KNOWLEDGE_TREND_TTL) return cached.scores || {};
+  if (!force && cached.at && Date.now() - Number(cached.at) < KNOWLEDGE_TREND_TTL) {
+    console.info('[knowledge-trends]', { cache: 'hit', ageMs: Date.now() - Number(cached.at), registeredItems: Array.isArray(items) ? items.length : 0 });
+    return cached.scores || {};
+  }
   const rows = (Array.isArray(items) ? items : [])
     .filter(item => item?.id && item?.title)
     .sort((a, b) => itemTime(b) - itemTime(a))
@@ -260,6 +301,7 @@ export function pickHomeKnowledge(items = [], readSet = new Set(), preferredId =
   const pool = unread.length ? unread : ranked;
   const best = pool[0] || null;
   const preferred = preferredId ? pool.find(item => String(item?.id || '') === String(preferredId)) : null;
-  if (preferred && best && Number(preferred._knowledgeAttentionScore || 0) >= Number(best._knowledgeAttentionScore || 0) - 5) return preferred;
-  return best;
+  const chosen = preferred && best && Number(preferred._knowledgeAttentionScore || 0) >= Number(best._knowledgeAttentionScore || 0) - 5 ? preferred : best;
+  if (chosen) console.info('[knowledge-attention]', { id: chosen.id, title: chosen.titleJa || chosen.title || '', score: chosen._knowledgeAttentionScore, breakdown: chosen._knowledgeAttentionBreakdown });
+  return chosen;
 }
