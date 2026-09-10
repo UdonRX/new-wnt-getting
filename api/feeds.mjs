@@ -632,23 +632,46 @@ export default async function handler(req, res) {
         return res.status(200).json(cached.payload);
       }
 
-      const recoveryStarted = Date.now();
-      const recovery = await prepareReaderImageRecovery(req);
-      req.__readerImageGoogleRecoveryMs = Date.now() - recoveryStarted;
-      if (recovery?.payload) {
-        readerImageCacheRemember(initialBody, recovery.payload);
+      const sourceUrl = safeHttpUrl(initialBody?.sourceUrl);
+      if (googleNewsArticleLink(initialBody?.link) && sourceUrl) {
+        req.__readerImageGoogleNewsRow = {
+          title: compactLog(initialBody?.title, 320),
+          source: compactLog(initialBody?.source, 120),
+          home: sourceUrl,
+          sim: 1,
+          link: compactLog(initialBody?.link, 2200)
+        };
+        req.__readerImageGoogleSourceHost = hostOf(sourceUrl);
+        req.__readerImageGoogleDecodeMethod = 'rss-source-url-seed';
         console.info('[NEWS-IMAGE]', {
           diagnosticVersion: 2,
-          phase: 'resolved-url-cache-store',
+          phase: 'google-news-source-seed',
           policy: READER_IMAGE_POLICY,
+          imageRequestId: compactLog(req.__readerImageRequestId, 100),
           articleId: compactLog(initialBody?.articleId, 260),
-          cacheLayer: 'server-memory-pre-recovery',
-          stored: true,
-          imageHost: hostOf(recovery.payload.image),
-          source: 'google-news-recovery'
+          source: compactLog(initialBody?.source, 120),
+          sourceHomeHost: hostOf(sourceUrl),
+          preflightSkipped: true
         });
-        res.setHeader('Cache-Control', 'private, max-age=300');
-        return res.status(200).json(recovery.payload);
+      } else {
+        const recoveryStarted = Date.now();
+        const recovery = await prepareReaderImageRecovery(req);
+        req.__readerImageGoogleRecoveryMs = Date.now() - recoveryStarted;
+        if (recovery?.payload) {
+          readerImageCacheRemember(initialBody, recovery.payload);
+          console.info('[NEWS-IMAGE]', {
+            diagnosticVersion: 2,
+            phase: 'resolved-url-cache-store',
+            policy: READER_IMAGE_POLICY,
+            articleId: compactLog(initialBody?.articleId, 260),
+            cacheLayer: 'server-memory-pre-recovery',
+            stored: true,
+            imageHost: hostOf(recovery.payload.image),
+            source: 'google-news-recovery'
+          });
+          res.setHeader('Cache-Control', 'private, max-age=300');
+          return res.status(200).json(recovery.payload);
+        }
       }
     }
 
