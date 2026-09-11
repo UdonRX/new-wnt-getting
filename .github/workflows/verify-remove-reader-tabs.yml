@@ -1,31 +1,26 @@
 name: verify-remove-reader-tabs
-
 on:
   push:
     branches:
-      - "work/remove-reader-tabs-news-direct"
-
+      - 'work/remove-reader-tabs-news-direct'
 permissions:
   contents: write
-
 jobs:
   verify:
-    if: ${{ github.actor != 'github-actions[bot]' }}
+    if: "github.actor != 'github-actions[bot]'"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: work/remove-reader-tabs-news-direct
-          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
       - name: Apply targeted reader cleanup
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-
           reader = Path('src/features/reader/reader.js')
           s = reader.read_text()
           replacements = [
@@ -63,8 +58,7 @@ jobs:
           ]
           for old, new in replacements:
               count = s.count(old)
-              if count != 1:
-                  raise SystemExit(f'reader replacement count {count}: {old[:100]!r}')
+              if count != 1: raise SystemExit(f'reader replacement count {count}: {old[:100]!r}')
               s = s.replace(old, new)
           reader.write_text(s)
 
@@ -81,12 +75,10 @@ jobs:
   if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';
   const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
 """
-          if m.count(old) != 1:
-              raise SystemExit('main navigateCore signature changed')
+          if m.count(old) != 1: raise SystemExit('main navigateCore signature changed')
           main.write_text(m.replace(old, new))
           PY
-      - name: Install dependencies
-        run: npm install --no-package-lock --no-audit --no-fund
+      - run: npm install --no-package-lock --no-audit --no-fund
       - name: Syntax checks
         run: |
           node --check src/main.js
