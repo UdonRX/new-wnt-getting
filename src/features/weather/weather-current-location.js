@@ -13,9 +13,15 @@ function normalizeMunicipalityName(value = '') {
   return String(value || '').replace(/[\s　]+/g, '').trim();
 }
 
-function sameArea(a, b) {
+function sameCoordinates(a, b) {
   if (!a || !b) return false;
-  return Math.abs(Number(a.lat) - Number(b.lat)) < 0.012 && Math.abs(Number(a.lon) - Number(b.lon)) < 0.015;
+  return Number(a.lat) === Number(b.lat) && Number(a.lon) === Number(b.lon);
+}
+
+function nameMatchesCoordinates(location) {
+  if (!location) return false;
+  if (!Number.isFinite(Number(location.nameLat)) || !Number.isFinite(Number(location.nameLon))) return false;
+  return Number(location.nameLat) === Number(location.lat) && Number(location.nameLon) === Number(location.lon);
 }
 
 async function loadMunicipalityNames() {
@@ -88,7 +94,10 @@ export function readCurrentWeatherLocation() {
     lat: Number(raw.lat),
     lon: Number(raw.lon),
     isCurrent: true,
-    locatedAt: Number(raw.locatedAt || 0)
+    locatedAt: Number(raw.locatedAt || 0),
+    nameLat: Number.isFinite(Number(raw.nameLat)) ? Number(raw.nameLat) : null,
+    nameLon: Number.isFinite(Number(raw.nameLon)) ? Number(raw.nameLon) : null,
+    nameUpdatedAt: Number(raw.nameUpdatedAt || 0)
   };
 }
 
@@ -108,12 +117,21 @@ export function readWeatherCache(location) {
 export async function refreshCurrentWeatherLocationName(location = readCurrentWeatherLocation()) {
   if (!location || !Number.isFinite(Number(location.lat)) || !Number.isFinite(Number(location.lon))) return location || null;
   const name = await reverseCurrentPlaceName(location.lat, location.lon);
-  if (!name || name === location.name) return location;
+  if (!name) return location;
+
   const latest = readCurrentWeatherLocation();
-  if (!latest || Number(latest.lat) !== Number(location.lat) || Number(latest.lon) !== Number(location.lon)) return latest || location;
-  const named = { ...latest, name };
+  if (!latest || !sameCoordinates(latest, location)) return latest || location;
+
+  const named = {
+    ...latest,
+    name,
+    nameLat: Number(latest.lat),
+    nameLon: Number(latest.lon),
+    nameUpdatedAt: Date.now()
+  };
+  const changed = named.name !== latest.name || !nameMatchesCoordinates(latest);
   saveLocation(named);
-  notifyLocation(named);
+  if (changed) notifyLocation(named);
   return named;
 }
 
@@ -135,19 +153,35 @@ export async function refreshCurrentWeatherLocation({ refreshWeather = true } = 
   try {
     const previous = readCurrentWeatherLocation();
     const position = await getPosition();
-    let location = {
-      name: previous?.name || '現在地',
+    const nextCoordinates = {
       lat: Number(position.coords.latitude.toFixed(5)),
-      lon: Number(position.coords.longitude.toFixed(5)),
+      lon: Number(position.coords.longitude.toFixed(5))
+    };
+    const coordinatesChanged = !sameCoordinates(previous, nextCoordinates);
+    const canReuseResolvedName = !coordinatesChanged && previous?.name && previous.name !== '現在地' && nameMatchesCoordinates(previous);
+
+    let location = {
+      name: canReuseResolvedName ? previous.name : '現在地',
+      lat: nextCoordinates.lat,
+      lon: nextCoordinates.lon,
       isCurrent: true,
-      locatedAt: Date.now()
+      locatedAt: Date.now(),
+      ...(canReuseResolvedName ? {
+        nameLat: previous.nameLat,
+        nameLon: previous.nameLon,
+        nameUpdatedAt: previous.nameUpdatedAt
+      } : {})
     };
     saveLocation(location);
     notifyLocation(location);
 
-    if (!previous?.name || previous.name === '現在地' || !sameArea(previous, location)) {
-      refreshCurrentWeatherLocationName(location).then(named => { if (named) location = named; }).catch(() => {});
-    }
+    // Resolve the municipality independently from weather fetching. This repairs legacy
+    // cached locations whose coordinates were refreshed while an old place name remained.
+    // A successful lookup emits another location event, so Home/Weather can replace only
+    // the current-location presentation without waiting for the weather request.
+    refreshCurrentWeatherLocationName(location)
+      .then(named => { if (named) location = named; })
+      .catch(() => {});
 
     if (refreshWeather) {
       const key = weatherCacheKey(location);
