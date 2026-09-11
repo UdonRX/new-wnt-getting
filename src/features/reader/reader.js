@@ -409,12 +409,6 @@ function sourceStates(mode) {
   if (mode === 'papers') return [''];
   return ['', ...feedsFor(mode).map(feed => feed.name)];
 }
-function applyModeBoundary(nextMode, direction) {
-  setReaderMode(nextMode);
-  if (nextMode === 'papers') return;
-  const states = sourceStates(nextMode);
-  setSelectedFeed(nextMode, direction > 0 ? states[0] : states.at(-1));
-}
 function stepReaderContext(mode, direction, rerender) {
   if (![-1, 1].includes(direction)) return;
   const states = sourceStates(mode), selected = mode === 'papers' ? '' : getSelectedFeed(mode);
