@@ -111,7 +111,9 @@ jobs:
                       before, after = line.split('{', 1)
                       parts = [part for part in before.split(',') if 'reader-mode-nav' not in part]
                       if not parts:
-                          raise SystemExit(f'{css}: standalone reader-mode-nav rule needs manual removal: {stripped}')
+                          if '}' in after:
+                              continue
+                          raise SystemExit(f'{css}: multiline standalone reader-mode-nav rule needs manual removal: {stripped}')
                       newline = ','.join(parts) + '{' + after
                       out.append(newline)
                       continue
