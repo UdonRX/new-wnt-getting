@@ -1,7 +1,10 @@
 const LOCATION_KEY = 'pdv2:weatherCurrentLocation:v1';
-const LOCATION_MAX_AGE = 10 * 60 * 1000;
 const GSI_REVERSE_URL = 'https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress';
 const GSI_MUNI_URL = 'https://maps.gsi.go.jp/js/muni.js';
+const POSITION_TIMEOUT = 12000;
+const POSITION_SETTLE_MS = 2500;
+const GOOD_ACCURACY_METERS = 120;
+const MAX_POSITION_AGE = 30 * 1000;
 let municipalityNamesPromise = null;
 
 function readJson(key) {
@@ -95,6 +98,8 @@ export function readCurrentWeatherLocation() {
     lon: Number(raw.lon),
     isCurrent: true,
     locatedAt: Number(raw.locatedAt || 0),
+    accuracy: Number.isFinite(Number(raw.accuracy)) ? Number(raw.accuracy) : null,
+    positionTimestamp: Number(raw.positionTimestamp || 0),
     nameLat: Number.isFinite(Number(raw.nameLat)) ? Number(raw.nameLat) : null,
     nameLon: Number.isFinite(Number(raw.nameLon)) ? Number(raw.nameLon) : null,
     nameUpdatedAt: Number(raw.nameUpdatedAt || 0)
@@ -135,17 +140,65 @@ export async function refreshCurrentWeatherLocationName(location = readCurrentWe
   return named;
 }
 
+function positionAccuracy(position) {
+  const value = Number(position?.coords?.accuracy);
+  return Number.isFinite(value) && value >= 0 ? value : Number.POSITIVE_INFINITY;
+}
+
+function positionIsFresh(position) {
+  const timestamp = Number(position?.timestamp || 0);
+  if (!timestamp) return true;
+  return Date.now() - timestamp <= MAX_POSITION_AGE;
+}
+
 function getPosition() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error('この端末では現在地を取得できません'));
       return;
     }
-    navigator.geolocation.getCurrentPosition(
-      position => resolve(position),
-      error => reject(error),
-      { enableHighAccuracy: false, timeout: 5500, maximumAge: LOCATION_MAX_AGE }
+
+    let watchId = null;
+    let hardTimer = null;
+    let settleTimer = null;
+    let best = null;
+    let finished = false;
+
+    const cleanup = () => {
+      if (watchId != null) navigator.geolocation.clearWatch(watchId);
+      if (hardTimer) clearTimeout(hardTimer);
+      if (settleTimer) clearTimeout(settleTimer);
+    };
+    const finish = (error = null) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      if (best) resolve(best);
+      else reject(error || new Error('現在地を取得できませんでした'));
+    };
+    const remember = position => {
+      if (!position || !positionIsFresh(position)) return;
+      if (!best || positionAccuracy(position) < positionAccuracy(best)) best = position;
+
+      if (positionAccuracy(best) <= GOOD_ACCURACY_METERS) {
+        finish();
+        return;
+      }
+
+      if (!settleTimer) {
+        settleTimer = setTimeout(() => finish(), POSITION_SETTLE_MS);
+      }
+    };
+
+    watchId = navigator.geolocation.watchPosition(
+      remember,
+      error => {
+        if (best) finish();
+        else finish(error);
+      },
+      { enableHighAccuracy: true, timeout: POSITION_TIMEOUT, maximumAge: 0 }
     );
+    hardTimer = setTimeout(() => finish(new Error('現在地の取得がタイムアウトしました')), POSITION_TIMEOUT + 500);
   });
 }
 
@@ -159,6 +212,8 @@ export async function refreshCurrentWeatherLocation({ refreshWeather = true } = 
     };
     const coordinatesChanged = !sameCoordinates(previous, nextCoordinates);
     const canReuseResolvedName = !coordinatesChanged && previous?.name && previous.name !== '現在地' && nameMatchesCoordinates(previous);
+    const accuracy = Number.isFinite(Number(position.coords.accuracy)) ? Math.round(Number(position.coords.accuracy)) : null;
+    const positionTimestamp = Number(position.timestamp || Date.now());
 
     let location = {
       name: canReuseResolvedName ? previous.name : '現在地',
@@ -166,6 +221,8 @@ export async function refreshCurrentWeatherLocation({ refreshWeather = true } = 
       lon: nextCoordinates.lon,
       isCurrent: true,
       locatedAt: Date.now(),
+      accuracy,
+      positionTimestamp,
       ...(canReuseResolvedName ? {
         nameLat: previous.nameLat,
         nameLon: previous.nameLon,
@@ -175,10 +232,9 @@ export async function refreshCurrentWeatherLocation({ refreshWeather = true } = 
     saveLocation(location);
     notifyLocation(location);
 
-    // Resolve the municipality independently from weather fetching. This repairs legacy
-    // cached locations whose coordinates were refreshed while an old place name remained.
-    // A successful lookup emits another location event, so Home/Weather can replace only
-    // the current-location presentation without waiting for the weather request.
+    // Resolve the municipality independently from weather fetching. A coordinate change
+    // immediately invalidates the old municipality name, and a successful reverse lookup
+    // emits a second event so Home/Weather update only the current-location presentation.
     refreshCurrentWeatherLocationName(location)
       .then(named => { if (named) location = named; })
       .catch(() => {});
