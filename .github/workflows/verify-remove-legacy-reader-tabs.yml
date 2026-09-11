@@ -1,0 +1,164 @@
+name: verify-remove-legacy-reader-tabs
+
+on:
+  push:
+    branches: [fix/remove-legacy-reader-tabs]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/remove-legacy-reader-tabs
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Remove legacy reader tabs and direct news to newsToday
+        if: github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, found {count}')
+              return text.replace(old, new)
+
+          reader = Path('src/features/reader/reader.js')
+          s = reader.read_text()
+          s = replace_once(
+              s,
+              "import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';",
+              "import { topbar, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';",
+              'remove segmented import'
+          )
+          s = replace_once(
+              s,
+              """function applyModeBoundary(nextMode, direction) {\n  setReaderMode(nextMode);\n  if (nextMode === 'papers') return;\n  const states = sourceStates(nextMode);\n  setSelectedFeed(nextMode, direction > 0 ? states[0] : states.at(-1));\n}\nfunction stepReaderContext(mode, direction, rerender) {\n  if (![-1, 1].includes(direction)) return;\n  const states = sourceStates(mode), selected = mode === 'papers' ? '' : getSelectedFeed(mode);\n  let current = states.indexOf(selected); if (current < 0) current = 0;\n  const next = current + direction;\n  if (next >= 0 && next < states.length && mode !== 'papers') {\n    setSelectedFeed(mode, states[next]); rerender(); return;\n  }\n  const modeIndex = READER_MODES.indexOf(mode), nextModeIndex = modeIndex + direction;\n  if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;\n  applyModeBoundary(READER_MODES[nextModeIndex], direction); rerender();\n}\n""",
+              """function stepReaderContext(mode, direction, rerender) {\n  if (![-1, 1].includes(direction) || mode === 'papers') return;\n  const states = sourceStates(mode), selected = getSelectedFeed(mode);\n  let current = states.indexOf(selected); if (current < 0) current = 0;\n  const next = current + direction;\n  if (next < 0 || next >= states.length) return;\n  setSelectedFeed(mode, states[next]);\n  rerender();\n}\n""",
+              'remove cross-mode list swipe'
+          )
+          s = replace_once(
+              s,
+              "input,textarea,select,a,.reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search",
+              "input,textarea,select,a,.reader-source-dock,.paper-track-level,.reader-search",
+              'remove legacy nav gesture selector'
+          )
+          s = replace_once(
+              s,
+              """  const screen = el('section', { class: 'screen reader-screen' });\n  const rerender = (force = false) => renderReader(root, { navigate, refresh: force, readerRecommendations: false });\n  const switchMode = nextMode => {\n    if (!READER_MODES.includes(nextMode) || nextMode === mode) return;\n    setReaderMode(nextMode); renderReader(root, { navigate, readerRecommendations: false });\n  };\n""",
+              """  if (mode === 'news' && !readerRecommendations) {\n    return navigate('newsToday', { source: 'reader-news-direct', openId });\n  }\n\n  const screen = el('section', { class: 'screen reader-screen' });\n  const rerender = (force = false) => renderReader(root, { navigate, refresh: force, readerRecommendations: false });\n""",
+              'direct news renderer fallback'
+          )
+          s = replace_once(
+              s,
+              """  screen.append(header);\n  const modeNav = el('div', { class: 'reader-mode-nav' });\n  modeNav.append(segmented([\n    { value: 'news', label: 'ニュース' },\n    { value: 'knowledge', label: '知識' },\n    { value: 'papers', label: '論文・研究' }\n  ], mode, switchMode));\n  screen.append(modeNav);\n\n  const host = el('div', { class: 'reader-content-host' });\n""",
+              """  screen.append(header);\n\n  const host = el('div', { class: 'reader-content-host' });\n""",
+              'remove legacy mode tab DOM'
+          )
+          s = replace_once(
+              s,
+              """      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); },\n      onPrevFeed: () => { const i = READER_MODES.indexOf(mode); if (i > 0) switchMode(READER_MODES[i - 1]); },\n      onNextFeed: () => { const i = READER_MODES.indexOf(mode); if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]); }\n""",
+              """      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); }\n""",
+              'remove focus cross-mode callbacks'
+          )
+          s = replace_once(
+              s,
+              """      const recommendationSwitch = direction => {\n        if (!scopedMode) return;\n        const i = READER_MODES.indexOf(scopedMode), next = i + direction;\n        if (next < 0 || next >= READER_MODES.length) return;\n        const nextMode = READER_MODES[next];\n        setReaderMode(nextMode);\n        renderReader(root, {\n          navigate, readerRecommendations: true, recommendationMode: nextMode,\n          recommendationTrack: nextMode === 'papers' ? 'technology' : ''\n        });\n      };\n""",
+              "",
+              'remove recommendation cross-mode switch'
+          )
+          s = replace_once(
+              s,
+              """          onList: returnToOrigin,\n          onPrevFeed: () => recommendationSwitch(-1),\n          onNextFeed: () => recommendationSwitch(1),\n          onIndexChange: (_, item) => {\n""",
+              """          onList: returnToOrigin,\n          onIndexChange: (_, item) => {\n""",
+              'remove recommendation cross-mode callbacks'
+          )
+          reader.write_text(s)
+
+          main = Path('src/main.js')
+          m = main.read_text()
+          marker = """const SCREEN={\n  home:{path:'./features/home/home.js',exportName:'renderHome',label:'ホーム'},\n  weather:{path:'./features/weather/weather.js',exportName:'renderWeather',label:'天気'},\n  weatherDetail:{path:'./features/weather/weather-detail.js',exportName:'renderWeatherDetail',label:'天気'},\n  newsToday:{path:'./features/reader/news-today.js',exportName:'renderNewsToday',label:'ニュース'},\n  reader:{path:'./features/reader/reader.js',exportName:'renderReader',label:'読む'},\n  media:{path:'./features/media/media.js',exportName:'renderMedia',label:'動画'},\n  twitter:{path:'./features/twitter/sns.js',exportName:'renderSNS',label:'SNS'},\n  wikipedia:{path:'./features/wikipedia/wikipedia.js',exportName:'renderWikipedia',label:'Wikipedia'},\n  settings:{path:'./features/settings/settings.js',exportName:'renderSettings',label:'設定'}\n};\n"""
+          normalized = marker + """\nfunction normalizeReaderDestination(screen,options={}){\n  if(screen!=='reader')return screen;\n  const mode=String(options?.readerMode||'').trim();\n  return !mode||mode==='news'?'newsToday':screen;\n}\n"""
+          m = replace_once(m, marker, normalized, 'add reader destination normalization')
+          m = replace_once(
+              m,
+              """export async function navigate(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  if(options?.source==='home-hero'&&!heroNavigator)await installFinalUiModules();\n""",
+              """export async function navigate(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  screen=normalizeReaderDestination(screen,options);\n  if(options?.source==='home-hero'&&!heroNavigator)await installFinalUiModules();\n""",
+              'normalize before navigation/hero render'
+          )
+          main.write_text(m)
+
+          for css in Path('src/styles').glob('*.css'):
+              text = css.read_text()
+              if 'reader-mode-nav' not in text:
+                  continue
+              out = []
+              for line in text.splitlines(keepends=True):
+                  if 'reader-mode-nav' not in line:
+                      out.append(line)
+                      continue
+                  stripped = line.strip()
+                  if '{' in line:
+                      before, after = line.split('{', 1)
+                      parts = [part for part in before.split(',') if 'reader-mode-nav' not in part]
+                      if not parts:
+                          raise SystemExit(f'{css}: standalone reader-mode-nav rule needs manual removal: {stripped}')
+                      newline = ','.join(parts) + '{' + after
+                      out.append(newline)
+                      continue
+                  if stripped.endswith(','):
+                      continue
+                  raise SystemExit(f'{css}: unhandled reader-mode-nav selector: {stripped}')
+              css.write_text(''.join(out))
+          PY
+
+      - name: Install test dependencies
+        run: npm install --no-package-lock --no-audit --no-fund
+
+      - name: Syntax and reader regressions
+        shell: bash
+        run: |
+          node --check src/main.js
+          node --check src/features/reader/reader.js
+          node scripts/check-stable-structure.mjs
+          node scripts/check-summary-flow.mjs
+          node scripts/check-reader-flow.mjs
+          git diff --check
+
+      - name: Assert old UI is gone and new routes remain
+        shell: bash
+        run: |
+          ! grep -R "reader-mode-nav" src --include='*.js' --include='*.css'
+          ! grep -n "segmented(\[" src/features/reader/reader.js
+          ! grep -n "switchMode\|applyModeBoundary\|recommendationSwitch" src/features/reader/reader.js
+          grep -n "mode === 'news' && !readerRecommendations" src/features/reader/reader.js
+          grep -n "reader-news-direct" src/features/reader/reader.js
+          grep -n "normalizeReaderDestination" src/main.js
+          grep -n "mode==='news'?'newsToday'" src/main.js
+          grep -n "readerMode: paper ? 'papers' : 'knowledge'" src/features/home/home.js
+          grep -n "'newsToday'.*openId" src/features/home/home.js
+          changed=$(git diff --name-only | sort)
+          echo "$changed"
+          test "$(echo "$changed" | grep -v '^$' | wc -l)" -ge 2
+          if echo "$changed" | grep -Ev '^(src/main.js|src/features/reader/reader.js|src/styles/(app|screens|active-overrides|motion|fullscreen-cleanup|navigation|base|tokens|weather-detail)\.css)$'; then
+            echo 'Unexpected file changed'; exit 1
+          fi
+
+      - name: Commit verified fix
+        if: github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/main.js src/features/reader/reader.js src/styles/*.css
+          git commit -m 'fix: remove legacy reader mode tabs'
+          git push origin HEAD:fix/remove-legacy-reader-tabs
