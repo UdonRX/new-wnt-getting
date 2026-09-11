@@ -458,6 +458,7 @@ export async function renderReader(root, {
   const track = mode === 'papers' ? 'technology' : 'core';
   const scopedMode = READER_MODES.includes(recommendationMode) ? recommendationMode : '';
   const mixedRecommendation = readerRecommendations && !scopedMode;
+  const directOpenId = String(openId || '').trim();
 
   const screen = el('section', { class: 'screen reader-screen' });
   const rerender = (force = false) => renderReader(root, { navigate, refresh: force, readerRecommendations: false });
@@ -479,7 +480,10 @@ export async function renderReader(root, {
     ? renderReader(root, { navigate, readerRecommendations: true, recommendationMode: 'papers', recommendationTrack: 'technology' })
     : renderReader(root, { navigate, readerRecommendations: true });
 
-  if (!readerRecommendations) {
+  // Home cards with openId are direct article routes. Do not even construct the
+  // old list/source controls on that route, otherwise Safari can paint them for
+  // one frame while IndexedDB is resolving the selected article.
+  if (!readerRecommendations && !directOpenId) {
     if (mode === 'papers') screen.append(buildPaperDock(openRecommendation));
     else screen.append(buildSourceDock(mode, {
       onSourceChange: next => {
@@ -489,7 +493,10 @@ export async function renderReader(root, {
       onRecommend: openRecommendation
     }));
   }
-  screen.append(host); root.replaceChildren(screen);
+  screen.append(host);
+  const mountScreen = () => {
+    if (root.firstElementChild !== screen) root.replaceChildren(screen);
+  };
 
   const openArticleSequence = (item, initialIndex, visibleItems) => {
     const rows = Array.isArray(visibleItems) && visibleItems.length ? visibleItems : [item];
@@ -505,6 +512,7 @@ export async function renderReader(root, {
   };
 
   if (readerRecommendations) {
+    mountScreen();
     screen.classList.add('reader-focus-open', 'reader-recommendations-open');
     const setLoadingProgress = recommendationLoading(host, mixedRecommendation, scopedMode);
     try {
@@ -556,23 +564,48 @@ export async function renderReader(root, {
     return;
   }
 
-  if (openId) {
+  if (directOpenId) {
     try {
       const cachedRows = mode === 'papers'
         ? (await readPaperCacheRows()).items
         : ((await readReaderCache(mode, track))?.items || []);
       const annotatedCached = annotateItems(cachedRows, mode);
-      const cachedIndex = annotatedCached.findIndex(item => String(item?.id || '') === String(openId));
+      const cachedIndex = annotatedCached.findIndex(item => String(item?.id || '') === directOpenId);
       if (cachedIndex >= 0) {
-        const r = getRead(mode, track); r.add(String(openId)); saveRead(mode, track, r);
+        const r = getRead(mode, track); r.add(directOpenId); saveRead(mode, track, r);
+        // Set focus state before attaching the screen. The browser's first paint is
+        // therefore the article reader itself, never the retired list shell.
+        screen.classList.add('reader-focus-open', 'reader-article-open');
+        mountScreen();
         openArticleSequence(annotatedCached[cachedIndex], cachedIndex, annotatedCached);
         if (mode === 'papers') loadPaperRows({ force: false, fastOnly: true, preferCache: false }).catch(() => {});
         else loadReader(mode, { selectedFeed: '', force: false, preferCache: false, backgroundRefresh: true }).catch(() => {});
         return;
       }
     } catch {}
+
+    // A cold/migrated cache can miss the Home item's id. Keep the direct route in
+    // focus mode while fetching the source again; never fall through to the list UI.
+    screen.classList.add('reader-focus-open', 'reader-article-open');
+    host.replaceChildren(el('div', { class: 'card', html: '<div class="loading">記事を開いています...</div>' }));
+    mountScreen();
+    try {
+      const result = mode === 'papers'
+        ? await loadPaperRows({ force: refresh, fastOnly: true, preferCache: false })
+        : await loadReader(mode, { force: refresh, selectedFeed: '', preferCache: false });
+      const prepared = mode === 'papers' ? stampPaperItems(dedupePaperItems(result.items || [])) : (result.items || []);
+      const annotated = annotateItems(prepared, mode);
+      const targetIndex = annotated.findIndex(item => String(item?.id || '') === directOpenId);
+      if (targetIndex < 0) throw new Error('選択した記事を見つけられませんでした');
+      const r = getRead(mode, track); r.add(directOpenId); saveRead(mode, track, r);
+      openArticleSequence(annotated[targetIndex], targetIndex, annotated);
+    } catch (error) {
+      host.replaceChildren(el('div', { class: 'error-box', text: error.message }));
+    }
+    return;
   }
 
+  mountScreen();
   screen.classList.add('reader-list-open');
   swipeDetach = installReaderListSwipe(screen, mode, () => renderReader(root, { navigate, readerRecommendations: false }));
   host.replaceChildren(el('div', { class: 'card', html: '<div class="loading">記事一覧を読み込み中...</div>' }));
@@ -601,14 +634,6 @@ export async function renderReader(root, {
         }
       });
     const annotated = showList(result.items);
-    if (openId) {
-      const targetIndex = annotated.findIndex(item => String(item?.id || '') === String(openId));
-      if (targetIndex >= 0) {
-        const r = getRead(mode, track); r.add(String(openId)); saveRead(mode, track, r);
-        openArticleSequence(annotated[targetIndex], targetIndex, annotated);
-        return;
-      }
-    }
     compactDetach = installShrinkingHeader(screen, { threshold: 72, className: 'reader-list-motion-compact', range: 58, hysteresis: 20 });
     if (state.settings.rankWithAi && annotated.length) {
       requestAiRank(annotated, mode).then(data => {
