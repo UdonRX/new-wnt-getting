@@ -20,61 +20,31 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+
           reader = Path('src/features/reader/reader.js')
           s = reader.read_text()
-          replacements = [
-            ("import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';", "import { topbar, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';"),
-            ("""  const switchMode = nextMode => {
-    if (!READER_MODES.includes(nextMode) || nextMode === mode) return;
-    setReaderMode(nextMode); renderReader(root, { navigate, readerRecommendations: false });
-  };
 
-""", ""),
-            ("""  const modeNav = el('div', { class: 'reader-mode-nav' });
-  modeNav.append(segmented([
-    { value: 'news', label: 'ニュース' },
-    { value: 'knowledge', label: '知識' },
-    { value: 'papers', label: '論文・研究' }
-  ], mode, switchMode));
-  screen.append(modeNav);
-
-""", ""),
-            ("""  const modeIndex = READER_MODES.indexOf(mode), nextModeIndex = modeIndex + direction;
-  if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;
-  applyModeBoundary(READER_MODES[nextModeIndex], direction); rerender();
-""", """  // Reader mode is selected only by an explicit route (Home Knowledge/Papers).
-  // Reaching a source-list edge must never expose the retired cross-mode UI.
-  return;
-"""),
-            (".reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search", ".reader-source-dock,.paper-track-level,.reader-search"),
-            ("""      onList: () => renderReader(root, { navigate, readerRecommendations: false }),
-      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); },
-      onPrevFeed: () => { const i = READER_MODES.indexOf(mode); if (i > 0) switchMode(READER_MODES[i - 1]); },
-      onNextFeed: () => { const i = READER_MODES.indexOf(mode); if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]); }
-""", """      onList: () => renderReader(root, { navigate, readerRecommendations: false }),
-      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); }
-""")
-          ]
-          for old, new in replacements:
+          def must(old, new):
+              global s
               count = s.count(old)
-              if count != 1: raise SystemExit(f'reader replacement count {count}: {old[:100]!r}')
+              if count != 1:
+                  raise SystemExit(f'reader replacement count {count}: {old[:100]!r}')
               s = s.replace(old, new)
+
+          must("import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';", "import { topbar, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';")
+          must("  const switchMode = nextMode => {\n    if (!READER_MODES.includes(nextMode) || nextMode === mode) return;\n    setReaderMode(nextMode); renderReader(root, { navigate, readerRecommendations: false });\n  };\n\n", "")
+          must("  const modeNav = el('div', { class: 'reader-mode-nav' });\n  modeNav.append(segmented([\n    { value: 'news', label: 'ニュース' },\n    { value: 'knowledge', label: '知識' },\n    { value: 'papers', label: '論文・研究' }\n  ], mode, switchMode));\n  screen.append(modeNav);\n\n", "")
+          must("  const modeIndex = READER_MODES.indexOf(mode), nextModeIndex = modeIndex + direction;\n  if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;\n  applyModeBoundary(READER_MODES[nextModeIndex], direction); rerender();\n", "  // Reader mode is selected only by an explicit route (Home Knowledge/Papers).\n  // Reaching a source-list edge must never expose the retired cross-mode UI.\n  return;\n")
+          must(".reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search", ".reader-source-dock,.paper-track-level,.reader-search")
+          must("      onList: () => renderReader(root, { navigate, readerRecommendations: false }),\n      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); },\n      onPrevFeed: () => { const i = READER_MODES.indexOf(mode); if (i > 0) switchMode(READER_MODES[i - 1]); },\n      onNextFeed: () => { const i = READER_MODES.indexOf(mode); if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]); }\n", "      onList: () => renderReader(root, { navigate, readerRecommendations: false }),\n      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); }\n")
           reader.write_text(s)
 
           main = Path('src/main.js')
           m = main.read_text()
-          old = """async function navigateCore(screen,options={}){
-  if(!SCREEN[screen])screen='home';
-  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
-"""
-          new = """async function navigateCore(screen,options={}){
-  if(!SCREEN[screen])screen='home';
-  // Plain Read navigation bypasses the retired generic Reader landing completely.
-  // Knowledge/Papers still enter Reader via their explicit readerMode from Home.
-  if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';
-  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
-"""
-          if m.count(old) != 1: raise SystemExit('main navigateCore signature changed')
+          old = "async function navigateCore(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';\n"
+          new = "async function navigateCore(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  // Plain Read navigation bypasses the retired generic Reader landing completely.\n  // Knowledge/Papers still enter Reader via their explicit readerMode from Home.\n  if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';\n  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';\n"
+          if m.count(old) != 1:
+              raise SystemExit('main navigateCore signature changed')
           main.write_text(m.replace(old, new))
           PY
       - run: npm install --no-package-lock --no-audit --no-fund
