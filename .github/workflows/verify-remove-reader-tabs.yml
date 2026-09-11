@@ -1,12 +1,16 @@
 name: verify-remove-reader-tabs
+
 on:
   push:
-    branches: [work/remove-reader-tabs-news-direct]
+    branches:
+      - "work/remove-reader-tabs-news-direct"
+
 permissions:
   contents: write
+
 jobs:
   verify:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +25,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+
           reader = Path('src/features/reader/reader.js')
           s = reader.read_text()
           replacements = [
