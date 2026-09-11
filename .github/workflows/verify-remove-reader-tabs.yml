@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Apply targeted reader cleanup
+      - name: Finalize direct News routing
         shell: bash
         run: |
           python - <<'PY'
@@ -23,28 +23,17 @@ jobs:
 
           reader = Path('src/features/reader/reader.js')
           s = reader.read_text()
-
-          def must(old, new):
-              global s
-              count = s.count(old)
-              if count != 1:
-                  raise SystemExit(f'reader replacement count {count}: {old[:100]!r}')
-              s = s.replace(old, new)
-
-          must("import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';", "import { topbar, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';")
-          must("  const switchMode = nextMode => {\n    if (!READER_MODES.includes(nextMode) || nextMode === mode) return;\n    setReaderMode(nextMode); renderReader(root, { navigate, readerRecommendations: false });\n  };\n\n", "")
-          must("  const modeNav = el('div', { class: 'reader-mode-nav' });\n  modeNav.append(segmented([\n    { value: 'news', label: 'ニュース' },\n    { value: 'knowledge', label: '知識' },\n    { value: 'papers', label: '論文・研究' }\n  ], mode, switchMode));\n  screen.append(modeNav);\n\n", "")
-          must("  const modeIndex = READER_MODES.indexOf(mode), nextModeIndex = modeIndex + direction;\n  if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;\n  applyModeBoundary(READER_MODES[nextModeIndex], direction); rerender();\n", "  // Reader mode is selected only by an explicit route (Home Knowledge/Papers).\n  // Reaching a source-list edge must never expose the retired cross-mode UI.\n  return;\n")
-          must(".reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search", ".reader-source-dock,.paper-track-level,.reader-search")
-          must("      onList: () => renderReader(root, { navigate, readerRecommendations: false }),\n      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); },\n      onPrevFeed: () => { const i = READER_MODES.indexOf(mode); if (i > 0) switchMode(READER_MODES[i - 1]); },\n      onNextFeed: () => { const i = READER_MODES.indexOf(mode); if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]); }\n", "      onList: () => renderReader(root, { navigate, readerRecommendations: false }),\n      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); }\n")
-          reader.write_text(s)
+          old = "function applyModeBoundary(nextMode, direction) {\n  setReaderMode(nextMode);\n  if (nextMode === 'papers') return;\n  const states = sourceStates(nextMode);\n  setSelectedFeed(nextMode, direction > 0 ? states[0] : states.at(-1));\n}\n"
+          if s.count(old) != 1:
+              raise SystemExit('retired applyModeBoundary signature changed')
+          reader.write_text(s.replace(old, ''))
 
           main = Path('src/main.js')
           m = main.read_text()
-          old = "async function navigateCore(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';\n"
-          new = "async function navigateCore(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  // Plain Read navigation bypasses the retired generic Reader landing completely.\n  // Knowledge/Papers still enter Reader via their explicit readerMode from Home.\n  if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';\n  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';\n"
+          old = "export async function navigate(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  if(options?.source==='home-hero'&&!heroNavigator)await installFinalUiModules();\n"
+          new = "export async function navigate(screen,options={}){\n  if(!SCREEN[screen])screen='home';\n  // Normalize plain Read before Hero transition/preload so the retired Reader shell is never a destination.\n  if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';\n  if(options?.source==='home-hero'&&!heroNavigator)await installFinalUiModules();\n"
           if m.count(old) != 1:
-              raise SystemExit('main navigateCore signature changed')
+              raise SystemExit('navigate entry signature changed')
           main.write_text(m.replace(old, new))
           PY
       - run: npm install --no-package-lock --no-audit --no-fund
@@ -57,21 +46,22 @@ jobs:
           node scripts/check-reader-flow.mjs
           node scripts/check-summary-flow.mjs
           node scripts/check-summary-single.mjs
-      - name: Verify retired UI is absent and News direct route remains
+      - name: Verify retired Reader is unreachable for plain Read
         shell: bash
         run: |
           ! grep -q "reader-mode-nav" src/features/reader/reader.js
           ! grep -q "{ value: 'news', label: 'ニュース' }" src/features/reader/reader.js
+          ! grep -q "applyModeBoundary" src/features/reader/reader.js
           ! grep -q "onPrevFeed:.*switchMode" src/features/reader/reader.js
           ! grep -q "onNextFeed:.*switchMode" src/features/reader/reader.js
-          grep -q "screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday'" src/main.js
+          test "$(grep -o "screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday'" src/main.js | wc -l)" -eq 2
           grep -q "readerMode: paper ? 'papers' : 'knowledge'" src/features/home/home.js
           git diff --check
-      - name: Commit verified files to work branch
+      - name: Commit final verified files to work branch
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/main.js src/features/reader/reader.js
-          git commit -m 'fix: remove retired reader mode tabs'
+          git commit -m 'fix: bypass retired reader before transitions'
           git push origin HEAD:work/remove-reader-tabs-news-direct
