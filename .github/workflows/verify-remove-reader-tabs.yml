@@ -1,0 +1,111 @@
+name: verify-remove-reader-tabs
+on:
+  push:
+    branches: [work/remove-reader-tabs-news-direct]
+permissions:
+  contents: write
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/remove-reader-tabs-news-direct
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply targeted reader cleanup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          reader = Path('src/features/reader/reader.js')
+          s = reader.read_text()
+          replacements = [
+            ("import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';", "import { topbar, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';"),
+            ("""  const switchMode = nextMode => {
+    if (!READER_MODES.includes(nextMode) || nextMode === mode) return;
+    setReaderMode(nextMode); renderReader(root, { navigate, readerRecommendations: false });
+  };
+
+""", ""),
+            ("""  const modeNav = el('div', { class: 'reader-mode-nav' });
+  modeNav.append(segmented([
+    { value: 'news', label: 'ニュース' },
+    { value: 'knowledge', label: '知識' },
+    { value: 'papers', label: '論文・研究' }
+  ], mode, switchMode));
+  screen.append(modeNav);
+
+""", ""),
+            ("""  const modeIndex = READER_MODES.indexOf(mode), nextModeIndex = modeIndex + direction;
+  if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;
+  applyModeBoundary(READER_MODES[nextModeIndex], direction); rerender();
+""", """  // Reader mode is selected only by an explicit route (Home Knowledge/Papers).
+  // Reaching a source-list edge must never expose the retired cross-mode UI.
+  return;
+"""),
+            (".reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search", ".reader-source-dock,.paper-track-level,.reader-search"),
+            ("""      onList: () => renderReader(root, { navigate, readerRecommendations: false }),
+      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); },
+      onPrevFeed: () => { const i = READER_MODES.indexOf(mode); if (i > 0) switchMode(READER_MODES[i - 1]); },
+      onNextFeed: () => { const i = READER_MODES.indexOf(mode); if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]); }
+""", """      onList: () => renderReader(root, { navigate, readerRecommendations: false }),
+      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); }
+""")
+          ]
+          for old, new in replacements:
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'reader replacement count {count}: {old[:100]!r}')
+              s = s.replace(old, new)
+          reader.write_text(s)
+
+          main = Path('src/main.js')
+          m = main.read_text()
+          old = """async function navigateCore(screen,options={}){
+  if(!SCREEN[screen])screen='home';
+  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
+"""
+          new = """async function navigateCore(screen,options={}){
+  if(!SCREEN[screen])screen='home';
+  // Plain Read navigation bypasses the retired generic Reader landing completely.
+  // Knowledge/Papers still enter Reader via their explicit readerMode from Home.
+  if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';
+  const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
+"""
+          if m.count(old) != 1:
+              raise SystemExit('main navigateCore signature changed')
+          main.write_text(m.replace(old, new))
+          PY
+      - name: Install dependencies
+        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Syntax checks
+        run: |
+          node --check src/main.js
+          node --check src/features/reader/reader.js
+      - name: Reader regression checks
+        run: |
+          node scripts/check-reader-flow.mjs
+          node scripts/check-summary-flow.mjs
+          node scripts/check-summary-single.mjs
+      - name: Verify retired UI is absent and News direct route remains
+        shell: bash
+        run: |
+          ! grep -q "reader-mode-nav" src/features/reader/reader.js
+          ! grep -q "{ value: 'news', label: 'ニュース' }" src/features/reader/reader.js
+          ! grep -q "onPrevFeed:.*switchMode" src/features/reader/reader.js
+          ! grep -q "onNextFeed:.*switchMode" src/features/reader/reader.js
+          grep -q "screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday'" src/main.js
+          grep -q "readerMode: paper ? 'papers' : 'knowledge'" src/features/home/home.js
+          git diff --check
+      - name: Commit verified files to work branch
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/main.js src/features/reader/reader.js
+          git commit -m 'fix: remove retired reader mode tabs'
+          git push origin HEAD:work/remove-reader-tabs-news-direct
