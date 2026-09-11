@@ -67,6 +67,9 @@ function renderBootError(error){console.error('[pdv2] boot failed:',error);if(!r
 
 async function navigateCore(screen,options={}){
   if(!SCREEN[screen])screen='home';
+  // Plain Read navigation bypasses the retired generic Reader landing completely.
+  // Knowledge/Papers still enter Reader via their explicit readerMode from Home.
+  if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';
   const destinationMediaMode=screen==='media'?(options.mediaMode||'youtube'):'';
   window.dispatchEvent(new CustomEvent('pdv2:before-navigate',{detail:{screen,mediaMode:destinationMediaMode,source:options.source||''}}));
   if(options.readerMode)update('lastReaderMode',options.readerMode);
@@ -97,6 +100,8 @@ async function installFinalUiModules(){
 }
 export async function navigate(screen,options={}){
   if(!SCREEN[screen])screen='home';
+  // Normalize plain Read before Hero transition/preload so the retired Reader shell is never a destination.
+  if(screen==='reader'&&!options.readerMode&&!options.readerRecommendations)screen='newsToday';
   if(options?.source==='home-hero'&&!heroNavigator)await installFinalUiModules();
   if(heroNavigator)return heroNavigator.go(screen,options,navigateCore,()=>loadRenderer(screen,{force:Boolean(options.forceModuleReload)}));
   return navigateCore(screen,options);
