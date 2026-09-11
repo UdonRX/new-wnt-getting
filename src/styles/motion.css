@@ -20,7 +20,6 @@
 .reader-source-active-compact,
 .reader-recommend-overlay,
 .reader-list-open > .topbar,
-.reader-list-open > .reader-mode-nav,
 .reader-list-open > .paper-track-level,
 .reader-list-open > .reader-sticky-context,
 .youtube-primary-tabs,
@@ -261,11 +260,9 @@
 
 /* app.css contains older max-height/padding transitions. Neutralize them here. */
 .reader-list-open > .topbar,
-.reader-list-open > .reader-mode-nav,
 .reader-list-open > .paper-track-level,
 .reader-list-open > .reader-sticky-context,
 .reader-list-open.reader-list-motion-compact > .topbar,
-.reader-list-open.reader-list-motion-compact > .reader-mode-nav,
 .reader-list-open.reader-list-motion-compact > .paper-track-level,
 .reader-list-open.reader-list-motion-compact > .reader-sticky-context {
   max-height: none !important;
@@ -274,7 +271,6 @@
 }
 
 .reader-list-open.reader-list-motion-compact > .topbar,
-.reader-list-open.reader-list-motion-compact > .reader-mode-nav,
 .reader-list-open.reader-list-motion-compact > .paper-track-level {
   opacity: 0 !important;
   transform: translate3d(0,-14px,0) scale(.985) !important;
@@ -503,7 +499,6 @@ html.youtube-landscape-open .bottom-nav { display: none !important; }
   .shrink-header *, .shrink-header,
   .reader-source-dock, .reader-source-dock *,
   .reader-list-open > .topbar,
-  .reader-list-open > .reader-mode-nav,
   .reader-list-open > .paper-track-level,
   .youtube-primary-tabs { transition-duration: .001ms !important; }
 }

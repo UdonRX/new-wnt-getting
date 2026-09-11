@@ -26,6 +26,12 @@ const SCREEN={
   settings:{path:'./features/settings/settings.js',exportName:'renderSettings',label:'設定'}
 };
 
+function normalizeReaderDestination(screen,options={}){
+  if(screen!=='reader')return screen;
+  const mode=String(options?.readerMode||'').trim();
+  return !mode||mode==='news'?'newsToday':screen;
+}
+
 function versioned(path){return `${path}?v=${BUILD}`;}
 function safeMessage(error){return String(error?.message||error||'不明なエラー').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 function timeoutPromise(promise,timeoutMs,label){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`${label} の読み込みがタイムアウトしました`)),timeoutMs);})]).finally(()=>clearTimeout(timer));}
@@ -97,6 +103,7 @@ async function installFinalUiModules(){
 }
 export async function navigate(screen,options={}){
   if(!SCREEN[screen])screen='home';
+  screen=normalizeReaderDestination(screen,options);
   if(options?.source==='home-hero'&&!heroNavigator)await installFinalUiModules();
   if(heroNavigator)return heroNavigator.go(screen,options,navigateCore,()=>loadRenderer(screen,{force:Boolean(options.forceModuleReload)}));
   return navigateCore(screen,options);

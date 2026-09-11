@@ -4,10 +4,8 @@
 
 /* Reader list motion overrides. */
 .reader-list-open > .topbar,
-.reader-list-open > .reader-mode-nav,
 .reader-list-open > .paper-track-level,
 .reader-list-open.reader-list-motion-compact > .topbar,
-.reader-list-open.reader-list-motion-compact > .reader-mode-nav,
 .reader-list-open.reader-list-motion-compact > .paper-track-level {
   opacity: calc(1 - var(--pdv2-shrink-progress, 0)) !important;
 }
@@ -273,7 +271,7 @@ html.media-player-open .bottom-nav { display: none !important; }
 .reader-source-dock::after,.reader-source-scroll::after,.reader-feed-chips::after{content:none!important;display:none!important;background:none!important;}
 .reader-source-dock .reader-feed-chips{width:100%;min-width:0;}
 .reader-recommend-source-hidden{display:none!important;}
-.reader-feed-chips,.reader-mode-nav .segmented,.paper-track-level .segmented{position:relative;}
+.reader-feed-chips,.paper-track-level .segmented{position:relative;}
 .reader-swipe-progress-indicator{position:absolute;z-index:0;left:0;bottom:2px;height:calc(100% - 4px);min-height:24px;border-radius:999px;background:color-mix(in srgb,var(--feature-color) 20%,rgba(255,255,255,.07));border:1px solid color-mix(in srgb,var(--feature-color) 42%,transparent);box-shadow:0 6px 18px color-mix(in srgb,var(--feature-color) 16%,transparent);opacity:0;pointer-events:none;will-change:transform,width,opacity;transition:opacity .14s ease,transform .17s cubic-bezier(.2,.82,.2,1),width .17s cubic-bezier(.2,.82,.2,1);}
 .reader-swipe-progress-active>button{position:relative;z-index:1;background:transparent!important;}
 .reader-horizontal-live{will-change:transform;}
@@ -311,7 +309,6 @@ html.media-player-open .bottom-nav { display: none !important; }
 .reader-swipe-progress-indicator { transition: opacity .12s ease !important; }
 .reader-swipe-progress-active > .reader-swipe-progress-indicator { transition: none !important; }
 .reader-feed-chips,
-.reader-mode-nav .segmented,
 .paper-track-level .segmented { scroll-behavior: auto !important; }
 
 .reader-source-scroll,

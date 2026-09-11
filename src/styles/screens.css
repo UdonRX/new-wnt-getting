@@ -529,7 +529,6 @@
    ========================================================= */
 
 /* 上位階層は絶対に固定しない。 */
-.reader-mode-nav,
 .paper-track-level {
   position: static !important;
   top: auto !important;
@@ -697,7 +696,6 @@
   z-index: 38 !important;
 }
 
-.reader-mode-nav,
 .paper-track-level {
   position: static !important;
   top: auto !important;

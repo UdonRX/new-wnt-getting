@@ -1,6 +1,6 @@
 import { state, update } from '../../app/store.js';
 import { el, openSheet } from '../../shared/dom.js';
-import { topbar, segmented, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';
+import { topbar, collectionManager, centerScrollItem, installShrinkingHeader } from '../../shared/components.js';
 import { iconSvg } from '../../shared/icons.js';
 import { loadReader, readReaderCache, feedsFor } from './reader-data.js';
 import { chooseTop, requestAiRank } from './reader-rank.js';
@@ -409,27 +409,18 @@ function sourceStates(mode) {
   if (mode === 'papers') return [''];
   return ['', ...feedsFor(mode).map(feed => feed.name)];
 }
-function applyModeBoundary(nextMode, direction) {
-  setReaderMode(nextMode);
-  if (nextMode === 'papers') return;
-  const states = sourceStates(nextMode);
-  setSelectedFeed(nextMode, direction > 0 ? states[0] : states.at(-1));
-}
 function stepReaderContext(mode, direction, rerender) {
-  if (![-1, 1].includes(direction)) return;
-  const states = sourceStates(mode), selected = mode === 'papers' ? '' : getSelectedFeed(mode);
+  if (![-1, 1].includes(direction) || mode === 'papers') return;
+  const states = sourceStates(mode), selected = getSelectedFeed(mode);
   let current = states.indexOf(selected); if (current < 0) current = 0;
   const next = current + direction;
-  if (next >= 0 && next < states.length && mode !== 'papers') {
-    setSelectedFeed(mode, states[next]); rerender(); return;
-  }
-  const modeIndex = READER_MODES.indexOf(mode), nextModeIndex = modeIndex + direction;
-  if (nextModeIndex < 0 || nextModeIndex >= READER_MODES.length) return;
-  applyModeBoundary(READER_MODES[nextModeIndex], direction); rerender();
+  if (next < 0 || next >= states.length) return;
+  setSelectedFeed(mode, states[next]);
+  rerender();
 }
 function installReaderListSwipe(node, mode, rerender) {
   let start = null, suppressUntil = 0;
-  const shouldIgnore = target => Boolean(target?.closest?.('input,textarea,select,a,.reader-source-dock,.reader-mode-nav,.paper-track-level,.reader-search'));
+  const shouldIgnore = target => Boolean(target?.closest?.('input,textarea,select,a,.reader-source-dock,.paper-track-level,.reader-search'));
   const onStart = event => {
     if (event.touches?.length !== 1 || shouldIgnore(event.target)) return;
     const touch = event.touches[0]; start = { x: touch.clientX, y: touch.clientY };
@@ -465,12 +456,12 @@ export async function renderReader(root, {
   const scopedMode = READER_MODES.includes(recommendationMode) ? recommendationMode : '';
   const mixedRecommendation = readerRecommendations && !scopedMode;
 
+  if (mode === 'news' && !readerRecommendations) {
+    return navigate('newsToday', { source: 'reader-news-direct', openId });
+  }
+
   const screen = el('section', { class: 'screen reader-screen' });
   const rerender = (force = false) => renderReader(root, { navigate, refresh: force, readerRecommendations: false });
-  const switchMode = nextMode => {
-    if (!READER_MODES.includes(nextMode) || nextMode === mode) return;
-    setReaderMode(nextMode); renderReader(root, { navigate, readerRecommendations: false });
-  };
 
   const actions = [];
   if (mode !== 'papers') actions.push({ html: iconSvg('plus', { size: 20 }), title: '追加/編集', onClick: () => manageFeeds(mode, rerender) });
@@ -485,13 +476,6 @@ export async function renderReader(root, {
     actions
   });
   screen.append(header);
-  const modeNav = el('div', { class: 'reader-mode-nav' });
-  modeNav.append(segmented([
-    { value: 'news', label: 'ニュース' },
-    { value: 'knowledge', label: '知識' },
-    { value: 'papers', label: '論文・研究' }
-  ], mode, switchMode));
-  screen.append(modeNav);
 
   const host = el('div', { class: 'reader-content-host' });
   const openRecommendation = () => mode === 'papers'
@@ -519,9 +503,7 @@ export async function renderReader(root, {
     focusHandle = mountFocus(host, {
       items: rows, initialIndex, label: currentSourceLabel(mode), summaryMode: mode,
       onList: () => renderReader(root, { navigate, readerRecommendations: false }),
-      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); },
-      onPrevFeed: () => { const i = READER_MODES.indexOf(mode); if (i > 0) switchMode(READER_MODES[i - 1]); },
-      onNextFeed: () => { const i = READER_MODES.indexOf(mode); if (i < READER_MODES.length - 1) switchMode(READER_MODES[i + 1]); }
+      onIndexChange: (_, activeItem) => { const r = getRead(mode, track); r.add(activeItem.id); saveRead(mode, track, r); }
     });
   };
 
@@ -544,25 +526,12 @@ export async function renderReader(root, {
         setReaderMode(returnMode);
         renderReader(root, { navigate, readerRecommendations: false });
       };
-      const recommendationSwitch = direction => {
-        if (!scopedMode) return;
-        const i = READER_MODES.indexOf(scopedMode), next = i + direction;
-        if (next < 0 || next >= READER_MODES.length) return;
-        const nextMode = READER_MODES[next];
-        setReaderMode(nextMode);
-        renderReader(root, {
-          navigate, readerRecommendations: true, recommendationMode: nextMode,
-          recommendationTrack: nextMode === 'papers' ? 'technology' : ''
-        });
-      };
       requestAnimationFrame(() => {
         focusHandle = mountFocus(host, {
           items: recommendations,
           label: scopedMode === 'papers' ? '論文・研究' : 'おすすめ',
           summaryMode: scopedMode,
           onList: returnToOrigin,
-          onPrevFeed: () => recommendationSwitch(-1),
-          onNextFeed: () => recommendationSwitch(1),
           onIndexChange: (_, item) => {
             const m = item._readerMode || scopedMode || 'news';
             const t = m === 'papers' ? 'technology' : 'core';
