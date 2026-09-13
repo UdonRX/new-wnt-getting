@@ -58,14 +58,18 @@ function collectMatches(html,patterns){const ids=new Set();for(const pattern of 
 function extractShortIds(html=''){return collectMatches(html, [/"shortsLockupViewModel"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"reelItemRenderer"[\s\S]{0,1800}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"reelWatchEndpoint"[\s\S]{0,1200}?"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g,/"url"\s*:\s*"\\?\/shorts\/([A-Za-z0-9_-]{11})(?:[?\\"/]|$)/g])}
 function explicitShortSignal(html='',videoId=''){
   const text=String(html),id=String(videoId);if(!id)return false;
+  const index=text.indexOf(`"videoId":"${id}"`);
+  if(index>=0){
+    const around=text.slice(Math.max(0,index-2200),Math.min(text.length,index+2600));
+    if(/WEB_PAGE_TYPE_SHORTS|"isShorts"\s*:\s*true|shortsLockupViewModel|reelWatchEndpoint/.test(around))return true;
+  }
   const escaped=id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  return new RegExp(`(?:reelWatchEndpoint|shortsLockupViewModel)[\\s\\S]{0,2200}?"videoId"\\s*:\\s*"${escaped}"`).test(text)||new RegExp(`"url"\\s*:\\s*"\\\\?/shorts/${escaped}(?:[?\\\\"/]|$)`).test(text)||/WEB_PAGE_TYPE_SHORTS/.test(text);
+  return new RegExp(`(?:reelWatchEndpoint|shortsLockupViewModel)[\\s\\S]{0,1800}?"videoId"\\s*:\\s*"${escaped}"`).test(text)||new RegExp(`"url"\\s*:\\s*"\\\\?/shorts/${escaped}(?:[?\\\\"/]|$)`).test(text);
 }
 async function probeShort(videoId){
   try{
-    const page=await fetchHtml(`https://www.youtube.com/shorts/${encodeURIComponent(videoId)}`,{withMeta:true});
-    let finalIsShort=false;try{finalIsShort=new URL(page.finalUrl).pathname.startsWith('/shorts/')}catch{}
-    return Boolean(finalIsShort&&explicitShortSignal(page.html,videoId));
+    const page=await fetchHtml(`https://www.youtube.com/shorts/${encodeURIComponent(videoId)}`,{timeout:3200,max:1500000,withMeta:true});
+    return explicitShortSignal(page.html,videoId);
   }catch{return false}
 }
 async function mapConcurrent(values,limit,worker){
@@ -147,10 +151,12 @@ async function discover(body={}){
   const details=await videoDetails(ids);
   const ranked=details.filter(v=>v.status?.embeddable!==false&&!excludeChannels.has(String(v.snippet?.channelId||''))&&!excludeVideos.has(v.id)).map(video=>({video,score:candidateScore(video,profile)})).sort((a,b)=>b.score-a.score).slice(0,MAX_STRICT_PROBES);
   const strict=await mapConcurrent(ranked,STRICT_PROBE_CONCURRENCY,row=>probeShort(row.video.id));
+  const strictAccepted=strict.filter(Boolean).length;
+  if(ranked.length&&strictAccepted===0)console.warn('[youtube-discovery-empty]',{queries:queries.length,candidates:ids.length,ranked:ranked.length,strictAccepted});
   const perChannel=new Map(),pool=[];
   ranked.forEach((row,index)=>{if(!strict[index])return;const channelId=String(row.video.snippet?.channelId||''),count=perChannel.get(channelId)||0;if(count>=3)return;perChannel.set(channelId,count+1);pool.push({...itemFromVideo(row.video),discoveryScore:Number(row.score.toFixed(2))})});
   pool.sort((a,b)=>(b.discoveryScore+Math.random()*10)-(a.discoveryScore+Math.random()*10));
-  return{items:pool.slice(0,40),queries,searchCalls:queries.length,profile:{terms:profile.topTerms.slice(0,12),categories:profile.topCategories}};
+  return{items:pool.slice(0,40),queries,searchCalls:queries.length,diagnostics:{candidates:ids.length,ranked:ranked.length,strictAccepted},profile:{terms:profile.topTerms.slice(0,12),categories:profile.topCategories}};
 }
 async function channelShorts(channelId){
   if(!EXACT_CHANNEL_ID.test(channelId))throw Object.assign(new Error('Channel ID が正しくありません'),{statusCode:400,reason:'invalidChannelId'});
