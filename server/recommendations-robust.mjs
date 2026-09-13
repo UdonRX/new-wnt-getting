@@ -9,18 +9,18 @@ import { resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
 
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
-const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-image-v9';
+const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-image-v10';
 const RECOMMENDATION_TTL_MS = 10 * 60 * 1000;
 const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
 const GDELT_TIMEOUT_MS = 2200;
 const GDELT_CHECK_COUNT = 4;
 // ここから下の件数は表示上限ではなく、追加メタデータ取得の速度を守るための enrichment budget。
-// 未確認の記事も Google News の日時が12時間以内なら候補から落とさない。
+// 未確認の記事も Google News の日時が24時間以内なら候補から落とさない。
 const SOURCE_DATE_ENRICHMENT_COUNT = 12;
 const RECOMMENDATION_MIN_COUNT = 5;
 const SOURCE_DATE_STAGE_TIMEOUT_MS = 1300;
-const RECENT_NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
+const RECENT_NEWS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PUBLISHER_VERIFY_TIMEOUT_MS = 1200;
 const PUBLISHER_VERIFY_MAX_BYTES = 256 * 1024;
 const PUBLISHER_VERIFY_ENRICHMENT_COUNT = 6;
@@ -355,7 +355,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   const sourceAllowed = filterBlockedSources(allNews);
   // ここではタイトルだけをhard filterにする。publisher pathは後段の参考情報。
   const articleTitleAllowed = filterArticleCandidates(sourceAllowed);
-  // 記事件数では切らない。Google News RSSが返した全候補を12時間フィルタへ渡す。
+  // 記事件数では切らない。Google News RSSが返した全候補を24時間フィルタへ渡す。
   const allowedNews = articleTitleAllowed;
   stage.googleNewsCandidates = allNews.length;
   stage.blockedSourceCandidates = allNews.length - sourceAllowed.length;
@@ -434,9 +434,9 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
     .map(row => checkedById.get(row.id) || row)
     .filter(row => {
       if (row.nonArticle) return false;
-      // 配信元日時が取得できて「12時間より古い」と分かった記事は補充しない。
+      // 配信元日時が取得できて「24時間より古い」と分かった記事は補充しない。
       if (Number(row.sourcePublishedTimestamp || 0) > 0 && !isRecentTimestamp(row.sourcePublishedTimestamp, { now: evaluatedAt })) return false;
-      // 配信元日時が取得できない/未確認なら、Google News上で12時間以内であることを使う。
+      // 配信元日時が取得できない/未確認なら、Google News上で24時間以内であることを使う。
       return isRecentTimestamp(row.googlePublishedTimestamp || row.publishedTimestamp, { now: evaluatedAt });
     })
     .map(row => ({
@@ -445,7 +445,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
       effectivePublishedTimestamp: Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0)
     }));
 
-  // 表示件数の目標値・上限値は設けない。12時間条件を満たす候補をすべて返す。
+  // 表示件数の目標値・上限値は設けない。24時間条件を満たす候補をすべて返す。
   const selectedRows = [...verifiedRecent, ...supplementRows];
   const items = finalizeSelection(selectedRows);
 
