@@ -66,11 +66,22 @@ function explicitShortSignal(html='',videoId=''){
   const escaped=id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   return new RegExp(`(?:reelWatchEndpoint|shortsLockupViewModel)[\\s\\S]{0,1800}?"videoId"\\s*:\\s*"${escaped}"`).test(text)||new RegExp(`"url"\\s*:\\s*"\\\\?/shorts/${escaped}(?:[?\\\\"/]|$)`).test(text);
 }
+function shortUrlSignal(value='',videoId=''){
+  const id=String(videoId||'');if(!id)return false;
+  try{const url=new URL(String(value||''));return url.pathname===`/shorts/${id}`||url.pathname.startsWith(`/shorts/${id}/`)}catch{return false}
+}
+function htmlShortUrlSignal(html='',videoId=''){
+  const text=String(html),id=String(videoId||'');if(!id)return false;
+  return text.includes(`/shorts/${id}`)||text.includes(`\\/shorts\\/${id}`);
+}
 async function probeShort(videoId){
   try{
-    const page=await fetchHtml(`https://www.youtube.com/shorts/${encodeURIComponent(videoId)}`,{timeout:3200,max:1500000,withMeta:true});
-    return explicitShortSignal(page.html,videoId);
-  }catch{return false}
+    const page=await fetchHtml(`https://www.youtube.com/shorts/${encodeURIComponent(videoId)}`,{timeout:3200,max:1800000,withMeta:true});
+    if(explicitShortSignal(page.html,videoId))return'metadata';
+    if(shortUrlSignal(page.finalUrl,videoId))return'final-url';
+    if(htmlShortUrlSignal(page.html,videoId))return'html-short-url';
+    return'';
+  }catch{return''}
 }
 async function mapConcurrent(values,limit,worker){
   const result=new Array(values.length);let cursor=0;
@@ -151,12 +162,18 @@ async function discover(body={}){
   const details=await videoDetails(ids);
   const ranked=details.filter(v=>v.status?.embeddable!==false&&!excludeChannels.has(String(v.snippet?.channelId||''))&&!excludeVideos.has(v.id)).map(video=>({video,score:candidateScore(video,profile)})).sort((a,b)=>b.score-a.score).slice(0,MAX_STRICT_PROBES);
   const strict=await mapConcurrent(ranked,STRICT_PROBE_CONCURRENCY,row=>probeShort(row.video.id));
-  const strictAccepted=strict.filter(Boolean).length;
-  if(ranked.length&&strictAccepted===0)console.warn('[youtube-discovery-empty]',{queries:queries.length,candidates:ids.length,ranked:ranked.length,strictAccepted});
+  const strictAccepted=strict.filter(Boolean).length,accepted=strict.map(Boolean),probeSignals={};
+  for(const signal of strict)if(signal)probeSignals[signal]=(probeSignals[signal]||0)+1;
+  let fallbackAccepted=0;
+  if(ranked.length&&strictAccepted===0){
+    const fallback=ranked.map((row,index)=>({index,row,seconds:durationSeconds(row.video.contentDetails?.duration)})).filter(x=>x.seconds>0&&x.seconds<=180).slice(0,24);
+    for(const item of fallback){accepted[item.index]=true;fallbackAccepted+=1}
+    console.warn('[youtube-discovery-fallback]',{queries:queries.length,candidates:ids.length,ranked:ranked.length,strictAccepted,fallbackAccepted});
+  }
   const perChannel=new Map(),pool=[];
-  ranked.forEach((row,index)=>{if(!strict[index])return;const channelId=String(row.video.snippet?.channelId||''),count=perChannel.get(channelId)||0;if(count>=3)return;perChannel.set(channelId,count+1);pool.push({...itemFromVideo(row.video),discoveryScore:Number(row.score.toFixed(2))})});
+  ranked.forEach((row,index)=>{if(!accepted[index])return;const channelId=String(row.video.snippet?.channelId||''),count=perChannel.get(channelId)||0;if(count>=3)return;perChannel.set(channelId,count+1);pool.push({...itemFromVideo(row.video),discoveryScore:Number(row.score.toFixed(2)),shortVerification:strict[index]||'duration-fallback'})});
   pool.sort((a,b)=>(b.discoveryScore+Math.random()*10)-(a.discoveryScore+Math.random()*10));
-  return{items:pool.slice(0,40),queries,searchCalls:queries.length,diagnostics:{candidates:ids.length,ranked:ranked.length,strictAccepted},profile:{terms:profile.topTerms.slice(0,12),categories:profile.topCategories}};
+  return{items:pool.slice(0,40),queries,searchCalls:queries.length,diagnostics:{candidates:ids.length,ranked:ranked.length,strictAccepted,fallbackAccepted,probeSignals},profile:{terms:profile.topTerms.slice(0,12),categories:profile.topCategories}};
 }
 async function channelShorts(channelId){
   if(!EXACT_CHANNEL_ID.test(channelId))throw Object.assign(new Error('Channel ID が正しくありません'),{statusCode:400,reason:'invalidChannelId'});
@@ -167,7 +184,7 @@ async function channelShorts(channelId){
   const ids=(playlist.items||[]).map(x=>x.contentDetails?.videoId).filter(Boolean);const details=await videoDetails(ids);
   let tabIds=new Set();try{tabIds=extractShortIds(await fetchHtml(`https://www.youtube.com/channel/${encodeURIComponent(channelId)}/shorts`,{timeout:4300,max:1800000}))}catch{}
   const candidates=details.filter(v=>durationSeconds(v.contentDetails?.duration)<=240);const unknown=candidates.filter(v=>!tabIds.has(v.id)).slice(0,30);
-  const probes=await mapConcurrent(unknown,STRICT_PROBE_CONCURRENCY,v=>probeShort(v.id));const probed=new Set(unknown.filter((_,i)=>probes[i]).map(v=>v.id));
+  const probes=await mapConcurrent(unknown,STRICT_PROBE_CONCURRENCY,v=>probeShort(v.id));const probed=new Set(unknown.filter((_,i)=>Boolean(probes[i])).map(v=>v.id));
   const items=candidates.filter(v=>tabIds.has(v.id)||probed.has(v.id)).map(itemFromVideo).sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
   return{channel:{id:channel.id,name:channel.snippet?.title||'',thumbnail:channel.snippet?.thumbnails?.medium?.url||channel.snippet?.thumbnails?.default?.url||''},items};
 }
