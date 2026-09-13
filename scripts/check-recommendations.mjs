@@ -10,6 +10,10 @@ import {
   requiresLegacyFallback
 } from '../server/recommendations.mjs';
 import { extractPublishedDateFromHtml } from '../lib/source-published-time.mjs';
+import { NEWS_RECOMMENDATION_WINDOW_HOURS, NEWS_RECOMMENDATION_WINDOW_MS } from '../shared/recommendation-config.js';
+
+assert.equal(NEWS_RECOMMENDATION_WINDOW_HOURS, 24);
+assert.equal(NEWS_RECOMMENDATION_WINDOW_MS, 24 * 60 * 60 * 1000);
 
 const newsXml = `<?xml version="1.0"?><rss><channel>
 <item><title>大規模地震で避難指示 - NHK</title><link>https://news.google.com/a</link><pubDate>Thu, 03 Sep 2026 00:00:00 GMT</pubDate><source>NHK</source><description>各地で強い揺れ。津波への警戒が呼びかけられている。</description></item>
@@ -63,10 +67,11 @@ assert.equal(filterRecentGoogleNews(filterBlockedSources(bulk), { now: reference
 
 const sourceFreshness = [
   { id: 'fresh', sourcePublishedTimestamp: new Date('2026-09-03T05:00:00Z').getTime() },
-  { id: 'stale', sourcePublishedTimestamp: new Date('2026-09-02T12:00:00Z').getTime() },
+  { id: 'thirteen-hours', sourcePublishedTimestamp: new Date('2026-09-02T17:00:00Z').getTime() },
+  { id: 'stale', sourcePublishedTimestamp: new Date('2026-09-02T05:00:00Z').getTime() },
   { id: 'unknown', sourcePublishedTimestamp: 0 }
 ];
-assert.deepEqual(filterRecentSourcePublished(sourceFreshness, { now: referenceNow }).map(row => row.id), ['fresh']);
+assert.deepEqual(filterRecentSourcePublished(sourceFreshness, { now: referenceNow }).map(row => row.id), ['fresh', 'thirteen-hours']);
 
 const manyRanked = Array.from({ length: 18 }, (_, index) => ({
   id: `r-${index}`, title: `記事${index}`, link: `https://example.com/${index}`,

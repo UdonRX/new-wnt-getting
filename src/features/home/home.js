@@ -182,7 +182,7 @@ function updateNewsCard(shell, snapshot, navigate) {
   const host = el('div', { class: 'home-news-items' });
   if (topics.length) topics.forEach((topic, index) => host.append(newsTopicButton(topic, index, snapshot, navigate)));
   else host.append(el('div', { class: 'home-empty-copy' }, [el('b', { text: '重要ニュースを準備中' }), el('small', { text: '保存済みデータが入るとここに表示します' })]));
-  const all = el('button', { class: 'home-card-footer', type: 'button', onclick: () => navigate('newsToday', { source: 'home-news-all' }) }, [el('span', { text: count ? `12時間以内 ${count}件` : 'ニュースを見る' }), el('span', { text: '→' })]);
+  const all = el('button', { class: 'home-card-footer', type: 'button', onclick: () => navigate('newsToday', { source: 'home-news-all' }) }, [el('span', { text: count ? `ニュース ${count}件` : 'ニュースを見る' }), el('span', { text: '→' })]);
   shell.replaceChildren(sectionHeader('NEWS'), host, all);
 }
 

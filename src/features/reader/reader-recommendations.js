@@ -1,9 +1,10 @@
+import { RECOMMENDATION_CACHE_SCHEMA } from '../../../shared/recommendation-config.js';
+
 const RECOMMENDATION_TIMEOUT_MS = 7000;
-const RECOMMENDATION_API_VERSION = '5';
-export const RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v2';
+const RECOMMENDATION_API_VERSION = '6';
+export const RECOMMENDATION_SNAPSHOT_KEY = `pdv2:recommendationSnapshot:v${RECOMMENDATION_CACHE_SCHEMA}`;
 const HOME_RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v1';
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
-const NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
 let recommendationInflight = null;
 
 function safeParse(value) {
@@ -120,20 +121,24 @@ function syncHomeRecommendationSnapshot(snapshot) {
 }
 
 export function readRecommendationSnapshot() {
-  const snapshot = safeParse(localStorage.getItem(RECOMMENDATION_SNAPSHOT_KEY))
-    || safeParse(localStorage.getItem(HOME_RECOMMENDATION_SNAPSHOT_KEY));
+  const primary = safeParse(localStorage.getItem(RECOMMENDATION_SNAPSHOT_KEY));
+  const legacy = primary ? null : safeParse(localStorage.getItem(HOME_RECOMMENDATION_SNAPSHOT_KEY));
+  const snapshot = primary || legacy;
   if (!snapshot?.items?.length) return null;
-  const cutoff = Date.now() - NEWS_WINDOW_MS;
-  const items = sortLatest(snapshot.items.filter(item => itemTimestamp(item) >= cutoff));
+  // Freshness belongs to the server selector. Never re-filter by age on the client.
+  const items = sortLatest(snapshot.items);
   if (!items.length) return null;
-  const normalized = { ...snapshot, items, topics: homeTopicsFromItems(items) };
+  const normalized = { ...snapshot, schema: RECOMMENDATION_CACHE_SCHEMA, items, topics: homeTopicsFromItems(items) };
   syncHomeRecommendationSnapshot(normalized);
-  return { ...normalized, stale: Date.now() - Number(snapshot.at || 0) > SNAPSHOT_TTL_MS };
+  return {
+    ...normalized,
+    stale: Boolean(legacy) || Number(snapshot.schema || 0) !== RECOMMENDATION_CACHE_SCHEMA || Date.now() - Number(snapshot.at || 0) > SNAPSHOT_TTL_MS
+  };
 }
 function writeRecommendationSnapshot(items) {
-  const cutoff = Date.now() - NEWS_WINDOW_MS;
-  const compact = sortLatest((Array.isArray(items) ? items : []).filter(item => itemTimestamp(item) >= cutoff).map(compactItem));
-  const snapshot = { at: Date.now(), items: compact, topics: homeTopicsFromItems(compact) };
+  // Server response is already freshness-filtered; preserve every returned item.
+  const compact = sortLatest((Array.isArray(items) ? items : []).map(compactItem));
+  const snapshot = { schema: RECOMMENDATION_CACHE_SCHEMA, at: Date.now(), items: compact, topics: homeTopicsFromItems(compact) };
   try { localStorage.setItem(RECOMMENDATION_SNAPSHOT_KEY, JSON.stringify(snapshot)); } catch {}
   syncHomeRecommendationSnapshot(snapshot);
   window.dispatchEvent(new CustomEvent('pdv2:recommendations-updated', { detail: snapshot }));
@@ -173,7 +178,7 @@ async function fetchNetwork(onProgress) {
       if (!items.length) { const error = new Error('新方式のおすすめ候補が空です'); error.stage = 'empty-response'; error.hardFallback = true; throw error; }
       items = items.map(item => ({ ...item, _readerMode: 'news', _recommendationLabel: item?._recommendationLabel || '重要・話題ニュース' }));
       items = await mergeKnownImages(items);
-      globalThis.__PDV2_LAST_RECOMMENDATION_META = { strategy: data?.strategy || 'google-news-trends-gdelt-source-date-article-image-v9', cached: Boolean(data?.cached), degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [], at: Date.now() };
+      globalThis.__PDV2_LAST_RECOMMENDATION_META = { strategy: data?.strategy || 'google-news-trends-gdelt-source-date-article-image-v10', cached: Boolean(data?.cached), degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [], at: Date.now() };
       onProgress?.(88, data?.degradedSignals?.length ? 'Google Newsを重要度中心で評価済み' : '重要度・話題性・複数媒体を評価済み');
       writeRecommendationSnapshot(items);
       return items;

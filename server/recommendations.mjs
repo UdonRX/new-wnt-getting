@@ -1,4 +1,5 @@
 import { resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
+import { NEWS_RECOMMENDATION_WINDOW_HOURS, NEWS_RECOMMENDATION_WINDOW_MS } from '../shared/recommendation-config.js';
 
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
@@ -11,7 +12,6 @@ const GDELT_CHECK_COUNT = 4;
 const GOOGLE_NEWS_CANDIDATE_COUNT = 20;
 const SOURCE_DATE_CHECK_COUNT = 12;
 const SOURCE_DATE_STAGE_TIMEOUT_MS = 1300;
-const RECENT_NEWS_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 let recommendationCache = { at: 0, payload: null };
 let trendsCache = { at: 0, rows: null };
@@ -74,10 +74,10 @@ function cleanGoogleTitle(title = '', source = '') {
   if (!source) return text;
   return text.replace(new RegExp(`\\s+-\\s+${escapeRegExp(source)}\\s*$`, 'i'), '').trim() || text;
 }
-function isRecentTimestamp(timestamp, { now = nowMs(), windowMs = RECENT_NEWS_WINDOW_MS } = {}) {
+function isRecentTimestamp(timestamp, { now = nowMs(), windowMs = NEWS_RECOMMENDATION_WINDOW_MS } = {}) {
   const end = Number(now);
   const width = Number(windowMs);
-  const start = end - (Number.isFinite(width) && width > 0 ? width : RECENT_NEWS_WINDOW_MS);
+  const start = end - (Number.isFinite(width) && width > 0 ? width : NEWS_RECOMMENDATION_WINDOW_MS);
   const value = Number(timestamp || 0);
   return Number.isFinite(value) && value > 0 && value >= start && value <= end;
 }
@@ -109,11 +109,11 @@ export function filterBlockedSources(items) {
   return (Array.isArray(items) ? items : []).filter(item => !BLOCKED_SOURCE_RE.test(String(item?.source || '').trim()));
 }
 
-export function filterRecentGoogleNews(items, { now = nowMs(), windowMs = RECENT_NEWS_WINDOW_MS } = {}) {
+export function filterRecentGoogleNews(items, { now = nowMs(), windowMs = NEWS_RECOMMENDATION_WINDOW_MS } = {}) {
   return (Array.isArray(items) ? items : []).filter(item => isRecentTimestamp(item?.googlePublishedTimestamp || item?.publishedTimestamp, { now, windowMs }));
 }
 
-export function filterRecentSourcePublished(items, { now = nowMs(), windowMs = RECENT_NEWS_WINDOW_MS } = {}) {
+export function filterRecentSourcePublished(items, { now = nowMs(), windowMs = NEWS_RECOMMENDATION_WINDOW_MS } = {}) {
   return (Array.isArray(items) ? items : []).filter(item => isRecentTimestamp(item?.sourcePublishedTimestamp, { now, windowMs }));
 }
 
@@ -286,9 +286,9 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
 
   const evaluatedAt = nowMs();
   const news = filterRecentGoogleNews(allowedNews, { now: evaluatedAt });
-  stage.recentWindowHours = RECENT_NEWS_WINDOW_MS / (60 * 60 * 1000);
+  stage.recentWindowHours = NEWS_RECOMMENDATION_WINDOW_HOURS;
   stage.googleRecentCandidates = news.length;
-  if (!news.length) throw Object.assign(new Error('No non-NHK Google News candidates published in the last 12 hours'), { stage: 'freshness', hardFallback: true });
+  if (!news.length) throw Object.assign(new Error(`No non-NHK Google News candidates published in the last ${NEWS_RECOMMENDATION_WINDOW_HOURS} hours`), { stage: 'freshness', hardFallback: true });
 
   let ranked = preliminaryScore(news, trendResult.rows);
   const gdeltTargets = ranked.slice(0, Math.min(GDELT_CHECK_COUNT, ranked.length));
@@ -338,7 +338,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
 
   const items = finalizeSelection(sourceRecentRanked);
   if (requiresLegacyFallback({ googleNewsCount: news.length, selectedCount: items.length })) {
-    throw Object.assign(new Error('No recommendations with verified publisher dates in the last 12 hours'), { stage: 'publisher-freshness', hardFallback: true });
+    throw Object.assign(new Error(`No recommendations with verified publisher dates in the last ${NEWS_RECOMMENDATION_WINDOW_HOURS} hours`), { stage: 'publisher-freshness', hardFallback: true });
   }
 
   const degradedSignals = [];

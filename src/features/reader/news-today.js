@@ -67,7 +67,7 @@ export async function renderNewsToday(root, { navigate, openId = '' }) {
     activeFocus = mountFocus(host, {
       items,
       initialIndex,
-      label: '12時間以内',
+      label: '最新ニュース',
       summaryMode: 'news',
       onIndexChange: () => {}
     });
@@ -75,11 +75,19 @@ export async function renderNewsToday(root, { navigate, openId = '' }) {
     return true;
   };
 
-  const hadCachedItems = show(snapshot);
+  show(snapshot);
   const applySnapshot = next => {
     if (disposed || !next?.items?.length) return;
+    const previousAt = Number(snapshot?.at || 0);
+    const nextAt = Number(next?.at || 0);
+    const previousCount = snapshot?.items?.length || 0;
+    const nextCount = next?.items?.length || 0;
+    if (nextAt && nextAt === previousAt && nextCount === previousCount) return;
+    const currentId = String(activeFocus?.getItem?.()?.id || openId || '');
     snapshot = next;
-    if (!hadCachedItems || !activeFocus) show(snapshot, openId);
+    // Fresh network data must replace a legacy/shorter cached list even while the reader is open.
+    // Preserve the currently viewed article when possible instead of jumping back to the first item.
+    show(snapshot, currentId);
   };
   const onUpdated = event => applySnapshot(event.detail);
   const refresh = () => refreshRecommendationSnapshot().then(applySnapshot).catch(() => {});

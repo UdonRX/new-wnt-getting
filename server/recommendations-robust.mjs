@@ -6,21 +6,21 @@ import {
   preliminaryScore
 } from './recommendations.mjs';
 import { resolveSourcePublishedTime } from '../lib/source-published-time.mjs';
+import { NEWS_RECOMMENDATION_WINDOW_HOURS, NEWS_RECOMMENDATION_WINDOW_MS } from '../shared/recommendation-config.js';
 
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
-const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-image-v10';
+const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-image-v11';
 const RECOMMENDATION_TTL_MS = 10 * 60 * 1000;
 const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
 const GDELT_TIMEOUT_MS = 2200;
 const GDELT_CHECK_COUNT = 4;
 // ここから下の件数は表示上限ではなく、追加メタデータ取得の速度を守るための enrichment budget。
-// 未確認の記事も Google News の日時が24時間以内なら候補から落とさない。
+// 未確認の記事も共通設定の鮮度期間内なら候補から落とさない。
 const SOURCE_DATE_ENRICHMENT_COUNT = 12;
 const RECOMMENDATION_MIN_COUNT = 5;
 const SOURCE_DATE_STAGE_TIMEOUT_MS = 1300;
-const RECENT_NEWS_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PUBLISHER_VERIFY_TIMEOUT_MS = 1200;
 const PUBLISHER_VERIFY_MAX_BYTES = 256 * 1024;
 const PUBLISHER_VERIFY_ENRICHMENT_COUNT = 6;
@@ -38,7 +38,7 @@ function requestId() { return `rec-${Date.now().toString(36)}-${Math.random().to
 function nowMs() { return Date.now(); }
 function fresh(cache, ttl) { return Boolean(cache?.payload || cache?.rows) && nowMs() - Number(cache.at || 0) < ttl; }
 function stripHtml(value = '') { return String(value || '').replace(/<script\b[\s\S]*?<\/script>/gi, ' ').replace(/<style\b[\s\S]*?<\/style>/gi, ' ').replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'").replace(/\s+/g, ' ').trim(); }
-function isRecentTimestamp(timestamp, { now = nowMs(), windowMs = RECENT_NEWS_WINDOW_MS } = {}) {
+function isRecentTimestamp(timestamp, { now = nowMs(), windowMs = NEWS_RECOMMENDATION_WINDOW_MS } = {}) {
   const value = Number(timestamp || 0);
   return Number.isFinite(value) && value > 0 && value >= now - windowMs && value <= now;
 }
@@ -355,7 +355,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   const sourceAllowed = filterBlockedSources(allNews);
   // ここではタイトルだけをhard filterにする。publisher pathは後段の参考情報。
   const articleTitleAllowed = filterArticleCandidates(sourceAllowed);
-  // 記事件数では切らない。Google News RSSが返した全候補を24時間フィルタへ渡す。
+  // 記事件数では切らない。Google News RSSが返した全候補を共通の鮮度期間フィルタへ渡す。
   const allowedNews = articleTitleAllowed;
   stage.googleNewsCandidates = allNews.length;
   stage.blockedSourceCandidates = allNews.length - sourceAllowed.length;
@@ -365,8 +365,8 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   if (!allowedNews.length) throw Object.assign(new Error('No article candidates after source/title filtering'), { stage: 'article-filter' });
 
   const evaluatedAt = nowMs();
-  const recent = filterRecentGoogleNews(allowedNews, { now: evaluatedAt, windowMs: RECENT_NEWS_WINDOW_MS });
-  stage.recentWindowHours = RECENT_NEWS_WINDOW_MS / 3600000;
+  const recent = filterRecentGoogleNews(allowedNews, { now: evaluatedAt, windowMs: NEWS_RECOMMENDATION_WINDOW_MS });
+  stage.recentWindowHours = NEWS_RECOMMENDATION_WINDOW_HOURS;
   stage.googleRecentCandidates = recent.length;
   if (!recent.length) throw Object.assign(new Error('No recent Google News article candidates'), { stage: 'freshness' });
 
@@ -434,9 +434,9 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
     .map(row => checkedById.get(row.id) || row)
     .filter(row => {
       if (row.nonArticle) return false;
-      // 配信元日時が取得できて「24時間より古い」と分かった記事は補充しない。
+      // 配信元日時が取得できて共通設定の鮮度期間より古いと分かった記事は補充しない。
       if (Number(row.sourcePublishedTimestamp || 0) > 0 && !isRecentTimestamp(row.sourcePublishedTimestamp, { now: evaluatedAt })) return false;
-      // 配信元日時が取得できない/未確認なら、Google News上で24時間以内であることを使う。
+      // 配信元日時が取得できない/未確認なら、Google News上の日時を共通設定で評価する。
       return isRecentTimestamp(row.googlePublishedTimestamp || row.publishedTimestamp, { now: evaluatedAt });
     })
     .map(row => ({
@@ -445,7 +445,7 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
       effectivePublishedTimestamp: Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0)
     }));
 
-  // 表示件数の目標値・上限値は設けない。24時間条件を満たす候補をすべて返す。
+  // 表示件数の目標値・上限値は設けない。鮮度条件を満たす候補をすべて返す。
   const selectedRows = [...verifiedRecent, ...supplementRows];
   const items = finalizeSelection(selectedRows);
 
