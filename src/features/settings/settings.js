@@ -14,7 +14,7 @@ function twitchDetail(profile){if(!profile?.login)return 'Twitch再生画面の�
 export async function renderSettings(root,{navigate}){
   const s=state.settings;const screen=el('section',{class:'screen'});screen.append(topbar('設定',{subtitle:'見た目・データ・連携',actions:[{label:'←',title:'ホーム',onClick:()=>navigate('home')}]}));
   const appearance=el('div',{class:'card settings-section'});appearance.append(el('h2',{text:'外観色'}));
-  const colors=[['home','ホーム'],['weather','天気'],['news','ニュース'],['knowledge','知識'],['papers','論文'],['youtube','YouTube'],['twitch','Twitch'],['twitter','X'],['settings','設定']];colors.forEach(([k,l])=>appearance.append(row(`${l}の色`,color(s.colors[k],v=>patchSettings({colors:{[k]:v}}))));
+  const colors=[['home','ホーム'],['weather','天気'],['news','ニュース'],['knowledge','知識'],['papers','論文'],['youtube','YouTube'],['twitch','Twitch'],['twitter','X'],['settings','設定']];colors.forEach(([k,l])=>appearance.append(row(`${l}の色`,color(s.colors[k],v=>patchSettings({colors:{[k]:v}})))));
 
   const behavior=el('div',{class:'card settings-section'});behavior.append(el('h2',{text:'動作'}));behavior.append(row('「いま押さえる」のAI補正',toggle(s.rankWithAi,v=>patchSettings({rankWithAi:v})),'表示はすぐ行い、AI評価は次回候補選定に使います。'));
   const density=el('select');[['low','少'],['normal','標準'],['high','多']].forEach(([v,l])=>density.append(el('option',{value:v,text:l})));density.value=s.twitchCommentDensity;density.onchange=()=>patchSettings({twitchCommentDensity:density.value});behavior.append(row('Twitch流れるコメント',density));
