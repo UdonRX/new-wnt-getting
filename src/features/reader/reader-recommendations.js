@@ -1,10 +1,11 @@
 import { RECOMMENDATION_CACHE_SCHEMA } from '../../../shared/recommendation-config.js';
 
-const RECOMMENDATION_TIMEOUT_MS = 7000;
-const RECOMMENDATION_API_VERSION = '7';
+const RECOMMENDATION_TIMEOUT_MS = 10000;
+const RECOMMENDATION_API_VERSION = '8';
 export const RECOMMENDATION_SNAPSHOT_KEY = `pdv2:recommendationSnapshot:v${RECOMMENDATION_CACHE_SCHEMA}`;
 const HOME_RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v1';
-const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
+const REFRESH_META_KEY = 'pdv2:recommendationRefreshMeta:v1';
+const SNAPSHOT_TTL_MS = 5 * 60 * 1000;
 let recommendationInflight = null;
 
 function safeParse(value) {
@@ -17,8 +18,29 @@ function itemTimestamp(item = {}) {
   const parsed = new Date(item.pubDate || 0).getTime();
   return Number.isFinite(parsed) ? parsed : 0;
 }
+function ageMinutes(timestamp, now = Date.now()) {
+  const value = Number(timestamp || 0);
+  return Number.isFinite(value) && value > 0 ? Math.max(0, Math.round((now - value) / 60000)) : null;
+}
 function sortLatest(items = []) {
   return [...(Array.isArray(items) ? items : [])].sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
+}
+function newestAgeMinutes(items = [], now = Date.now()) {
+  const latest = sortLatest(items)[0];
+  return ageMinutes(itemTimestamp(latest), now);
+}
+function writeRefreshMeta(patch = {}) {
+  try {
+    const previous = safeParse(localStorage.getItem(REFRESH_META_KEY)) || {};
+    const next = { ...previous, ...patch };
+    localStorage.setItem(REFRESH_META_KEY, JSON.stringify(next));
+    globalThis.__PDV2_LAST_RECOMMENDATION_REFRESH = next;
+    return next;
+  } catch {
+    const next = { ...patch };
+    globalThis.__PDV2_LAST_RECOMMENDATION_REFRESH = next;
+    return next;
+  }
 }
 function compactItem(item = {}) {
   return {
@@ -127,7 +149,6 @@ export function readRecommendationSnapshot() {
   const legacy = primary ? null : safeParse(localStorage.getItem(HOME_RECOMMENDATION_SNAPSHOT_KEY));
   const snapshot = primary || legacy;
   if (!snapshot?.items?.length) return null;
-  // Freshness belongs to the server selector. Never re-filter by age on the client.
   const items = sortLatest(snapshot.items);
   if (!items.length) return null;
   const normalized = { ...snapshot, schema: RECOMMENDATION_CACHE_SCHEMA, items, topics: homeTopicsFromItems(items) };
@@ -137,12 +158,24 @@ export function readRecommendationSnapshot() {
     stale: Boolean(legacy) || Number(snapshot.schema || 0) !== RECOMMENDATION_CACHE_SCHEMA || Date.now() - Number(snapshot.at || 0) > SNAPSHOT_TTL_MS
   };
 }
-function writeRecommendationSnapshot(items) {
-  // Server response is already freshness-filtered; preserve every returned item.
+function writeRecommendationSnapshot(items, meta = {}) {
   const compact = sortLatest((Array.isArray(items) ? items : []).map(compactItem));
   const snapshot = { schema: RECOMMENDATION_CACHE_SCHEMA, at: Date.now(), items: compact, topics: homeTopicsFromItems(compact) };
   try { localStorage.setItem(RECOMMENDATION_SNAPSHOT_KEY, JSON.stringify(snapshot)); } catch {}
   syncHomeRecommendationSnapshot(snapshot);
+  writeRefreshMeta({
+    lastAttemptAt: Date.now(),
+    lastSuccessAt: Date.now(),
+    lastError: '',
+    requestId: meta.requestId || '',
+    serverElapsedMs: Number(meta.serverElapsedMs || 0),
+    serverGeneratedAt: Number(meta.generatedAt || 0),
+    forced: Boolean(meta.forced),
+    itemCount: compact.length,
+    newestPublishedTimestamp: itemTimestamp(compact[0]),
+    newestAgeMinutes: newestAgeMinutes(compact),
+    strategy: meta.strategy || ''
+  });
   window.dispatchEvent(new CustomEvent('pdv2:recommendations-updated', { detail: snapshot }));
   return snapshot;
 }
@@ -171,8 +204,12 @@ async function fetchNetwork(onProgress, { force = false } = {}) {
   }
 
   const promise = (async () => {
+    const startedAt = Date.now();
     onProgress?.(18, force ? 'Google Newsを強制更新中' : 'Google Newsから候補を確認中');
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), RECOMMENDATION_TIMEOUT_MS);
+    writeRefreshMeta({ lastAttemptAt: startedAt, forced: Boolean(force), lastError: '' });
+    console.info('[recommendations:client-network-start]', { forced: Boolean(force), timeoutMs: RECOMMENDATION_TIMEOUT_MS, at: startedAt });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), RECOMMENDATION_TIMEOUT_MS);
     try {
       const params = new URLSearchParams({ v: RECOMMENDATION_API_VERSION });
       const headers = { Accept: 'application/json' };
@@ -186,26 +223,72 @@ async function fetchNetwork(onProgress, { force = false } = {}) {
         method: 'GET', headers, signal: controller.signal, cache: force ? 'no-store' : 'default'
       });
       const data = await response.json().catch(() => ({}));
+      const elapsedMs = Date.now() - startedAt;
+      const requestId = response.headers.get('x-recommendation-request-id') || data?.requestId || '';
       if (!response.ok || data?.fallbackRequired) {
         const error = new Error(data?.error || `おすすめ取得エラー (${response.status})`);
-        error.stage = data?.stage || 'cross-source'; error.requestId = data?.requestId || ''; error.hardFallback = Boolean(data?.fallbackRequired); throw error;
+        error.stage = data?.stage || 'cross-source';
+        error.requestId = requestId;
+        error.hardFallback = Boolean(data?.fallbackRequired);
+        error.elapsedMs = elapsedMs;
+        throw error;
       }
       let items = Array.isArray(data?.items) ? data.items : [];
-      if (!items.length) { const error = new Error('新方式のおすすめ候補が空です'); error.stage = 'empty-response'; error.hardFallback = true; throw error; }
+      if (!items.length) {
+        const error = new Error('新方式のおすすめ候補が空です');
+        error.stage = 'empty-response';
+        error.requestId = requestId;
+        error.hardFallback = true;
+        error.elapsedMs = elapsedMs;
+        throw error;
+      }
       items = items.map(item => ({ ...item, _readerMode: 'news', _recommendationLabel: item?._recommendationLabel || '重要・話題ニュース' }));
       items = await mergeKnownImages(items);
-      globalThis.__PDV2_LAST_RECOMMENDATION_META = {
-        strategy: data?.strategy || 'google-news-trends-gdelt-source-date-article-image-v12',
-        cached: Boolean(data?.cached), forced: Boolean(force),
-        degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [], at: Date.now()
+      const diagnostics = {
+        strategy: data?.strategy || 'google-news-fast-freshness-v13',
+        cached: Boolean(data?.cached),
+        forced: Boolean(force),
+        requestId,
+        status: response.status,
+        elapsedMs,
+        serverElapsedMs: Number(data?.serverElapsedMs || 0),
+        generatedAt: Number(data?.generatedAt || 0),
+        itemCount: items.length,
+        newestAgeMinutes: newestAgeMinutes(items),
+        degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [],
+        at: Date.now()
       };
-      onProgress?.(88, data?.degradedSignals?.length ? 'Google Newsを重要度中心で評価済み' : '重要度・話題性・複数媒体を評価済み');
-      writeRecommendationSnapshot(items);
+      globalThis.__PDV2_LAST_RECOMMENDATION_META = diagnostics;
+      console.info('[recommendations:client-network-success]', diagnostics);
+      onProgress?.(88, diagnostics.degradedSignals.length ? 'Google Newsを重要度中心で評価済み' : '最新ニュースを取得済み');
+      writeRecommendationSnapshot(items, diagnostics);
       return items;
     } catch (error) {
-      if (error?.name === 'AbortError') { const timeoutError = new Error('新方式のおすすめ取得がタイムアウトしました'); timeoutError.stage = 'client-timeout'; timeoutError.hardFallback = true; throw timeoutError; }
+      const elapsedMs = Date.now() - startedAt;
+      if (error?.name === 'AbortError') {
+        const timeoutError = new Error(`ニュース更新が${Math.round(RECOMMENDATION_TIMEOUT_MS / 1000)}秒でタイムアウトしました`);
+        timeoutError.stage = 'client-timeout';
+        timeoutError.hardFallback = true;
+        timeoutError.elapsedMs = elapsedMs;
+        writeRefreshMeta({ lastAttemptAt: Date.now(), lastError: timeoutError.message, errorStage: timeoutError.stage, elapsedMs });
+        console.warn('[recommendations:client-network-failure]', { stage: timeoutError.stage, elapsedMs, forced: Boolean(force), message: timeoutError.message });
+        throw timeoutError;
+      }
+      writeRefreshMeta({
+        lastAttemptAt: Date.now(),
+        lastError: error?.message || String(error),
+        errorStage: error?.stage || 'network',
+        requestId: error?.requestId || '',
+        elapsedMs
+      });
+      console.warn('[recommendations:client-network-failure]', {
+        stage: error?.stage || 'network', requestId: error?.requestId || '', elapsedMs,
+        forced: Boolean(force), message: error?.message || String(error)
+      });
       throw error;
-    } finally { clearTimeout(timer); }
+    } finally {
+      clearTimeout(timer);
+    }
   })();
 
   recommendationInflight = { promise, force: Boolean(force) };
@@ -216,13 +299,41 @@ async function fetchNetwork(onProgress, { force = false } = {}) {
 export async function loadCrossSourceRecommendations(onProgress) { return fetchNetwork(onProgress); }
 export async function refreshRecommendationSnapshot({ force = false } = {}) {
   const cached = readRecommendationSnapshot();
-  if (!force && cached && !cached.stale) return cached;
+  const cacheDiagnostics = {
+    forced: Boolean(force),
+    hasCache: Boolean(cached?.items?.length),
+    cacheStale: Boolean(cached?.stale),
+    cacheAgeMs: cached ? Math.max(0, Date.now() - Number(cached.at || 0)) : null,
+    cachedNewestAgeMinutes: cached ? newestAgeMinutes(cached.items) : null
+  };
+  console.info('[recommendations:client-refresh-start]', cacheDiagnostics);
+  if (!force && cached && !cached.stale) {
+    globalThis.__PDV2_LAST_RECOMMENDATION_REFRESH = { ...cacheDiagnostics, source: 'fresh-cache', at: Date.now() };
+    return cached;
+  }
   const networkForce = Boolean(force || cached?.stale);
   try {
     const items = await fetchNetwork(undefined, { force: networkForce });
-    return readRecommendationSnapshot() || writeRecommendationSnapshot(items);
+    const next = readRecommendationSnapshot() || writeRecommendationSnapshot(items, { forced: networkForce });
+    console.info('[recommendations:client-refresh-applied]', {
+      forced: networkForce,
+      itemCount: next?.items?.length || 0,
+      newestAgeMinutes: newestAgeMinutes(next?.items || []),
+      snapshotAt: Number(next?.at || 0)
+    });
+    return next;
   } catch (error) {
-    if (cached) return { ...cached, stale: true, refreshError: error?.message || String(error) };
+    if (cached) {
+      const fallback = { ...cached, stale: true, refreshError: error?.message || String(error) };
+      console.warn('[recommendations:client-stale-fallback]', {
+        stage: error?.stage || 'network',
+        requestId: error?.requestId || '',
+        cachedNewestAgeMinutes: newestAgeMinutes(cached.items),
+        cachedSnapshotAgeMs: Math.max(0, Date.now() - Number(cached.at || 0)),
+        message: error?.message || String(error)
+      });
+      return fallback;
+    }
     throw error;
   }
 }
