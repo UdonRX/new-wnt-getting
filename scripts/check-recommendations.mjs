@@ -9,11 +9,13 @@ import {
   finalizeSelection,
   requiresLegacyFallback
 } from '../server/recommendations.mjs';
+import { finalizeSelection as finalizeRobustSelection } from '../server/recommendations-robust.mjs';
 import { extractPublishedDateFromHtml } from '../lib/source-published-time.mjs';
-import { NEWS_RECOMMENDATION_WINDOW_HOURS, NEWS_RECOMMENDATION_WINDOW_MS } from '../shared/recommendation-config.js';
+import { NEWS_RECOMMENDATION_WINDOW_HOURS, NEWS_RECOMMENDATION_WINDOW_MS, RECOMMENDATION_CACHE_SCHEMA } from '../shared/recommendation-config.js';
 
 assert.equal(NEWS_RECOMMENDATION_WINDOW_HOURS, 24);
 assert.equal(NEWS_RECOMMENDATION_WINDOW_MS, 24 * 60 * 60 * 1000);
+assert.equal(RECOMMENDATION_CACHE_SCHEMA, 4);
 
 const newsXml = `<?xml version="1.0"?><rss><channel>
 <item><title>大規模地震で避難指示 - NHK</title><link>https://news.google.com/a</link><pubDate>Thu, 03 Sep 2026 00:00:00 GMT</pubDate><source>NHK</source><description>各地で強い揺れ。津波への警戒が呼びかけられている。</description></item>
@@ -88,6 +90,36 @@ assert.equal(finalizeSelection(manyRanked)[0].id, 'r-0');
 const unknownDateItem = finalizeSelection([{ id: 'x', title: 'x', link: 'x', description: '', source: 'x', feedName: 'Google News', score: 1, googleRank: 1 }])[0];
 assert.equal(unknownDateItem.pubDate, '');
 assert.equal(unknownDateItem.publishedTimestamp, 0);
+
+// Active selector regression: Google News pubDate must win over a stale publisher date,
+// and publisher verification must never outrank a newer Google News item.
+const newestGoogleTimestamp = new Date('2026-09-14T03:30:00Z').getTime();
+const olderGoogleTimestamp = new Date('2026-09-14T02:00:00Z').getTime();
+const robustSelected = finalizeRobustSelection([
+  {
+    id: 'newest-google', title: '昼の最新記事', link: 'https://news.google.com/newest',
+    description: '', source: 'Example A', feedName: 'Google News', image: '',
+    googlePublishedTimestamp: newestGoogleTimestamp, publishedTimestamp: newestGoogleTimestamp,
+    sourcePublishedTimestamp: new Date('2026-09-13T20:00:00Z').getTime(),
+    sourceDateMethod: 'json-ld:datePublished', selectionSource: 'google-news-supplement',
+    score: 40, googleRank: 2
+  },
+  {
+    id: 'older-verified', title: '配信元確認済みの古い記事', link: 'https://news.google.com/older',
+    publisherUrl: 'https://example.com/older', publisherArticleConfirmed: true,
+    description: '', source: 'Example B', feedName: 'Google News', image: '',
+    googlePublishedTimestamp: olderGoogleTimestamp, publishedTimestamp: olderGoogleTimestamp,
+    sourcePublishedTimestamp: new Date('2026-09-14T02:05:00Z').getTime(),
+    sourceDateMethod: 'json-ld:datePublished', selectionSource: 'publisher-verified',
+    score: 80, googleRank: 1
+  }
+]);
+assert.equal(robustSelected[0].id, 'newest-google');
+assert.equal(robustSelected[0].publishedTimestamp, newestGoogleTimestamp);
+assert.equal(robustSelected[0].googlePublishedTimestamp, newestGoogleTimestamp);
+assert.equal(robustSelected[0].sourcePublishedTimestamp, new Date('2026-09-13T20:00:00Z').getTime());
+assert.equal(robustSelected[0].recommendationDateSource, 'google-news');
+assert.ok(robustSelected[0].sourceDateMismatchMinutes < 0);
 
 const nowForHtml = new Date('2026-09-06T01:00:00Z').getTime();
 const jsonLdDate = extractPublishedDateFromHtml(`<!doctype html><head><script type="application/ld+json">{"@type":"NewsArticle","headline":"test","datePublished":"2026-09-02T14:48:00+09:00"}</script></head>`, { now: nowForHtml });

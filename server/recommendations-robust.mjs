@@ -10,20 +10,21 @@ import { NEWS_RECOMMENDATION_WINDOW_HOURS, NEWS_RECOMMENDATION_WINDOW_MS } from 
 
 const GOOGLE_NEWS_URL = 'https://news.google.com/rss?hl=ja&gl=JP&ceid=JP:ja';
 const GOOGLE_TRENDS_URL = 'https://trends.google.com/trending/rss?geo=JP';
-const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-source-date-article-image-v11';
+const RECOMMENDATION_STRATEGY = 'google-news-trends-gdelt-google-time-v12';
 const RECOMMENDATION_TTL_MS = 10 * 60 * 1000;
 const TRENDS_TTL_MS = 15 * 60 * 1000;
 const GOOGLE_TIMEOUT_MS = 2600;
 const GDELT_TIMEOUT_MS = 2200;
 const GDELT_CHECK_COUNT = 4;
 // ここから下の件数は表示上限ではなく、追加メタデータ取得の速度を守るための enrichment budget。
-// 未確認の記事も共通設定の鮮度期間内なら候補から落とさない。
+// 配信元時刻は補助情報。鮮度判定・表示順は Google News pubDate を正とする。
 const SOURCE_DATE_ENRICHMENT_COUNT = 12;
 const RECOMMENDATION_MIN_COUNT = 5;
 const SOURCE_DATE_STAGE_TIMEOUT_MS = 1300;
 const PUBLISHER_VERIFY_TIMEOUT_MS = 1200;
 const PUBLISHER_VERIFY_MAX_BYTES = 256 * 1024;
 const PUBLISHER_VERIFY_ENRICHMENT_COUNT = 6;
+const SOURCE_DATE_MISMATCH_WARN_MS = 2 * 60 * 60 * 1000;
 
 // 明らかな一覧タイトルだけはGoogle News候補の時点で除外する。
 const NON_ARTICLE_TITLE_RE = /(?:新着記事一覧|記事一覧|ニュース一覧|検索結果|タグ一覧|関連タグ|カテゴリ(?:ー)?一覧|アーカイブ一覧|新着一覧)/i;
@@ -70,14 +71,19 @@ export function filterArticleCandidates(items = []) {
   return (Array.isArray(items) ? items : []).filter(item => !classifyRecommendationCandidate(item).nonArticle);
 }
 
-async function fetchWithTimeout(url, { timeoutMs = GOOGLE_TIMEOUT_MS, accept = '*/*' } = {}) {
+async function fetchWithTimeout(url, { timeoutMs = GOOGLE_TIMEOUT_MS, accept = '*/*', noCache = false } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const started = Date.now();
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { Accept: accept, 'User-Agent': 'new-wnt-getting/1.0 (+recommendation-selector)' }
+      cache: noCache ? 'no-store' : 'default',
+      headers: {
+        Accept: accept,
+        'User-Agent': 'new-wnt-getting/1.0 (+recommendation-selector)',
+        ...(noCache ? { 'Cache-Control': 'no-cache', Pragma: 'no-cache' } : {})
+      }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return { text: await response.text(), elapsedMs: Date.now() - started };
@@ -189,7 +195,8 @@ function analyzePublisherHtml(html = '', rawUrl = '') {
 async function getTrends({ refresh = false } = {}) {
   if (!refresh && fresh(trendsCache, TRENDS_TTL_MS)) return { rows: trendsCache.rows, cache: 'hit', elapsedMs: 0, degraded: false };
   try {
-    const result = await fetchWithTimeout(GOOGLE_TRENDS_URL, { accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' });
+    const url = refresh ? `${GOOGLE_TRENDS_URL}&_=${nowMs()}` : GOOGLE_TRENDS_URL;
+    const result = await fetchWithTimeout(url, { accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2', noCache: refresh });
     const rows = parseGoogleTrends(result.text);
     if (!rows.length) throw new Error('Google Trends returned no rows');
     trendsCache = { at: nowMs(), rows };
@@ -296,41 +303,49 @@ async function verifyPublisherPathHints(rows = []) {
 }
 
 function selectionTimestamp(row = {}) {
-  return Number(row.effectivePublishedTimestamp || row.sourcePublishedTimestamp || row.googlePublishedTimestamp || row.publishedTimestamp || 0);
+  for (const value of [row.googlePublishedTimestamp, row.publishedTimestamp, row.effectivePublishedTimestamp, row.sourcePublishedTimestamp]) {
+    const timestamp = Number(value || 0);
+    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+  }
+  return 0;
 }
 
-function finalizeSelection(rows = []) {
+export function finalizeSelection(rows = []) {
   return [...rows]
     .filter(row => !row.nonArticle && selectionTimestamp(row) > 0)
     .sort((a, b) => {
-      if (a.selectionSource !== b.selectionSource) {
-        if (a.selectionSource === 'publisher-verified') return -1;
-        if (b.selectionSource === 'publisher-verified') return 1;
-      }
       const byDate = selectionTimestamp(b) - selectionTimestamp(a);
       if (byDate) return byDate;
       return Number(b.score || 0) - Number(a.score || 0) || Number(a.googleRank || 0) - Number(b.googleRank || 0);
     })
     .map(row => {
       const effectiveTimestamp = selectionTimestamp(row);
+      const sourceTimestamp = Number(row.sourcePublishedTimestamp || 0);
       const usePublisherLink = Boolean(row.publisherArticleConfirmed && row.publisherUrl);
+      const sourceDateMismatchMinutes = sourceTimestamp > 0
+        ? Math.round((sourceTimestamp - effectiveTimestamp) / 60000)
+        : null;
       return {
         id: row.id,
         title: row.title,
         // 配信元が「記事」と確認できた時だけ直URLを使う。
-        // 未確認・日時取得失敗・path疑いは旧版同様Google News URLを保持する。
+        // 日時は直URL側ではなく、Google News pubDate を正として保持する。
         link: usePublisherLink ? row.publisherUrl : row.link,
         googleNewsLink: row.link,
+        publisherUrl: row.publisherUrl || '',
         description: row.description,
         source: row.source,
         sourceUrl: row.sourceUrl || '',
         feedName: row.feedName,
         image: row.image || '',
         pubDate: new Date(effectiveTimestamp).toISOString(),
+        googlePublishedTimestamp: effectiveTimestamp,
         publishedTimestamp: effectiveTimestamp,
-        sourcePublishedTimestamp: Number(row.sourcePublishedTimestamp || 0),
+        effectivePublishedTimestamp: effectiveTimestamp,
+        sourcePublishedTimestamp: sourceTimestamp,
         sourceDateMethod: row.sourceDateMethod || '',
-        recommendationDateSource: row.selectionSource === 'publisher-verified' ? 'publisher' : 'google-news',
+        sourceDateMismatchMinutes,
+        recommendationDateSource: 'google-news',
         _readerMode: 'news',
         _recommendationLabel: '重要・話題ニュース'
       };
@@ -340,14 +355,16 @@ function finalizeSelection(rows = []) {
 async function buildRecommendations({ refresh = false, debug = false, id = requestId() } = {}) {
   const started = Date.now();
   const stage = {};
+  const newsUrl = refresh ? `${GOOGLE_NEWS_URL}&_=${started}` : GOOGLE_NEWS_URL;
   const [newsResult, trendResult] = await Promise.all([
-    fetchWithTimeout(GOOGLE_NEWS_URL, { accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2' }),
+    fetchWithTimeout(newsUrl, { accept: 'application/rss+xml,application/xml,text/xml,*/*;q=.2', noCache: refresh }),
     getTrends({ refresh })
   ]);
   stage.googleNewsMs = newsResult.elapsedMs;
   stage.googleTrendsMs = trendResult.elapsedMs;
   stage.googleTrendsCache = trendResult.cache;
   stage.googleTrendsDegraded = Boolean(trendResult.degraded);
+  stage.forcedRefresh = Boolean(refresh);
 
   const allNews = parseGoogleNews(newsResult.text);
   if (!allNews.length) throw Object.assign(new Error('Google News returned no candidates'), { stage: 'google-news' });
@@ -372,10 +389,9 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
 
   let ranked = preliminaryScore(recent, trendResult.rows);
   const gdeltTargets = ranked.slice(0, Math.min(GDELT_CHECK_COUNT, ranked.length));
-  // 配信元日時は上位だけを enrichment するが、未確認の記事も最終候補には残す。
+  // 配信元情報は上位だけ enrichment。配信元日時は鮮度判定には使わない。
   const initialSourceTargets = ranked.slice(0, Math.min(SOURCE_DATE_ENRICHMENT_COUNT, ranked.length));
 
-  // GDELTと配信元日時は並列。日時確認に失敗しても後段でGoogle News日時を使って補充する。
   const parallelStarted = Date.now();
   const [gdeltResults, initialSourceRows] = await Promise.all([
     Promise.all(gdeltTargets.map(checkGdelt)),
@@ -417,44 +433,51 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   stage.publisherHtmlConfirmedArticle = checkedRows.filter(row => row.publisherHtmlSignals?.confirmedArticle).length;
   stage.publisherHtmlConfirmedNonArticle = checkedRows.filter(row => row.nonArticle && row.nonArticleReason === 'publisher-html-list-confirmed').length;
   stage.nonArticlePublisherCandidates = checkedRows.filter(row => row.nonArticle).length;
+  stage.sourceDateRecent = checkedRows.filter(row => isRecentTimestamp(row.sourcePublishedTimestamp, { now: evaluatedAt })).length;
   stage.sourceDateOld = checkedRows.filter(row => row.sourcePublishedTimestamp > 0 && !isRecentTimestamp(row.sourcePublishedTimestamp, { now: evaluatedAt })).length;
+  stage.sourceDateMismatchCount = checkedRows.filter(row => {
+    const googleTimestamp = Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0);
+    const sourceTimestamp = Number(row.sourcePublishedTimestamp || 0);
+    return googleTimestamp > 0 && sourceTimestamp > 0 && Math.abs(sourceTimestamp - googleTimestamp) >= SOURCE_DATE_MISMATCH_WARN_MS;
+  }).length;
 
-  const verifiedRecent = checkedRows
-    .filter(row => !row.nonArticle && isRecentTimestamp(row.sourcePublishedTimestamp, { now: evaluatedAt }))
+  const enrichedRows = checkedRows
+    .filter(row => !row.nonArticle && isRecentTimestamp(row.googlePublishedTimestamp || row.publishedTimestamp, { now: evaluatedAt }))
     .map(row => ({
       ...row,
-      selectionSource: 'publisher-verified',
-      effectivePublishedTimestamp: row.sourcePublishedTimestamp
+      selectionSource: row.publisherArticleConfirmed ? 'publisher-verified' : 'publisher-enriched',
+      effectivePublishedTimestamp: Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0)
     }));
-  stage.sourceDateRecent = verifiedRecent.length;
 
-  const verifiedIds = new Set(verifiedRecent.map(row => row.id));
+  const enrichedIds = new Set(enrichedRows.map(row => row.id));
   const supplementRows = ranked
-    .filter(row => !verifiedIds.has(row.id))
+    .filter(row => !enrichedIds.has(row.id))
     .map(row => checkedById.get(row.id) || row)
-    .filter(row => {
-      if (row.nonArticle) return false;
-      // 配信元日時が取得できて共通設定の鮮度期間より古いと分かった記事は補充しない。
-      if (Number(row.sourcePublishedTimestamp || 0) > 0 && !isRecentTimestamp(row.sourcePublishedTimestamp, { now: evaluatedAt })) return false;
-      // 配信元日時が取得できない/未確認なら、Google News上の日時を共通設定で評価する。
-      return isRecentTimestamp(row.googlePublishedTimestamp || row.publishedTimestamp, { now: evaluatedAt });
-    })
+    .filter(row => !row.nonArticle && isRecentTimestamp(row.googlePublishedTimestamp || row.publishedTimestamp, { now: evaluatedAt }))
     .map(row => ({
       ...row,
       selectionSource: 'google-news-supplement',
       effectivePublishedTimestamp: Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0)
     }));
 
-  // 表示件数の目標値・上限値は設けない。鮮度条件を満たす候補をすべて返す。
-  const selectedRows = [...verifiedRecent, ...supplementRows];
+  // 表示件数の目標値・上限値は設けない。Google News上で鮮度条件を満たす候補をすべて返す。
+  // 配信元のdatePublishedが古い/不整合でも、それだけを理由に最新候補を落とさない。
+  const selectedRows = [...enrichedRows, ...supplementRows];
   const items = finalizeSelection(selectedRows);
 
-  stage.verifiedCount = verifiedRecent.length;
-  stage.supplementedCount = items.filter(item => item.recommendationDateSource === 'google-news').length;
+  stage.enrichedCount = enrichedRows.length;
+  stage.verifiedCount = enrichedRows.filter(row => row.publisherArticleConfirmed).length;
+  stage.supplementedCount = supplementRows.length;
   stage.itemsReturned = items.length;
   stage.imageCount = items.filter(item => item.image).length;
   stage.imageMissingCount = items.length - stage.imageCount;
   stage.outputCountUnbounded = true;
+  stage.newestGoogleAgeMinutes = items[0]?.publishedTimestamp
+    ? Math.max(0, Math.round((evaluatedAt - Number(items[0].publishedTimestamp)) / 60000))
+    : null;
+  stage.oldestGoogleAgeMinutes = items.at(-1)?.publishedTimestamp
+    ? Math.max(0, Math.round((evaluatedAt - Number(items.at(-1).publishedTimestamp)) / 60000))
+    : null;
 
   // 1件だけを成功扱いにはしない。最低5件に届かない場合は既存RSS fallbackへ渡す。
   if (items.length < RECOMMENDATION_MIN_COUNT) {
@@ -465,7 +488,8 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
   if (stage.googleTrendsDegraded) degradedSignals.push('google-trends');
   if (stage.gdeltDegraded) degradedSignals.push('gdelt');
   if (stage.sourceDateUnknown > 0) degradedSignals.push('source-published-time-partial');
-  if (stage.supplementedCount > 0) degradedSignals.push('google-news-date-supplement');
+  if (stage.sourceDateMismatchCount > 0) degradedSignals.push('source-published-time-mismatch');
+  if (stage.supplementedCount > 0) degradedSignals.push('publisher-enrichment-partial');
   if (stage.imageMissingCount > 0) degradedSignals.push('article-image-partial');
 
   if (stage.imageMissingCount > 0) {
@@ -482,10 +506,15 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
     candidates: allNews.length, trends: trendResult.rows.length, degradedSignals, ...stage,
     ranking: ranked.map(row => {
       const checked = checkedById.get(row.id) || row;
+      const googlePublishedTimestamp = Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0);
+      const sourcePublishedTimestamp = Number(checked.sourcePublishedTimestamp || 0);
       return {
         id: row.id, title: row.title, source: row.source, googleRank: row.googleRank,
-        googlePublishedTimestamp: Number(row.googlePublishedTimestamp || row.publishedTimestamp || 0),
-        sourcePublishedTimestamp: Number(checked.sourcePublishedTimestamp || 0),
+        googlePublishedTimestamp,
+        sourcePublishedTimestamp,
+        sourceGoogleDeltaMinutes: googlePublishedTimestamp && sourcePublishedTimestamp
+          ? Math.round((sourcePublishedTimestamp - googlePublishedTimestamp) / 60000)
+          : null,
         sourceDateMethod: checked.sourceDateMethod || '',
         publisherUrl: checked.publisherUrl || '',
         publisherPathHint: Boolean(checked.publisherPathHint),
@@ -505,8 +534,8 @@ async function buildRecommendations({ refresh = false, debug = false, id = reque
         gdeltIndependentSources: row.gdeltIndependentSources,
         gdeltScore: row.gdeltScore,
         totalScore: Number(Number(row.score || 0).toFixed(1)),
-        eligibleBySourceDate: isRecentTimestamp(checked.sourcePublishedTimestamp, { now: evaluatedAt }),
-        eligibleByGoogleDate: isRecentTimestamp(row.googlePublishedTimestamp || row.publishedTimestamp, { now: evaluatedAt })
+        eligibleBySourceDate: isRecentTimestamp(sourcePublishedTimestamp, { now: evaluatedAt }),
+        eligibleByGoogleDate: isRecentTimestamp(googlePublishedTimestamp, { now: evaluatedAt })
       };
     })
   };
@@ -542,6 +571,7 @@ export default async function handler(req, res) {
       items: payload.items.length,
       itemsReturned: payload.diagnostics.itemsReturned,
       verifiedCount: payload.diagnostics.verifiedCount,
+      enrichedCount: payload.diagnostics.enrichedCount,
       supplementedCount: payload.diagnostics.supplementedCount,
       imageCount: payload.diagnostics.imageCount,
       imageMissingCount: payload.diagnostics.imageMissingCount,
@@ -554,6 +584,10 @@ export default async function handler(req, res) {
       publisherHtmlConfirmedNonArticle: payload.diagnostics.publisherHtmlConfirmedNonArticle,
       sourceDateChecked: payload.diagnostics.sourceDateChecked,
       sourceDateRecent: payload.diagnostics.sourceDateRecent,
+      sourceDateMismatchCount: payload.diagnostics.sourceDateMismatchCount,
+      newestGoogleAgeMinutes: payload.diagnostics.newestGoogleAgeMinutes,
+      oldestGoogleAgeMinutes: payload.diagnostics.oldestGoogleAgeMinutes,
+      forcedRefresh: payload.diagnostics.forcedRefresh,
       outputCountUnbounded: payload.diagnostics.outputCountUnbounded,
       elapsedMs: payload.diagnostics.totalMs
     });

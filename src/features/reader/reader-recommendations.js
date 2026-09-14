@@ -1,7 +1,7 @@
 import { RECOMMENDATION_CACHE_SCHEMA } from '../../../shared/recommendation-config.js';
 
 const RECOMMENDATION_TIMEOUT_MS = 7000;
-const RECOMMENDATION_API_VERSION = '6';
+const RECOMMENDATION_API_VERSION = '7';
 export const RECOMMENDATION_SNAPSHOT_KEY = `pdv2:recommendationSnapshot:v${RECOMMENDATION_CACHE_SCHEMA}`;
 const HOME_RECOMMENDATION_SNAPSHOT_KEY = 'pdv2:recommendationSnapshot:v1';
 const SNAPSHOT_TTL_MS = 10 * 60 * 1000;
@@ -11,7 +11,7 @@ function safeParse(value) {
   try { return JSON.parse(value || 'null'); } catch { return null; }
 }
 function itemTimestamp(item = {}) {
-  for (const value of [item.effectivePublishedTimestamp, item.sourcePublishedTimestamp, item.publishedTimestamp]) {
+  for (const value of [item.googlePublishedTimestamp, item.publishedTimestamp, item.effectivePublishedTimestamp, item.sourcePublishedTimestamp]) {
     const num = Number(value || 0); if (Number.isFinite(num) && num > 0) return num;
   }
   const parsed = new Date(item.pubDate || 0).getTime();
@@ -24,8 +24,10 @@ function compactItem(item = {}) {
   return {
     id: item.id || '', title: item.title || '', link: item.link || '', publisherUrl: item.publisherUrl || '', sourceUrl: item.sourceUrl || '', description: String(item.description || '').slice(0, 900),
     source: item.source || '', feedName: item.feedName || '', image: item.image || '', pubDate: item.pubDate || '', recommendationDateSource: item.recommendationDateSource || '',
+    googlePublishedTimestamp: Number(item.googlePublishedTimestamp || item.publishedTimestamp || 0),
     publishedTimestamp: Number(item.publishedTimestamp || 0), sourcePublishedTimestamp: Number(item.sourcePublishedTimestamp || 0),
-    effectivePublishedTimestamp: Number(item.effectivePublishedTimestamp || 0), trendMatch: item.trendMatch || '', trendScore: Number(item.trendScore || 0),
+    effectivePublishedTimestamp: Number(item.effectivePublishedTimestamp || item.publishedTimestamp || 0), sourceDateMismatchMinutes: Number.isFinite(Number(item.sourceDateMismatchMinutes)) ? Number(item.sourceDateMismatchMinutes) : null,
+    trendMatch: item.trendMatch || '', trendScore: Number(item.trendScore || 0),
     importance: item.importance || '', importanceScore: Number(item.importanceScore || 0), gdeltIndependentSources: Number(item.gdeltIndependentSources || 0),
     totalScore: Number(item.totalScore || 0), _readerMode: 'news', _recommendationLabel: item._recommendationLabel || '重要・話題ニュース'
   };
@@ -162,13 +164,27 @@ async function mergeKnownImages(items) {
     });
   } catch { return items; }
 }
-async function fetchNetwork(onProgress) {
-  if (recommendationInflight) return recommendationInflight;
-  recommendationInflight = (async () => {
-    onProgress?.(18, 'Google Newsから候補を確認中');
+async function fetchNetwork(onProgress, { force = false } = {}) {
+  if (recommendationInflight) {
+    if (!force || recommendationInflight.force) return recommendationInflight.promise;
+    try { await recommendationInflight.promise; } catch {}
+  }
+
+  const promise = (async () => {
+    onProgress?.(18, force ? 'Google Newsを強制更新中' : 'Google Newsから候補を確認中');
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), RECOMMENDATION_TIMEOUT_MS);
     try {
-      const response = await fetch(`/api/recommendations?v=${RECOMMENDATION_API_VERSION}`, { method: 'GET', headers: { Accept: 'application/json' }, signal: controller.signal, cache: 'default' });
+      const params = new URLSearchParams({ v: RECOMMENDATION_API_VERSION });
+      const headers = { Accept: 'application/json' };
+      if (force) {
+        params.set('refresh', '1');
+        params.set('_', String(Date.now()));
+        headers['Cache-Control'] = 'no-cache';
+        headers.Pragma = 'no-cache';
+      }
+      const response = await fetch(`/api/recommendations?${params.toString()}`, {
+        method: 'GET', headers, signal: controller.signal, cache: force ? 'no-store' : 'default'
+      });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data?.fallbackRequired) {
         const error = new Error(data?.error || `おすすめ取得エラー (${response.status})`);
@@ -178,22 +194,35 @@ async function fetchNetwork(onProgress) {
       if (!items.length) { const error = new Error('新方式のおすすめ候補が空です'); error.stage = 'empty-response'; error.hardFallback = true; throw error; }
       items = items.map(item => ({ ...item, _readerMode: 'news', _recommendationLabel: item?._recommendationLabel || '重要・話題ニュース' }));
       items = await mergeKnownImages(items);
-      globalThis.__PDV2_LAST_RECOMMENDATION_META = { strategy: data?.strategy || 'google-news-trends-gdelt-source-date-article-image-v10', cached: Boolean(data?.cached), degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [], at: Date.now() };
+      globalThis.__PDV2_LAST_RECOMMENDATION_META = {
+        strategy: data?.strategy || 'google-news-trends-gdelt-source-date-article-image-v12',
+        cached: Boolean(data?.cached), forced: Boolean(force),
+        degradedSignals: Array.isArray(data?.degradedSignals) ? data.degradedSignals : [], at: Date.now()
+      };
       onProgress?.(88, data?.degradedSignals?.length ? 'Google Newsを重要度中心で評価済み' : '重要度・話題性・複数媒体を評価済み');
       writeRecommendationSnapshot(items);
       return items;
     } catch (error) {
       if (error?.name === 'AbortError') { const timeoutError = new Error('新方式のおすすめ取得がタイムアウトしました'); timeoutError.stage = 'client-timeout'; timeoutError.hardFallback = true; throw timeoutError; }
       throw error;
-    } finally { clearTimeout(timer); recommendationInflight = null; }
+    } finally { clearTimeout(timer); }
   })();
-  return recommendationInflight;
+
+  recommendationInflight = { promise, force: Boolean(force) };
+  try { return await promise; }
+  finally { if (recommendationInflight?.promise === promise) recommendationInflight = null; }
 }
 
 export async function loadCrossSourceRecommendations(onProgress) { return fetchNetwork(onProgress); }
 export async function refreshRecommendationSnapshot({ force = false } = {}) {
   const cached = readRecommendationSnapshot();
   if (!force && cached && !cached.stale) return cached;
-  try { const items = await fetchNetwork(); return readRecommendationSnapshot() || writeRecommendationSnapshot(items); }
-  catch (error) { if (cached) return { ...cached, stale: true, error: error?.message || String(error) }; throw error; }
+  const networkForce = Boolean(force || cached?.stale);
+  try {
+    const items = await fetchNetwork(undefined, { force: networkForce });
+    return readRecommendationSnapshot() || writeRecommendationSnapshot(items);
+  } catch (error) {
+    if (cached) return { ...cached, stale: true, refreshError: error?.message || String(error) };
+    throw error;
+  }
 }

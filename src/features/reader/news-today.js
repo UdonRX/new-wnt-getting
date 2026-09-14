@@ -21,7 +21,7 @@ function ensureStyles() {
   document.head.append(style);
 }
 function itemTimestamp(item = {}) {
-  for (const value of [item.effectivePublishedTimestamp, item.sourcePublishedTimestamp, item.publishedTimestamp]) {
+  for (const value of [item.googlePublishedTimestamp, item.publishedTimestamp, item.effectivePublishedTimestamp, item.sourcePublishedTimestamp]) {
     const n = Number(value || 0);
     if (Number.isFinite(n) && n > 0) return n;
   }
@@ -40,6 +40,8 @@ export async function renderNewsToday(root, { navigate, openId = '' }) {
   activeFocus?.destroy?.();
   activeFocus = null;
   let disposed = false;
+  let hiddenAt = 0;
+  let lastForcedAt = 0;
   let snapshot = readRecommendationSnapshot();
 
   const screen = el('section', { class: 'screen reader-screen news-today-screen reader-focus-open reader-article-open' });
@@ -83,26 +85,46 @@ export async function renderNewsToday(root, { navigate, openId = '' }) {
     const previousCount = snapshot?.items?.length || 0;
     const nextCount = next?.items?.length || 0;
     if (nextAt && nextAt === previousAt && nextCount === previousCount) return;
+
+    const currentIndex = Number(activeFocus?.getIndex?.() || 0);
     const currentId = String(activeFocus?.getItem?.()?.id || openId || '');
+    // If the user is still on the first card, a refresh should reveal the new first/latest article.
+    // Preserve position only after the user has intentionally moved away from the top,
+    // or when Home explicitly opened a specific article by id.
+    const preserveCurrent = Boolean(openId) || currentIndex > 0;
     snapshot = next;
-    // Fresh network data must replace a legacy/shorter cached list even while the reader is open.
-    // Preserve the currently viewed article when possible instead of jumping back to the first item.
-    show(snapshot, currentId);
+    show(snapshot, preserveCurrent ? currentId : '');
   };
   const onUpdated = event => applySnapshot(event.detail);
-  const refresh = () => refreshRecommendationSnapshot().then(applySnapshot).catch(() => {});
-  const onVisible = () => { if (document.visibilityState === 'visible' && !activeFocus) refresh(); };
+  const refresh = (force = false) => {
+    if (force) {
+      const now = Date.now();
+      if (now - lastForcedAt < 5000) return Promise.resolve(snapshot);
+      lastForcedAt = now;
+    }
+    return refreshRecommendationSnapshot({ force }).then(applySnapshot).catch(() => {});
+  };
+  const onVisibility = () => {
+    if (document.visibilityState !== 'visible') {
+      hiddenAt = Date.now();
+      return;
+    }
+    const awayMs = hiddenAt ? Date.now() - hiddenAt : 0;
+    hiddenAt = 0;
+    if (awayMs >= 60 * 1000) refresh(true);
+  };
   const onNavigate = () => {
     disposed = true;
     activeFocus?.destroy?.();
     activeFocus = null;
     window.removeEventListener('pdv2:recommendations-updated', onUpdated);
-    document.removeEventListener('visibilitychange', onVisible);
+    document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('pdv2:before-navigate', onNavigate);
   };
 
   window.addEventListener('pdv2:recommendations-updated', onUpdated);
-  document.addEventListener('visibilitychange', onVisible);
+  document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('pdv2:before-navigate', onNavigate, { once: true });
-  requestAnimationFrame(() => requestAnimationFrame(refresh));
+  // Show cache immediately, then always force one real network refresh on entry.
+  requestAnimationFrame(() => requestAnimationFrame(() => refresh(true)));
 }
