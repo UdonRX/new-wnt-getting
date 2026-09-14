@@ -1,5 +1,6 @@
 // PWA cache and App Shell.
-const CACHE_NAME='personal-dashboard-v2-structure1';
+const SW_BUILD='2210pwa1';
+const CACHE_NAME=`personal-dashboard-v2-${SW_BUILD}`;
 const INSTAGRAM_MEDIA_CACHE='pdv2-instagram-media-v1';
 const INSTAGRAM_MEDIA_PREFIX='/__pdv2_ig_media/';
 const INSTAGRAM_MEDIA_MAX_ENTRIES=360;
@@ -22,7 +23,28 @@ function canonicalRequest(request){try{const url=new URL(request.url);return new
 async function cacheStatic(cache,request,response){if(!response?.ok)return;try{await cache.put(request,response.clone());}catch{}const canonical=canonicalRequest(request);if(canonical){try{await cache.put(canonical,response.clone());}catch{}}}
 async function precacheIndividually(){const cache=await caches.open(CACHE_NAME);await Promise.allSettled(APP_SHELL.map(async path=>{try{const request=new Request(new URL(path,self.location.origin).href,{cache:'reload'});const response=await fetch(request);if(response?.ok)await cacheStatic(cache,request,response);}catch(error){console.warn('[sw precache skip]',path,error?.message||error);}}));}
 self.addEventListener('install',event=>event.waitUntil(precacheIndividually().finally(()=>self.skipWaiting())));
-self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.allSettled(keys.filter(key=>key.startsWith('personal-dashboard-')&&key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
+async function navigateExistingClientsAfterUpgrade(previousCaches){
+  if(!previousCaches.length)return;
+  const clients=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+  await Promise.allSettled(clients.map(async client=>{
+    try{
+      const url=new URL(client.url);
+      if(url.origin!==self.location.origin)return;
+      // Do not interrupt an OAuth callback carrying credentials/state in the URL.
+      if(url.searchParams.has('code')&&url.searchParams.has('state'))return;
+      url.searchParams.set('pdv2_sw_update',SW_BUILD);
+      url.searchParams.set('_pdv2',String(Date.now()));
+      await client.navigate(url.href);
+    }catch{}
+  }));
+}
+self.addEventListener('activate',event=>event.waitUntil((async()=>{
+  const keys=await caches.keys();
+  const previousCaches=keys.filter(key=>key.startsWith('personal-dashboard-')&&key!==CACHE_NAME);
+  await Promise.allSettled(previousCaches.map(key=>caches.delete(key)));
+  await self.clients.claim();
+  await navigateExistingClientsAfterUpgrade(previousCaches);
+})()));
 function instagramMediaCanonical(url){const canonical=new URL(url.pathname,self.location.origin);return new Request(canonical.href,{method:'GET'});}
 function allowedInstagramMediaSource(raw){try{const url=new URL(String(raw||''));const host=url.hostname.toLowerCase();return url.protocol==='https:'&&(host==='instagram.com'||host.endsWith('.instagram.com')||host.endsWith('.cdninstagram.com')||host.endsWith('.fbcdn.net'));}catch{return false;}}
 async function trimInstagramMediaCache(cache){try{const keys=await cache.keys();const extra=keys.length-INSTAGRAM_MEDIA_MAX_ENTRIES;if(extra>0)await Promise.allSettled(keys.slice(0,extra).map(key=>cache.delete(key)));}catch{}}

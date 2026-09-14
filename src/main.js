@@ -3,7 +3,12 @@ import { setScreen, applyTheme } from './app/router.js';
 import { state, update } from './app/store.js';
 import { installFinalTheme } from './app/final-theme.js';
 
-const BUILD='2210fix2';
+const BUILD='2210pwa1';
+const PWA_STATUS_URL='https://api.github.com/repos/UdonRX/new-wnt-getting/commits/main/status';
+const PWA_BASELINE_KEY='pdv2:pwaDeployedSha:v1';
+const PWA_PENDING_KEY='pdv2:pwaPendingSha:v1';
+const PWA_CHECK_INTERVAL_MS=5*60*1000;
+const PWA_RESUME_MIN_MS=60*1000;
 const root=document.getElementById('app-main');
 let renderSerial=0;
 const modulePromises=new Map();
@@ -13,6 +18,11 @@ let themeController=null;
 let finalUiPromise=null;
 let quickController=null;
 let serviceController=null;
+let swRegistrationPromise=null;
+let pwaCheckPromise=null;
+let pwaLastCheckAt=0;
+let pwaHiddenAt=0;
+let pwaReloading=false;
 
 const SCREEN={
   home:{path:'./features/home/home.js',exportName:'renderHome',label:'ホーム'},
@@ -127,6 +137,71 @@ function startBackgroundJobs(){
 }
 function scheduleFinalUiAfterPaint(){requestAnimationFrame(()=>requestAnimationFrame(()=>installFinalUiModules()));}
 
+function isStandalonePwa(){return Boolean(window.matchMedia?.('(display-mode: standalone)')?.matches||window.navigator.standalone===true);}
+function pwaRecoveryQuery(){const params=new URL(location.href).searchParams;return params.has('pdv2_app_update')||params.has('pdv2_sw_update');}
+function cleanPwaRecoveryQuery(){try{const url=new URL(location.href);url.searchParams.delete('pdv2_app_update');url.searchParams.delete('pdv2_sw_update');url.searchParams.delete('_pdv2');history.replaceState(history.state,'',`${url.pathname}${url.search}${url.hash}`);}catch{}}
+async function ensureServiceWorker(){
+  if(!('serviceWorker'in navigator))return null;
+  if(!swRegistrationPromise)swRegistrationPromise=navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});return registration;}).catch(error=>{swRegistrationPromise=null;console.warn('[sw]',error);return null;});
+  return swRegistrationPromise;
+}
+async function fetchPwaDeploymentStatus(){
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),4200);
+  try{
+    const response=await fetch(`${PWA_STATUS_URL}?_=${Date.now()}`,{cache:'no-store',signal:controller.signal,headers:{Accept:'application/vnd.github+json'}});
+    if(!response.ok)throw new Error(`GitHub status ${response.status}`);
+    const data=await response.json();
+    const statuses=(Array.isArray(data?.statuses)?data.statuses:[]).filter(row=>String(row?.context||'').toLowerCase()==='vercel').sort((a,b)=>Date.parse(b?.updated_at||0)-Date.parse(a?.updated_at||0));
+    const vercel=statuses[0]||null;
+    return{sha:String(data?.sha||''),ready:vercel?.state==='success',vercelState:String(vercel?.state||'missing')};
+  }finally{clearTimeout(timer);}
+}
+async function reloadForPwaUpdate(sha,reason){
+  if(pwaReloading||!sha)return;
+  pwaReloading=true;
+  try{sessionStorage.setItem(PWA_PENDING_KEY,sha);}catch{}
+  console.info('[pwa-recovery]',{phase:'reload',reason,currentBuild:BUILD,targetSha:sha,screen:state.screen});
+  try{const registration=await ensureServiceWorker();await registration?.update?.();registration?.waiting?.postMessage({type:'SKIP_WAITING'});}catch(error){console.warn('[pwa-recovery] sw update before reload',error?.message||error);}
+  const url=new URL(location.href);url.searchParams.set('pdv2_app_update',sha);url.searchParams.set('_pdv2',String(Date.now()));location.replace(url.href);
+}
+async function checkPwaDeployment({reason='periodic',force=false}={}){
+  if(!isStandalonePwa()||pwaReloading)return null;
+  const now=Date.now();
+  if(!force&&now-pwaLastCheckAt<PWA_CHECK_INTERVAL_MS)return null;
+  if(pwaCheckPromise)return pwaCheckPromise;
+  pwaLastCheckAt=now;
+  pwaCheckPromise=(async()=>{
+    try{const registration=await ensureServiceWorker();try{await registration?.update?.();}catch{}
+      const status=await fetchPwaDeploymentStatus();
+      const baseline=String(localStorage.getItem(PWA_BASELINE_KEY)||'');
+      const pending=String(sessionStorage.getItem(PWA_PENDING_KEY)||'');
+      globalThis.__PDV2_PWA_RECOVERY={at:Date.now(),reason,baseline,pending,...status};
+      console.info('[pwa-recovery]',{phase:'check',reason,baseline:baseline.slice(0,12),pending:pending.slice(0,12),remote:status.sha.slice(0,12),vercelState:status.vercelState});
+      if(!status.ready||!status.sha)return status;
+      if(pending===status.sha){localStorage.setItem(PWA_BASELINE_KEY,status.sha);sessionStorage.removeItem(PWA_PENDING_KEY);cleanPwaRecoveryQuery();return status;}
+      if(!baseline){localStorage.setItem(PWA_BASELINE_KEY,status.sha);cleanPwaRecoveryQuery();return status;}
+      if(baseline!==status.sha){await reloadForPwaUpdate(status.sha,reason);return status;}
+      cleanPwaRecoveryQuery();return status;
+    }catch(error){console.warn('[pwa-recovery]',{phase:'check-failed',reason,error:error?.message||String(error)});return null;}
+  })().finally(()=>{pwaCheckPromise=null;});
+  return pwaCheckPromise;
+}
+function installPwaAutoRecovery(){
+  if(!isStandalonePwa())return;
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){pwaHiddenAt=Date.now();return;}const awayMs=pwaHiddenAt?Date.now()-pwaHiddenAt:0;pwaHiddenAt=0;if(awayMs>=PWA_RESUME_MIN_MS)checkPwaDeployment({reason:'resume',force:true});},{passive:true});
+  window.addEventListener('pageshow',event=>{if(event.persisted)checkPwaDeployment({reason:'pageshow-restored',force:true});else checkPwaDeployment({reason:'pageshow'});},{passive:true});
+  window.addEventListener('online',()=>checkPwaDeployment({reason:'online',force:true}),{passive:true});
+  setTimeout(()=>checkPwaDeployment({reason:'boot',force:true}),900);
+}
+async function restoreAfterPwaUpdate(){
+  if(!pwaRecoveryQuery())return false;
+  const screen=SCREEN[state.screen]?state.screen:'home';
+  const options={source:'pwa-auto-update',refresh:true,forceModuleReload:true};
+  if(screen==='media')options.mediaMode=state.mediaMode||'youtube';
+  if(screen==='reader'){options.readerMode=state.readerMode||'news';options.paperTrack=state.paperTrack||'core';}
+  await navigate(screen,options);cleanPwaRecoveryQuery();return true;
+}
+
 async function resolveTwitchOAuthReturn(){try{const module=await loadModule('./features/twitch/twitch-chat.js');return await module.handleTwitchOAuthReturn?.();}catch(error){console.warn('[twitch-oauth]',error);return null;}}
 async function resolveTwitchPlaybackRecovery(){try{const module=await loadModule('./features/twitch/twitch-player.js');return module.getRecentTwitchPlayback?.()||null;}catch(error){console.warn('[twitch-recovery]',error);return null;}}
 
@@ -134,9 +209,9 @@ async function boot(){
   if(!root)throw new Error('#app-main が見つかりません');
   applyTheme();themeController=installFinalTheme({state});
   const twitchOAuth=await resolveTwitchOAuthReturn();
-  if(twitchOAuth?.handled){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});}else{const twitchRecovery=await resolveTwitchPlaybackRecovery();if(twitchRecovery){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});}else await navigate('home');}
+  if(twitchOAuth?.handled){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-oauth'});}else{const twitchRecovery=await resolveTwitchPlaybackRecovery();if(twitchRecovery){update('lastMediaMode','twitch');await navigate('media',{mediaMode:'twitch',source:'twitch-recovery'});}else if(!(await restoreAfterPwaUpdate()))await navigate('home');}
   scheduleFinalUiAfterPaint();startBackgroundJobs();
-  if('serviceWorker'in navigator)navigator.serviceWorker.register(`/sw.js?v=${BUILD}`,{updateViaCache:'none'}).then(async registration=>{try{await registration.update();}catch{}registration.waiting?.postMessage({type:'SKIP_WAITING'});}).catch(error=>console.warn('[sw]',error));
+  ensureServiceWorker();installPwaAutoRecovery();
   window.addEventListener('pdv2:settings-changed',()=>{try{applyTheme();themeController?.sync?.();}catch{}});window.addEventListener('pdv2:context-changed',()=>{try{applyTheme();themeController?.sync?.();}catch{}});window.addEventListener('popstate',()=>navigate(state.screen||'home'));
   document.documentElement.dataset.pdv2Booted='1';window.dispatchEvent(new CustomEvent('pdv2:booted',{detail:{build:BUILD}}));
 }
