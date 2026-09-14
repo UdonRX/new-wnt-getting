@@ -31,6 +31,10 @@ function itemTimestamp(item = {}) {
 function latestItems(snapshot) {
   return [...(snapshot?.items || [])].sort((a, b) => itemTimestamp(b) - itemTimestamp(a));
 }
+function ageMinutes(timestamp) {
+  const value = Number(timestamp || 0);
+  return Number.isFinite(value) && value > 0 ? Math.max(0, Math.round((Date.now() - value) / 60000)) : null;
+}
 function removeNewsBento(host) {
   host.querySelectorAll('.reader-story-grid').forEach(button => button.remove());
 }
@@ -82,16 +86,36 @@ export async function renderNewsToday(root, { navigate, openId = '' }) {
     if (disposed || !next?.items?.length) return;
     const previousAt = Number(snapshot?.at || 0);
     const nextAt = Number(next?.at || 0);
-    const previousCount = snapshot?.items?.length || 0;
-    const nextCount = next?.items?.length || 0;
+    const previousItems = latestItems(snapshot);
+    const nextItems = latestItems(next);
+    const previousCount = previousItems.length;
+    const nextCount = nextItems.length;
     if (nextAt && nextAt === previousAt && nextCount === previousCount) return;
 
     const currentIndex = Number(activeFocus?.getIndex?.() || 0);
     const currentId = String(activeFocus?.getItem?.()?.id || openId || '');
-    // If the user is still on the first card, a refresh should reveal the new first/latest article.
-    // Preserve position only after the user has intentionally moved away from the top,
-    // or when Home explicitly opened a specific article by id.
-    const preserveCurrent = Boolean(openId) || currentIndex > 0;
+    // Preserve the current article only when the user is actually away from the first card.
+    // A Home openId that pointed at the old first card must not pin the reader there after newer items arrive.
+    // Opening Home's second/third card starts at index > 0, so those explicit selections are still preserved.
+    const preserveCurrent = currentIndex > 0 && Boolean(currentId);
+    const diagnostics = {
+      previousAt,
+      nextAt,
+      previousCount,
+      nextCount,
+      previousNewestId: String(previousItems[0]?.id || ''),
+      nextNewestId: String(nextItems[0]?.id || ''),
+      previousNewestAgeMinutes: ageMinutes(itemTimestamp(previousItems[0])),
+      nextNewestAgeMinutes: ageMinutes(itemTimestamp(nextItems[0])),
+      currentIndex,
+      currentId,
+      requestedOpenId: String(openId || ''),
+      preserveCurrent,
+      movedToLatest: !preserveCurrent
+    };
+    console.info('[recommendations:client-apply]', diagnostics);
+    globalThis.__PDV2_LAST_RECOMMENDATION_CLIENT_APPLY = { ...diagnostics, at: Date.now() };
+
     snapshot = next;
     show(snapshot, preserveCurrent ? currentId : '');
   };
