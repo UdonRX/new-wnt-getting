@@ -239,8 +239,30 @@ function mountShortsPlayer({queue,index=0}={}) {
   let ytApi=null;
   let retryTimer=null;
   let holderSerial=0;
+  const source=queue.some(item=>item&&('discoveryScore'in item||'shortVerification'in item))?'discovery':'registered';
+  const diagnosticKey='pdv2:youtubeShortsDiagnostics:v2';
+  const sessionId=`${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;
+  const stateName=state=>({[-1]:'UNSTARTED',[0]:'ENDED',[1]:'PLAYING',[2]:'PAUSED',[3]:'BUFFERING',[5]:'CUED'})[Number(state)]||`STATE_${String(state)}`;
+  const diagnostic=(event,detail={})=>{
+    const entry={at:new Date().toISOString(),sessionId,source,event,...detail};
+    try{
+      const parsed=JSON.parse(localStorage.getItem(diagnosticKey)||'[]');
+      const rows=Array.isArray(parsed)?parsed:[];
+      rows.push(entry);
+      const kept=rows.slice(-100);
+      localStorage.setItem(diagnosticKey,JSON.stringify(kept));
+      window.__pdv2YouTubeShortsDiagnostics=kept;
+    }catch{}
+    try{window.dispatchEvent(new CustomEvent('pdv2:youtube-shorts-diagnostic',{detail:entry}))}catch{}
+    const method=/error|failed|fallback/i.test(String(event))?'warn':'info';
+    try{console[method]('[youtube shorts diagnostic]',entry)}catch{}
+  };
+  let watch={lastTime:0,lastDuration:0,nearEnd:false,nearEndAt:0,lastHeartbeatAt:0,queueEndLogged:false};
+  const resetWatch=()=>{watch={lastTime:0,lastDuration:0,nearEnd:false,nearEndAt:0,lastHeartbeatAt:0,queueEndLogged:false}};
+  const currentItem=()=>queue[current]||{};
   const overlayRoot=document.getElementById('overlay-root')||document.body;
   const overlay=el('section',{class:'youtube-shorts-player',role:'dialog','aria-modal':'true','aria-label':'YouTube Shortsプレーヤー'});
+  overlay.dataset.youtubeShortsSource=source;
   shortsOverlay=overlay;
   document.documentElement.classList.add('youtube-shorts-open','media-player-open');
   const close=el('button',{class:'youtube-shorts-close',type:'button','aria-label':'Shortsを閉じる',text:'✕',onclick:cleanupYouTubePlayer});
@@ -255,24 +277,71 @@ function mountShortsPlayer({queue,index=0}={}) {
   overlayRoot.append(overlay);
 
   const updateUi=()=>{
-    const item=queue[current]||{};
+    const item=currentItem();
     title.textContent=item.title||'Shorts'; channel.textContent=item.channelName||'YouTube';
     external.href=`https://www.youtube.com/shorts/${encodeURIComponent(item.videoId||'')}`;
     prev.disabled=current<=0; next.disabled=current>=queue.length-1;
   };
-  const advance=()=>{
-    if(advancing||current>=queue.length-1) return;
+  const advance=(reason='YT_ENDED')=>{
+    const item=currentItem();
+    if(current>=queue.length-1){
+      if(!watch.queueEndLogged){watch.queueEndLogged=true;diagnostic('queue-end',{reason,index:current,queueLength:queue.length,videoId:item.videoId||''})}
+      return false;
+    }
+    if(advancing||endedTimer)return false;
     advancing=true;
-    endedTimer=setTimeout(()=>{endedTimer=null;if(!loadIndex(current+1))advancing=false;},120);
+    diagnostic('advance-scheduled',{reason,fromIndex:current,toIndex:current+1,queueLength:queue.length,videoId:item.videoId||''});
+    endedTimer=setTimeout(()=>{
+      endedTimer=null;
+      if(!loadIndex(current+1,{reason:`auto:${reason}`}))advancing=false;
+    },120);
+    return true;
+  };
+  const startEndMonitor=YT=>{
+    if(endedMonitor)clearInterval(endedMonitor);
+    endedMonitor=setInterval(()=>{
+      if(myGeneration!==generation||!overlay.isConnected||!player)return;
+      try{
+        const now=Date.now();
+        const state=Number(player.getPlayerState?.());
+        const time=Math.max(0,Number(player.getCurrentTime?.()||0));
+        const duration=Math.max(0,Number(player.getDuration?.()||0));
+        const remaining=duration>0?Math.max(0,duration-time):null;
+        if(now-watch.lastHeartbeatAt>=8000){
+          watch.lastHeartbeatAt=now;
+          diagnostic('heartbeat',{index:current,queueLength:queue.length,videoId:currentItem().videoId||'',state:stateName(state),time:Number(time.toFixed(2)),duration:Number(duration.toFixed(2)),remaining:remaining===null?null:Number(remaining.toFixed(2)),iframeSrc:stage.querySelector('iframe')?.src||''});
+        }
+        if(state===YT.PlayerState.ENDED){advance('YT_ENDED');watch.lastTime=time;watch.lastDuration=duration;return}
+        if(duration>0&&time>0){
+          if(remaining<=0.75){
+            if(!watch.nearEnd){watch.nearEnd=true;watch.nearEndAt=now;diagnostic('near-end',{index:current,videoId:currentItem().videoId||'',state:stateName(state),time:Number(time.toFixed(2)),duration:Number(duration.toFixed(2)),remaining:Number(remaining.toFixed(2))})}
+          }else if(time<Math.max(1,duration-1.5)){
+            watch.nearEnd=false;watch.nearEndAt=0;
+          }
+          const loopReset=watch.nearEnd&&watch.lastDuration>0&&watch.lastTime>=Math.max(1,watch.lastDuration-0.9)&&time<=1.25&&(watch.lastTime-time)>1;
+          if(loopReset){
+            diagnostic('loop-reset-detected',{index:current,videoId:currentItem().videoId||'',previousTime:Number(watch.lastTime.toFixed(2)),time:Number(time.toFixed(2)),duration:Number(duration.toFixed(2)),state:stateName(state)});
+            advance('LOOP_RESET');
+          }else if(watch.nearEnd&&remaining<=0.12&&now-watch.nearEndAt>=150){
+            advance('TIME_END');
+          }else if(watch.nearEnd&&state===YT.PlayerState.PAUSED&&remaining<=0.4&&now-watch.nearEndAt>=500){
+            advance('END_PAUSED');
+          }
+        }
+        watch.lastTime=time;watch.lastDuration=duration;
+      }catch(error){diagnostic('monitor-error',{message:String(error?.message||error),index:current,videoId:currentItem().videoId||''})}
+    },300);
   };
   function retryInternalPlayer(YT,error,attempt){
     if(myGeneration!==generation||!overlay.isConnected)return;
+    diagnostic('player-retry',{attempt,videoId:currentItem().videoId||'',message:youtubeErrorMessage(error)});
     if(attempt<2){
       if(retryTimer)clearTimeout(retryTimer);
       retryTimer=setTimeout(()=>{retryTimer=null;startInternalPlayer(YT,attempt+1)},220*(attempt+1));
       return;
     }
     console.warn('[youtube shorts] internal player failed',youtubeErrorMessage(error));
+    diagnostic('player-failed',{attempt,videoId:currentItem().videoId||'',message:youtubeErrorMessage(error)});
     renderPlaybackError(stage,youtubeErrorMessage(error));
   }
   function startInternalPlayer(YT,attempt=0){
@@ -282,35 +351,61 @@ function mountShortsPlayer({queue,index=0}={}) {
     if(endedMonitor){clearInterval(endedMonitor);endedMonitor=null}
     try{player?.destroy?.()}catch{}
     player=null;
+    resetWatch();
     const holderId=`yt-v2160-shorts-${Date.now()}-${++holderSerial}`;
     stage.replaceChildren(el('div',{id:holderId,class:'youtube-shorts-embed'}));
+    diagnostic('player-create',{attempt,index:current,queueLength:queue.length,videoId:currentItem().videoId||'',holderId});
     try{
-      player=new YT.Player(holderId,{videoId:queue[current].videoId,playerVars:{autoplay:1,playsinline:1,rel:0,cc_load_policy:0,controls:1,modestbranding:1,origin:location.origin},events:{
-        onReady:event=>{try{event.target.getIframe?.().setAttribute('referrerpolicy','strict-origin-when-cross-origin');event.target.playVideo();}catch{} endedMonitor=setInterval(()=>{if(myGeneration!==generation||!overlay.isConnected)return;try{if(player?.getPlayerState?.()===YT.PlayerState.ENDED)advance();}catch{}},650);},
-        onStateChange:event=>{if(event.data===YT.PlayerState.PLAYING)advancing=false;if(event.data===YT.PlayerState.ENDED)advance();},
-        onError:event=>{const code=Number(event?.data||0);if(code===5||code===153)retryInternalPlayer(YT,event,attempt);else if(code===101||code===150)renderExternalPlaybackFallback(stage,queue[current],{shorts:true});else renderPlaybackError(stage,youtubeErrorMessage(event));}
+      player=new YT.Player(holderId,{videoId:currentItem().videoId,playerVars:{autoplay:1,playsinline:1,rel:0,cc_load_policy:0,controls:1,modestbranding:1,origin:location.origin},events:{
+        onReady:event=>{
+          let iframeSrc='';
+          try{const iframe=event.target.getIframe?.();iframe?.setAttribute('referrerpolicy','strict-origin-when-cross-origin');iframeSrc=iframe?.src||'';event.target.playVideo()}catch{}
+          diagnostic('ready',{index:current,queueLength:queue.length,videoId:currentItem().videoId||'',iframeSrc});
+          startEndMonitor(YT);
+        },
+        onStateChange:event=>{
+          const state=Number(event.data);
+          let time=0,duration=0;
+          try{time=Number(event.target?.getCurrentTime?.()||player?.getCurrentTime?.()||0);duration=Number(event.target?.getDuration?.()||player?.getDuration?.()||0)}catch{}
+          diagnostic('state',{index:current,videoId:currentItem().videoId||'',state:stateName(state),time:Number(time.toFixed(2)),duration:Number(duration.toFixed(2))});
+          if(state===YT.PlayerState.PLAYING&&!endedTimer)advancing=false;
+          if(state===YT.PlayerState.ENDED)advance('YT_ENDED_EVENT');
+        },
+        onError:event=>{
+          const code=Number(event?.data||0),message=youtubeErrorMessage(event);
+          diagnostic('player-error',{index:current,videoId:currentItem().videoId||'',code,message,iframeSrc:stage.querySelector('iframe')?.src||''});
+          if(code===5||code===153)retryInternalPlayer(YT,event,attempt);
+          else if(code===101||code===150){diagnostic('external-fallback',{index:current,videoId:currentItem().videoId||'',code});renderExternalPlaybackFallback(stage,currentItem(),{shorts:true})}
+          else renderPlaybackError(stage,message);
+        }
       }});
     }catch(error){retryInternalPlayer(YT,error,attempt)}
   }
-  const loadIndex=nextIndex=>{
+  const loadIndex=(nextIndex,{reason='manual'}={})=>{
     if(nextIndex<0||nextIndex>=queue.length) return false;
-    current=nextIndex; advancing=false; updateUi();
+    if(endedTimer){clearTimeout(endedTimer);endedTimer=null}
+    const fromIndex=current,fromVideoId=currentItem().videoId||'';
+    current=nextIndex; advancing=false; resetWatch(); updateUi();
     clearPlaybackNotice(stage);
-    const item=queue[current];
+    const item=currentItem();
+    diagnostic('load',{reason,fromIndex,toIndex:current,fromVideoId,videoId:item.videoId||'',queueLength:queue.length});
     if(player?.loadVideoById){
       try{player.loadVideoById({videoId:item.videoId,startSeconds:0});player.playVideo?.();}
-      catch(error){if(ytApi)startInternalPlayer(ytApi,0);else renderPlaybackError(stage,youtubeErrorMessage(error));}
+      catch(error){diagnostic('load-error',{reason,index:current,videoId:item.videoId||'',message:youtubeErrorMessage(error)});if(ytApi)startInternalPlayer(ytApi,0);else renderPlaybackError(stage,youtubeErrorMessage(error));}
     }else if(ytApi){
       startInternalPlayer(ytApi,0);
     }
     return true;
   };
-  prev.onclick=()=>loadIndex(current-1); next.onclick=()=>loadIndex(current+1); updateUi();
+  prev.onclick=()=>loadIndex(current-1,{reason:'manual-prev'});
+  next.onclick=()=>loadIndex(current+1,{reason:'manual-next'});
+  updateUi();
+  diagnostic('mount',{index:current,queueLength:queue.length,videoId:currentItem().videoId||'',sharedPlayer:'mountShortsPlayer'});
   ensureApi().then(YT=>{
     if(myGeneration!==generation||!overlay.isConnected) return;
     ytApi=YT;
     startInternalPlayer(YT,0);
-  }).catch(error=>renderPlaybackError(stage,youtubeErrorMessage(error)));
+  }).catch(error=>{diagnostic('api-error',{videoId:currentItem().videoId||'',message:youtubeErrorMessage(error)});renderPlaybackError(stage,youtubeErrorMessage(error))});
   return {close:cleanupYouTubePlayer};
 }
 
