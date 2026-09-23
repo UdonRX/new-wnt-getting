@@ -350,7 +350,7 @@ function bestImage(item) {
 
 function bestVideo(item) {
   const candidates = [...(item?.video_versions || [])].filter(entry => entry?.url);
-  candidates.sort((a, b) => (Number(b.width || 0) * Number(b.height || 0)) - (Number(a.width || 0) * Number(a.height || 0));
+  candidates.sort((a, b) => (Number(b.width || 0) * Number(b.height || 0)) - (Number(a.width || 0) * Number(a.height || 0)));
   return candidates[0]?.url || null;
 }
 
