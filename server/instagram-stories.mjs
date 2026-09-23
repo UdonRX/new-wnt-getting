@@ -472,6 +472,7 @@ async function fetchStoriesBatch(userIds, auth) {
       };
     };
     diagnosticLog('story_response_top_level_shape', safeShape(payload));
+    diagnosticLog('story_response_status_shape', safeShape(payload && typeof payload === 'object' ? payload.status : undefined));
     diagnosticLog('story_response_shape', {
       top_level_type: payload === null ? 'null' : Array.isArray(payload) ? 'array' : typeof payload,
       has_reels: Boolean(reels),
