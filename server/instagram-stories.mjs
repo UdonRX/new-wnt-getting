@@ -385,6 +385,80 @@ function storyContainer(payload, userId) {
   return null;
 }
 
+async function diagnoseInstagramAuth(auth) {
+  const startedAt = Date.now();
+  const endpoint = 'https://i.instagram.com/api/v1/accounts/current_user/?edit=true';
+  try {
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: storyHeaders(auth),
+      signal: AbortSignal.timeout(12_000)
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+
+    const statusValue = payload && typeof payload === 'object' ? payload.status : undefined;
+    const messageValue = payload && typeof payload === 'object' ? payload.message : undefined;
+    const logoutReasonValue = payload && typeof payload === 'object' ? payload.logout_reason : undefined;
+    const errorTypeValue = payload && typeof payload === 'object' ? payload.error_type : undefined;
+    const checkpointValue = payload && typeof payload === 'object' ? payload.checkpoint_url : undefined;
+    const challengeValue = payload && typeof payload === 'object' ? payload.challenge_required : undefined;
+    const user = payload && typeof payload === 'object' && payload.user && typeof payload.user === 'object'
+      ? payload.user
+      : null;
+
+    const safeText = value => typeof value === 'string'
+      ? value.replace(/[^A-Za-z0-9_.:/ -]/g, '').slice(0, 160)
+      : null;
+
+    diagnosticLog('auth_probe', {
+      status: response.status,
+      ok: response.ok,
+      elapsed_ms: Date.now() - startedAt,
+      content_type: (response.headers.get('content-type') || '').slice(0, 120),
+      response_text_length: text.length,
+      json_parsed: Boolean(payload),
+      top_level_keys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 30) : [],
+      status_value: safeText(statusValue),
+      message: safeText(messageValue),
+      error_type: safeText(errorTypeValue),
+      logout_reason_present: logoutReasonValue != null,
+      checkpoint_present: checkpointValue != null,
+      challenge_required: challengeValue === true,
+      authenticated_user_present: Boolean(user),
+      authenticated_user_id_present: Boolean(user?.pk || user?.id),
+      authenticated_user_username_present: Boolean(user?.username),
+      diagnosis: response.status === 401
+        ? 'authentication_http_401'
+        : response.status === 403
+          ? 'authentication_http_403'
+          : response.status === 429
+            ? 'authentication_rate_limited'
+            : response.ok && user
+              ? 'authenticated_session_accepted'
+              : /login_required|authentication|unauth/i.test(String(messageValue || '')) || logoutReasonValue != null
+                ? 'session_rejected_or_logged_out'
+                : response.ok
+                  ? 'session_probe_ambiguous'
+                  : 'authentication_probe_http_error'
+    });
+    return {
+      accepted: response.ok && Boolean(user),
+      rejected: /login_required|authentication|unauth/i.test(String(messageValue || '')) || logoutReasonValue != null
+    };
+  } catch (error) {
+    diagnosticLog('auth_probe_exception', {
+      category: 'network_or_fetch_exception',
+      error_name: String(error?.name || 'Error').slice(0, 100),
+      error_message: diagnosticErrorMessage(error),
+      elapsed_ms: Date.now() - startedAt
+    });
+    return { accepted: false, rejected: false };
+  }
+}
+
 async function fetchStoriesBatch(userIds, auth) {
   if (!userIds.length) return { ok: true, payload: { reels: {}, status: 'ok' }, status: 'SKIPPED', error: null };
 
@@ -561,9 +635,26 @@ async function buildStoryResponse(usernames) {
       throw error;
     }
 
+    const authProbe = await diagnoseInstagramAuth(auth);
     const embedResults = await mapLimit(usernames, EMBED_CONCURRENCY, fetchEmbedProfile);
     const resolvedProfiles = embedResults.filter(entry => entry.profile?.id).map(entry => entry.profile);
     const storyBatch = await fetchStoriesBatch(resolvedProfiles.map(profile => profile.id), auth);
+    diagnosticLog('final_diagnosis', {
+      auth_probe_accepted: authProbe.accepted,
+      auth_probe_rejected: authProbe.rejected,
+      story_api_ok: storyBatch.ok,
+      story_api_status: storyBatch.status,
+      story_api_story_count: storyBatch.payload?.reels
+        ? Object.values(storyBatch.payload.reels).reduce((sum, reel) => sum + (Array.isArray(reel?.items) ? reel.items.length : 0), 0)
+        : 0,
+      conclusion: authProbe.rejected
+        ? 'instagram_session_rejected'
+        : !authProbe.accepted
+          ? 'instagram_session_acceptance_uncertain'
+          : storyBatch.ok && storyBatch.payload?.reels
+            ? 'authenticated_but_story_endpoint_returned_no_usable_items_or_access_was_denied'
+            : 'story_endpoint_request_failed'
+    });
 
     const accounts = embedResults.map(entry => {
       const username = safeDiagnosticUsername(entry.username);
