@@ -404,6 +404,16 @@ async function fetchStoriesBatch(userIds, auth) {
     let payload = null;
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
     const elapsedMs = Date.now() - startedAt;
+    const responseContentType = response.headers.get('content-type') || '';
+    const statusValue = payload && typeof payload === 'object' ? payload.status : undefined;
+    const statusType = statusValue === null ? 'null' : Array.isArray(statusValue) ? 'array' : typeof statusValue;
+    const statusStringLength = typeof statusValue === 'string' ? statusValue.length : null;
+    const statusIsEmpty = typeof statusValue === 'string' ? statusValue.trim().length === 0 : null;
+    const statusCategory = typeof statusValue === 'string'
+      ? (/^(ok|success|done)$/i.test(statusValue.trim()) ? 'ok_like'
+        : /(error|fail|invalid|login|auth|block|challenge|checkpoint|rate|limit|forbidden|unauth)/i.test(statusValue) ? 'error_like'
+        : 'other_string')
+      : 'not_string';
     const containers = payload && typeof payload === 'object' ? (
       payload.reels && typeof payload.reels === 'object' && !Array.isArray(payload.reels)
         ? Object.values(payload.reels).filter(Boolean)
@@ -418,7 +428,14 @@ async function fetchStoriesBatch(userIds, auth) {
       status: response.status,
       ok: response.ok,
       elapsed_ms: elapsedMs,
-      story_count: storyCount
+      story_count: storyCount,
+      content_type: responseContentType.slice(0, 120),
+      response_text_length: text.length,
+      json_parsed: Boolean(payload),
+      status_type: statusType,
+      status_string_length: statusStringLength,
+      status_is_empty: statusIsEmpty,
+      status_category: statusCategory
     });
     const reels = payload && typeof payload === 'object' ? payload.reels : null;
     const reelsIsArray = Array.isArray(reels);
@@ -473,6 +490,25 @@ async function fetchStoriesBatch(userIds, auth) {
     };
     diagnosticLog('story_response_top_level_shape', safeShape(payload));
     diagnosticLog('story_response_status_shape', safeShape(payload && typeof payload === 'object' ? payload.status : undefined));
+    const requestedIdsPresentInReels = reelsIsObject
+      ? userIds.filter(userId => Object.prototype.hasOwnProperty.call(reels, userId)).length
+      : 0;
+    const responseDiagnosis = !response.ok
+      ? 'http_error'
+      : !payload
+        ? 'non_json_or_empty_body'
+        : reelsIsObject && reelsKeys.length === 0
+          ? (statusCategory === 'error_like' ? 'http_200_empty_reels_status_error_like' : 'http_200_empty_reels')
+          : storyCount === 0
+            ? 'http_200_reels_without_story_items'
+            : 'stories_present';
+    diagnosticLog('story_response_diagnosis', {
+      diagnosis: responseDiagnosis,
+      requested_user_id_count: userIds.length,
+      requested_ids_present_in_reels: requestedIdsPresentInReels,
+      reels_key_count: reelsKeys.length,
+      story_count: storyCount
+    });
     diagnosticLog('story_response_shape', {
       top_level_type: payload === null ? 'null' : Array.isArray(payload) ? 'array' : typeof payload,
       has_reels: Boolean(reels),
@@ -486,7 +522,8 @@ async function fetchStoriesBatch(userIds, auth) {
       reels_value_count: reelsValues.length,
       reels_value_shapes: safeReelsValueShapes,
       reels_key_classification: reelsKeyClassification,
-      requested_user_id_count: userIds.length
+      requested_user_id_count: userIds.length,
+      requested_ids_present_in_reels: requestedIdsPresentInReels
     });
     if (!response.ok) {
       diagnosticLog('story_api_error', {
