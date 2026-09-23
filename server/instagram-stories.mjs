@@ -32,6 +32,39 @@ function normalizeUsername(raw) {
   return username.toLowerCase();
 }
 
+function safeDiagnosticUsername(value) {
+  return String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 30);
+}
+
+function diagnosticLog(event, data = {}) {
+  console.log('[instagram-stories][diag]', event, data);
+}
+
+function diagnosticErrorMessage(error) {
+  const message = String(error?.message || '');
+  if (!message) return null;
+  return message
+    .replace(/(?:https?:\/\/|www\.)\S+/gi, '[redacted-url]')
+    .replace(/(?:cookie|authorization|x-csrftoken|x-ig-app-id|x-asbd-id)\s*[:=]\s*[^\s,;]+/gi, '[redacted-header]')
+    .slice(0, 300);
+}
+
+function storyApiErrorCategory(status) {
+  if (status === 401) return 'authentication';
+  if (status === 403) return 'forbidden_or_instagram_block';
+  if (status === 429) return 'rate_limited';
+  if (typeof status === 'number' && status >= 400 && status < 500) return 'client_error';
+  if (typeof status === 'number' && status >= 500) return 'instagram_server_error';
+  return 'unknown';
+}
+
+function storyApiResultName(status) {
+  if (status === 401) return 'story_api_401';
+  if (status === 403) return 'story_api_403';
+  if (status === 429) return 'story_api_429';
+  return 'story_api_error';
+}
+
 function parseBody(req) {
   const body = req?.body;
   if (!body) return {};
@@ -266,6 +299,16 @@ async function fetchEmbedProfile(username) {
     });
     const html = await response.text();
     const profile = response.ok ? extractProfile(html, username) : null;
+    diagnosticLog('embed_request', {
+      username: safeDiagnosticUsername(username),
+      status: response.status,
+      ok: response.ok,
+      html_length: html.length
+    });
+    diagnosticLog('user_id_extraction', {
+      username: safeDiagnosticUsername(username),
+      extracted: Boolean(profile?.id)
+    });
     return cacheSet(state.profileCache, username, {
       username,
       profile,
@@ -273,6 +316,12 @@ async function fetchEmbedProfile(username) {
       error: response.ok && !profile ? 'Embed HTMLからuser IDを抽出できませんでした。' : (!response.ok ? `Embed HTTP ${response.status}` : null)
     });
   } catch (error) {
+    diagnosticLog('embed_exception', {
+      username: safeDiagnosticUsername(username),
+      category: 'network_or_fetch_exception',
+      error_name: String(error?.name || 'Error').slice(0, 100),
+      error_message: diagnosticErrorMessage(error)
+    });
     return { username, profile: null, status: 'ERROR', error: error?.message || String(error) };
   }
 }
@@ -301,7 +350,7 @@ function bestImage(item) {
 
 function bestVideo(item) {
   const candidates = [...(item?.video_versions || [])].filter(entry => entry?.url);
-  candidates.sort((a, b) => (Number(b.width || 0) * Number(b.height || 0)) - (Number(a.width || 0) * Number(a.height || 0)));
+  candidates.sort((a, b) => (Number(b.width || 0) * Number(b.height || 0)) - (Number(a.width || 0) * Number(a.height || 0));
   return candidates[0]?.url || null;
 }
 
@@ -340,6 +389,11 @@ async function fetchStoriesBatch(userIds, auth) {
   if (!userIds.length) return { ok: true, payload: {}, status: 'SKIPPED', error: null };
   const endpoint = new URL('https://www.instagram.com/api/v1/feed/reels_media/');
   userIds.forEach(userId => endpoint.searchParams.append('reel_ids', userId));
+  const startedAt = Date.now();
+  diagnosticLog('story_api_request_start', {
+    user_count: userIds.length,
+    has_user_ids: userIds.length > 0
+  });
   try {
     const response = await fetch(endpoint, {
       redirect: 'follow',
@@ -349,6 +403,37 @@ async function fetchStoriesBatch(userIds, auth) {
     const text = await response.text();
     let payload = null;
     try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+    const elapsedMs = Date.now() - startedAt;
+    const containers = payload && typeof payload === 'object' ? (
+      payload.reels && typeof payload.reels === 'object' && !Array.isArray(payload.reels)
+        ? Object.values(payload.reels).filter(Boolean)
+        : Array.isArray(payload.reels_media)
+          ? payload.reels_media
+          : Array.isArray(payload.reels)
+            ? payload.reels
+            : []
+    ) : [];
+    const storyCount = containers.reduce((total, container) => total + (Array.isArray(container?.items) ? container.items.length : 0), 0);
+    diagnosticLog('story_api_response', {
+      status: response.status,
+      ok: response.ok,
+      elapsed_ms: elapsedMs,
+      story_count: storyCount
+    });
+    diagnosticLog('story_response_shape', {
+      top_level_type: payload === null ? 'null' : Array.isArray(payload) ? 'array' : typeof payload,
+      has_reels: Boolean(payload && typeof payload === 'object' && payload.reels),
+      has_reels_media: Boolean(payload && typeof payload === 'object' && payload.reels_media),
+      has_items: containers.some(container => Array.isArray(container?.items)),
+      container_count: containers.length,
+      story_count: storyCount
+    });
+    if (!response.ok) {
+      diagnosticLog('story_api_error', {
+        status: response.status,
+        category: storyApiErrorCategory(response.status)
+      });
+    }
     return {
       ok: Boolean(response.ok && payload),
       payload,
@@ -356,6 +441,12 @@ async function fetchStoriesBatch(userIds, auth) {
       error: response.ok && payload ? null : `Story API HTTP ${response.status}`
     };
   } catch (error) {
+    diagnosticLog('story_api_exception', {
+      category: 'network_or_fetch_exception',
+      error_name: String(error?.name || 'Error').slice(0, 100),
+      error_message: diagnosticErrorMessage(error),
+      elapsed_ms: Date.now() - startedAt
+    });
     return { ok: false, payload: null, status: 'ERROR', error: error?.message || String(error) };
   }
 }
@@ -364,10 +455,18 @@ async function buildStoryResponse(usernames) {
   const cacheKey = usernames.join(',');
   const cached = cacheGet(state.storyCache, cacheKey, STORY_CACHE_MS);
   if (cached) return { ...cached, cached: true };
+
   if (state.inflight.has(cacheKey)) return state.inflight.get(cacheKey);
 
   const task = (async () => {
     const auth = authConfig();
+    diagnosticLog('env_presence', {
+      INSTAGRAM_DS_USER_ID: Boolean(String(process.env.INSTAGRAM_DS_USER_ID || '').trim()),
+      STORY_DIAGNOSTIC_KEY: Boolean(String(process.env.STORY_DIAGNOSTIC_KEY || '').trim()),
+      INSTAGRAM_SESSIONID: Boolean(String(process.env.INSTAGRAM_SESSIONID || '').trim()),
+      INSTAGRAM_CSRFTOKEN: Boolean(String(process.env.INSTAGRAM_CSRFTOKEN || '').trim()),
+      INSTAGRAM_RUR: Boolean(String(process.env.INSTAGRAM_RUR || '').trim())
+    });
     if (!auth.sessionid) {
       const error = new Error('Instagram Story認証が未設定です。');
       error.code = 'AUTH_MISSING';
@@ -379,7 +478,12 @@ async function buildStoryResponse(usernames) {
     const storyBatch = await fetchStoriesBatch(resolvedProfiles.map(profile => profile.id), auth);
 
     const accounts = embedResults.map(entry => {
+      const username = safeDiagnosticUsername(entry.username);
       if (!entry.profile?.id) {
+        diagnosticLog('result', {
+          username,
+          result: 'user_id_extraction_failed'
+        });
         return {
           username: entry.username,
           status: 'id_unresolved',
@@ -392,6 +496,10 @@ async function buildStoryResponse(usernames) {
       }
 
       if (!storyBatch.ok) {
+        diagnosticLog('result', {
+          username,
+          result: storyApiResultName(storyBatch.status)
+        });
         return {
           username: entry.username,
           status: 'story_error',
@@ -406,6 +514,11 @@ async function buildStoryResponse(usernames) {
       const container = storyContainer(storyBatch.payload, entry.profile.id);
       const items = Array.isArray(container?.items) ? container.items : [];
       const stories = items.slice(0, 50).map(mapStory).filter(story => story.id && (story.imageUrl || story.videoUrl));
+      diagnosticLog('result', {
+        username,
+        result: 'success',
+        story_count: stories.length
+      });
       return {
         username: entry.username,
         status: 'ok',
