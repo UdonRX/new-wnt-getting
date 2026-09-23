@@ -419,10 +419,15 @@ async function fetchStoriesBatch(userIds, auth) {
         try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
 
         const elapsedMs = Date.now() - requestStartedAt;
-        const items = payload && typeof payload === 'object' && Array.isArray(payload.items)
-          ? payload.items
-          : [];
+        // /feed/user/{id}/story/ returns stories under payload.reel.items.
+        // A HTTP 200 response can still contain {status:"fail", message:"login_required"}.
+        const reel = payload && typeof payload === 'object' && payload.reel && typeof payload.reel === 'object'
+          ? payload.reel
+          : null;
+        const items = Array.isArray(reel?.items) ? reel.items : [];
         const statusValue = payload && typeof payload === 'object' ? payload.status : undefined;
+        const messageValue = payload && typeof payload === 'object' ? payload.message : undefined;
+        const logoutReasonValue = payload && typeof payload === 'object' ? payload.logout_reason : undefined;
         const statusType = statusValue === null ? 'null' : Array.isArray(statusValue) ? 'array' : typeof statusValue;
         const statusStringLength = typeof statusValue === 'string' ? statusValue.length : null;
         const statusIsEmpty = typeof statusValue === 'string' ? statusValue.trim().length === 0 : null;
@@ -431,6 +436,16 @@ async function fetchStoriesBatch(userIds, auth) {
             : /(error|fail|invalid|login|auth|block|challenge|checkpoint|rate|limit|forbidden|unauth)/i.test(statusValue) ? 'error_like'
             : 'other_string')
           : 'not_string';
+        const apiMessage = typeof messageValue === 'string'
+          ? messageValue.replace(/[^A-Za-z0-9_. -]/g, '').slice(0, 120)
+          : null;
+        const apiErrorCategory = /(login_required|auth|unauth|session|csrf)/i.test(apiMessage || '') || logoutReasonValue != null
+          ? 'authentication'
+          : /(challenge|checkpoint|blocked|spam|rate)/i.test(apiMessage || '')
+            ? 'instagram_access_restriction'
+            : statusCategory === 'error_like'
+              ? 'instagram_api_error'
+              : null;
 
         diagnosticLog('story_api_user_response', {
           user_id_present: Boolean(userId),
@@ -440,15 +455,21 @@ async function fetchStoriesBatch(userIds, auth) {
           content_type: (response.headers.get('content-type') || '').slice(0, 120),
           response_text_length: text.length,
           json_parsed: Boolean(payload),
+          top_level_keys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 20) : [],
           status_type: statusType,
           status_string_length: statusStringLength,
           status_is_empty: statusIsEmpty,
           status_category: statusCategory,
+          api_message: apiMessage,
+          logout_reason_present: logoutReasonValue != null,
+          api_error_category: apiErrorCategory,
+          has_reel: Boolean(reel),
+          reel_key_count: reel && typeof reel === 'object' ? Object.keys(reel).length : 0,
           item_count: items.length,
-          has_items: Array.isArray(payload?.items)
+          has_items: Array.isArray(reel?.items)
         });
 
-        if (response.ok && payload) {
+        if (response.ok && payload && !apiErrorCategory && reel) {
           reels[String(userId)] = {
             ...(payload && typeof payload === 'object' ? payload : {}),
             id: Number(userId) || userId,
@@ -460,7 +481,9 @@ async function fetchStoriesBatch(userIds, auth) {
           failureCount += 1;
           diagnosticLog('story_api_user_error', {
             status: response.status,
-            category: storyApiErrorCategory(response.status)
+            category: apiErrorCategory || storyApiErrorCategory(response.status),
+            api_message: apiMessage,
+            logout_reason_present: logoutReasonValue != null
           });
         }
       } catch (error) {
@@ -482,15 +505,16 @@ async function fetchStoriesBatch(userIds, auth) {
       story_count: totalStoryCount,
       successful_user_count: successCount,
       failed_user_count: failureCount,
-      acquisition_mode: 'GET /api/v1/feed/user/{user_id}/story/'
+      acquisition_mode: 'GET /api/v1/feed/user/{user_id}/story/',
+      response_shape: 'reel.items'
     });
 
     diagnosticLog('story_response_diagnosis', {
       diagnosis: totalStoryCount > 0
         ? 'user_story_endpoint_returned_items'
-        : successCount > 0
-          ? 'user_story_endpoint_returned_zero_items'
-          : 'user_story_endpoint_failed',
+        : failureCount > 0
+          ? 'user_story_endpoint_returned_api_error'
+          : 'user_story_endpoint_returned_zero_items',
       requested_user_id_count: userIds.length,
       successful_user_count: successCount,
       failed_user_count: failureCount,
