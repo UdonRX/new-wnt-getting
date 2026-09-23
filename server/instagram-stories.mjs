@@ -420,13 +420,43 @@ async function fetchStoriesBatch(userIds, auth) {
       elapsed_ms: elapsedMs,
       story_count: storyCount
     });
+    const reels = payload && typeof payload === 'object' ? payload.reels : null;
+    const reelsIsArray = Array.isArray(reels);
+    const reelsIsObject = Boolean(reels && typeof reels === 'object' && !reelsIsArray);
+    const reelsKeys = reelsIsObject ? Object.keys(reels) : [];
+    const reelsValues = reelsIsObject ? reelsKeys.map(key => reels[key]).filter(Boolean) : (reelsIsArray ? reels.filter(Boolean) : []);
+    const safeReelsValueShapes = reelsValues.slice(0, 20).map(value => ({
+      type: Array.isArray(value) ? 'array' : typeof value,
+      is_null: value === null,
+      is_array: Array.isArray(value),
+      key_count: value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).length : null,
+      has_items: Boolean(value && typeof value === 'object' && Array.isArray(value.items)),
+      items_count: value && typeof value === 'object' && Array.isArray(value.items) ? value.items.length : 0,
+      has_user: Boolean(value && typeof value === 'object' && value.user),
+      has_id: Boolean(value && typeof value === 'object' && (value.id !== undefined || value.pk !== undefined)),
+      nested_keys: value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.keys(value).filter(key => ['items', 'user', 'id', 'pk', 'latest_reel_media', 'expiring_at'].includes(key))
+        : []
+    }));
+    const reelsKeyClassification = reelsIsObject ? reelsKeys.slice(0, 20).map(key => ({
+      length: key.length,
+      numeric: /^\\d+$/.test(key),
+      safe_prefix: key.replace(/\\D/g, '').slice(0, 3).length > 0 ? 'numeric' : 'non_numeric'
+    })) : [];
     diagnosticLog('story_response_shape', {
       top_level_type: payload === null ? 'null' : Array.isArray(payload) ? 'array' : typeof payload,
-      has_reels: Boolean(payload && typeof payload === 'object' && payload.reels),
+      has_reels: Boolean(reels),
       has_reels_media: Boolean(payload && typeof payload === 'object' && payload.reels_media),
       has_items: containers.some(container => Array.isArray(container?.items)),
       container_count: containers.length,
-      story_count: storyCount
+      story_count: storyCount,
+      reels_type: reels === null ? 'null' : reelsIsArray ? 'array' : typeof reels,
+      reels_is_object: reelsIsObject,
+      reels_key_count: reelsKeys.length,
+      reels_value_count: reelsValues.length,
+      reels_value_shapes: safeReelsValueShapes,
+      reels_key_classification: reelsKeyClassification,
+      requested_user_id_count: userIds.length
     });
     if (!response.ok) {
       diagnosticLog('story_api_error', {
