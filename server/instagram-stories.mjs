@@ -443,6 +443,35 @@ async function fetchStoriesBatch(userIds, auth) {
       numeric: /^\\d+$/.test(key),
       safe_prefix: key.replace(/\\D/g, '').slice(0, 3).length > 0 ? 'numeric' : 'non_numeric'
     })) : [];
+    const safeShape = (value, depth = 0) => {
+      if (depth > 4) return { type: 'depth_limit' };
+      if (value === null) return { type: 'null' };
+      if (Array.isArray(value)) {
+        const sample = value.slice(0, 20);
+        return {
+          type: 'array',
+          count: value.length,
+          element_types: [...new Set(sample.map(item => item === null ? 'null' : Array.isArray(item) ? 'array' : typeof item))],
+          object_element_count: sample.filter(item => item && typeof item === 'object' && !Array.isArray(item)).length,
+          array_element_count: sample.filter(Array.isArray).length,
+          nested: sample.some(item => item && typeof item === 'object' && !Array.isArray(item))
+            ? safeShape(sample.find(item => item && typeof item === 'object' && !Array.isArray(item)), depth + 1)
+            : null
+        };
+      }
+      if (typeof value !== 'object') return { type: typeof value };
+      const keys = Object.keys(value);
+      return {
+        type: 'object',
+        key_count: keys.length,
+        keys: keys.slice(0, 100),
+        key_shapes: keys.slice(0, 100).map(key => ({
+          key,
+          shape: safeShape(value[key], depth + 1)
+        }))
+      };
+    };
+    diagnosticLog('story_response_top_level_shape', safeShape(payload));
     diagnosticLog('story_response_shape', {
       top_level_type: payload === null ? 'null' : Array.isArray(payload) ? 'array' : typeof payload,
       has_reels: Boolean(reels),
