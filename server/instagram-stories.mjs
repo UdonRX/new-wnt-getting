@@ -386,156 +386,123 @@ function storyContainer(payload, userId) {
 }
 
 async function fetchStoriesBatch(userIds, auth) {
-  if (!userIds.length) return { ok: true, payload: {}, status: 'SKIPPED', error: null };
-  const endpoint = new URL('https://www.instagram.com/api/v1/feed/reels_media/');
-  userIds.forEach(userId => endpoint.searchParams.append('reel_ids', userId));
+  if (!userIds.length) return { ok: true, payload: { reels: {}, status: 'ok' }, status: 'SKIPPED', error: null };
+
   const startedAt = Date.now();
   diagnosticLog('story_api_request_start', {
     user_count: userIds.length,
-    has_user_ids: userIds.length > 0
+    has_user_ids: userIds.length > 0,
+    method: 'GET',
+    endpoint_mode: 'per_user_story'
   });
+
+  const reels = {};
+  let successCount = 0;
+  let failureCount = 0;
+  let totalStoryCount = 0;
+
   try {
-    const response = await fetch(endpoint, {
-      redirect: 'follow',
-      headers: storyHeaders(auth),
-      signal: AbortSignal.timeout(12_000)
-    });
-    const text = await response.text();
-    let payload = null;
-    try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
-    const elapsedMs = Date.now() - startedAt;
-    const responseContentType = response.headers.get('content-type') || '';
-    const statusValue = payload && typeof payload === 'object' ? payload.status : undefined;
-    const statusType = statusValue === null ? 'null' : Array.isArray(statusValue) ? 'array' : typeof statusValue;
-    const statusStringLength = typeof statusValue === 'string' ? statusValue.length : null;
-    const statusIsEmpty = typeof statusValue === 'string' ? statusValue.trim().length === 0 : null;
-    const statusCategory = typeof statusValue === 'string'
-      ? (/^(ok|success|done)$/i.test(statusValue.trim()) ? 'ok_like'
-        : /(error|fail|invalid|login|auth|block|challenge|checkpoint|rate|limit|forbidden|unauth)/i.test(statusValue) ? 'error_like'
-        : 'other_string')
-      : 'not_string';
-    const containers = payload && typeof payload === 'object' ? (
-      payload.reels && typeof payload.reels === 'object' && !Array.isArray(payload.reels)
-        ? Object.values(payload.reels).filter(Boolean)
-        : Array.isArray(payload.reels_media)
-          ? payload.reels_media
-          : Array.isArray(payload.reels)
-            ? payload.reels
-            : []
-    ) : [];
-    const storyCount = containers.reduce((total, container) => total + (Array.isArray(container?.items) ? container.items.length : 0), 0);
-    diagnosticLog('story_api_response', {
-      status: response.status,
-      ok: response.ok,
-      elapsed_ms: elapsedMs,
-      story_count: storyCount,
-      content_type: responseContentType.slice(0, 120),
-      response_text_length: text.length,
-      json_parsed: Boolean(payload),
-      status_type: statusType,
-      status_string_length: statusStringLength,
-      status_is_empty: statusIsEmpty,
-      status_category: statusCategory
-    });
-    const reels = payload && typeof payload === 'object' ? payload.reels : null;
-    const reelsIsArray = Array.isArray(reels);
-    const reelsIsObject = Boolean(reels && typeof reels === 'object' && !reelsIsArray);
-    const reelsKeys = reelsIsObject ? Object.keys(reels) : [];
-    const reelsValues = reelsIsObject ? reelsKeys.map(key => reels[key]).filter(Boolean) : (reelsIsArray ? reels.filter(Boolean) : []);
-    const safeReelsValueShapes = reelsValues.slice(0, 20).map(value => ({
-      type: Array.isArray(value) ? 'array' : typeof value,
-      is_null: value === null,
-      is_array: Array.isArray(value),
-      key_count: value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value).length : null,
-      has_items: Boolean(value && typeof value === 'object' && Array.isArray(value.items)),
-      items_count: value && typeof value === 'object' && Array.isArray(value.items) ? value.items.length : 0,
-      has_user: Boolean(value && typeof value === 'object' && value.user),
-      has_id: Boolean(value && typeof value === 'object' && (value.id !== undefined || value.pk !== undefined)),
-      nested_keys: value && typeof value === 'object' && !Array.isArray(value)
-        ? Object.keys(value).filter(key => ['items', 'user', 'id', 'pk', 'latest_reel_media', 'expiring_at'].includes(key))
-        : []
-    }));
-    const reelsKeyClassification = reelsIsObject ? reelsKeys.slice(0, 20).map(key => ({
-      length: key.length,
-      numeric: /^\\d+$/.test(key),
-      safe_prefix: key.replace(/\\D/g, '').slice(0, 3).length > 0 ? 'numeric' : 'non_numeric'
-    })) : [];
-    const safeShape = (value, depth = 0) => {
-      if (depth > 4) return { type: 'depth_limit' };
-      if (value === null) return { type: 'null' };
-      if (Array.isArray(value)) {
-        const sample = value.slice(0, 20);
-        return {
-          type: 'array',
-          count: value.length,
-          element_types: [...new Set(sample.map(item => item === null ? 'null' : Array.isArray(item) ? 'array' : typeof item))],
-          object_element_count: sample.filter(item => item && typeof item === 'object' && !Array.isArray(item)).length,
-          array_element_count: sample.filter(Array.isArray).length,
-          nested: sample.some(item => item && typeof item === 'object' && !Array.isArray(item))
-            ? safeShape(sample.find(item => item && typeof item === 'object' && !Array.isArray(item)), depth + 1)
-            : null
-        };
+    for (const userId of userIds) {
+      const endpoint = new URL(`https://i.instagram.com/api/v1/feed/user/${encodeURIComponent(userId)}/story/`);
+      const requestStartedAt = Date.now();
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'GET',
+          redirect: 'follow',
+          headers: storyHeaders(auth),
+          signal: AbortSignal.timeout(12_000)
+        });
+        const text = await response.text();
+
+        let payload = null;
+        try { payload = text ? JSON.parse(text) : {}; } catch { payload = null; }
+
+        const elapsedMs = Date.now() - requestStartedAt;
+        const items = payload && typeof payload === 'object' && Array.isArray(payload.items)
+          ? payload.items
+          : [];
+        const statusValue = payload && typeof payload === 'object' ? payload.status : undefined;
+        const statusType = statusValue === null ? 'null' : Array.isArray(statusValue) ? 'array' : typeof statusValue;
+        const statusStringLength = typeof statusValue === 'string' ? statusValue.length : null;
+        const statusIsEmpty = typeof statusValue === 'string' ? statusValue.trim().length === 0 : null;
+        const statusCategory = typeof statusValue === 'string'
+          ? (/^(ok|success|done)$/i.test(statusValue.trim()) ? 'ok_like'
+            : /(error|fail|invalid|login|auth|block|challenge|checkpoint|rate|limit|forbidden|unauth)/i.test(statusValue) ? 'error_like'
+            : 'other_string')
+          : 'not_string';
+
+        diagnosticLog('story_api_user_response', {
+          user_id_present: Boolean(userId),
+          status: response.status,
+          ok: response.ok,
+          elapsed_ms: elapsedMs,
+          content_type: (response.headers.get('content-type') || '').slice(0, 120),
+          response_text_length: text.length,
+          json_parsed: Boolean(payload),
+          status_type: statusType,
+          status_string_length: statusStringLength,
+          status_is_empty: statusIsEmpty,
+          status_category: statusCategory,
+          item_count: items.length,
+          has_items: Array.isArray(payload?.items)
+        });
+
+        if (response.ok && payload) {
+          reels[String(userId)] = {
+            ...(payload && typeof payload === 'object' ? payload : {}),
+            id: Number(userId) || userId,
+            items
+          };
+          successCount += 1;
+          totalStoryCount += items.length;
+        } else {
+          failureCount += 1;
+          diagnosticLog('story_api_user_error', {
+            status: response.status,
+            category: storyApiErrorCategory(response.status)
+          });
+        }
+      } catch (error) {
+        failureCount += 1;
+        diagnosticLog('story_api_user_exception', {
+          category: 'network_or_fetch_exception',
+          error_name: String(error?.name || 'Error').slice(0, 100),
+          error_message: diagnosticErrorMessage(error),
+          elapsed_ms: Date.now() - requestStartedAt
+        });
       }
-      if (typeof value !== 'object') return { type: typeof value };
-      const keys = Object.keys(value);
-      return {
-        type: 'object',
-        key_count: keys.length,
-        keys: keys.slice(0, 100),
-        key_shapes: keys.slice(0, 100).map(key => ({
-          key,
-          shape: safeShape(value[key], depth + 1)
-        }))
-      };
-    };
-    diagnosticLog('story_response_top_level_shape', safeShape(payload));
-    diagnosticLog('story_response_status_shape', safeShape(payload && typeof payload === 'object' ? payload.status : undefined));
-    const requestedIdsPresentInReels = reelsIsObject
-      ? userIds.filter(userId => Object.prototype.hasOwnProperty.call(reels, userId)).length
-      : 0;
-    const responseDiagnosis = !response.ok
-      ? 'http_error'
-      : !payload
-        ? 'non_json_or_empty_body'
-        : reelsIsObject && reelsKeys.length === 0
-          ? (statusCategory === 'error_like' ? 'http_200_empty_reels_status_error_like' : 'http_200_empty_reels')
-          : storyCount === 0
-            ? 'http_200_reels_without_story_items'
-            : 'stories_present';
-    diagnosticLog('story_response_diagnosis', {
-      diagnosis: responseDiagnosis,
-      requested_user_id_count: userIds.length,
-      requested_ids_present_in_reels: requestedIdsPresentInReels,
-      reels_key_count: reelsKeys.length,
-      story_count: storyCount
-    });
-    diagnosticLog('story_response_shape', {
-      top_level_type: payload === null ? 'null' : Array.isArray(payload) ? 'array' : typeof payload,
-      has_reels: Boolean(reels),
-      has_reels_media: Boolean(payload && typeof payload === 'object' && payload.reels_media),
-      has_items: containers.some(container => Array.isArray(container?.items)),
-      container_count: containers.length,
-      story_count: storyCount,
-      reels_type: reels === null ? 'null' : reelsIsArray ? 'array' : typeof reels,
-      reels_is_object: reelsIsObject,
-      reels_key_count: reelsKeys.length,
-      reels_value_count: reelsValues.length,
-      reels_value_shapes: safeReelsValueShapes,
-      reels_key_classification: reelsKeyClassification,
-      requested_user_id_count: userIds.length,
-      requested_ids_present_in_reels: requestedIdsPresentInReels
-    });
-    if (!response.ok) {
-      diagnosticLog('story_api_error', {
-        status: response.status,
-        category: storyApiErrorCategory(response.status)
-      });
     }
+
+    const elapsedMs = Date.now() - startedAt;
+    diagnosticLog('story_api_response', {
+      status: failureCount > 0 && successCount === 0 ? 'ERROR' : 200,
+      ok: successCount > 0,
+      elapsed_ms: elapsedMs,
+      story_count: totalStoryCount,
+      successful_user_count: successCount,
+      failed_user_count: failureCount,
+      acquisition_mode: 'GET /api/v1/feed/user/{user_id}/story/'
+    });
+
+    diagnosticLog('story_response_diagnosis', {
+      diagnosis: totalStoryCount > 0
+        ? 'user_story_endpoint_returned_items'
+        : successCount > 0
+          ? 'user_story_endpoint_returned_zero_items'
+          : 'user_story_endpoint_failed',
+      requested_user_id_count: userIds.length,
+      successful_user_count: successCount,
+      failed_user_count: failureCount,
+      reels_key_count: Object.keys(reels).length,
+      story_count: totalStoryCount
+    });
+
     return {
-      ok: Boolean(response.ok && payload),
-      payload,
-      status: response.status,
-      error: response.ok && payload ? null : `Story API HTTP ${response.status}`
+      ok: successCount > 0,
+      payload: { reels, status: successCount > 0 ? 'ok' : 'fail' },
+      status: successCount > 0 ? 200 : 'ERROR',
+      error: successCount > 0 ? null : 'Story APIへ接続できませんでした。'
     };
   } catch (error) {
     diagnosticLog('story_api_exception', {
